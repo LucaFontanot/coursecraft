@@ -908,6 +908,7 @@ version = "0.4.5"
 dependencies = [
  "coursecraft-course",
  "coursecraft-format",
+ "coursecraft-media",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

@@ -3416,6 +3416,7 @@ fn keyboard_focus_reaches_text_links() {
         autofit: Autofit::None,
         text_style: None,
         outline: None,
+        point_text: false,
     };
     let mut player = Player::new(&course).expect("player");
     player.handle(&Input::Start);
@@ -3557,6 +3558,7 @@ fn plain_text_renders_as_one_run() {
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame: coursecraft_course::Rect {
             x: 0.0,
@@ -6590,7 +6592,7 @@ fn slide_font_resolves_exact_face_then_regular_then_inter() {
     assert_eq!(inter_bold.family, FontFamily::Name("inter-bold".into()));
 }
 
-const LOUD_FONT: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
+const LOUD_FONT: &[u8] = coursecraft_media::text_metrics::INTER_BOLD;
 
 fn course_with_font_text(font: &str, fonts: Vec<coursecraft_course::FontFace>) -> Course {
     let json = serde_json::json!({
@@ -9303,7 +9305,7 @@ fn u08_mid_pass_course_font_install_does_not_poison_text_layout_cache() {
     use egui::{Color32, Pos2, Rect, vec2};
     use std::sync::Arc;
 
-    const BOLD_FONT_BYTES: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
+    const BOLD_FONT_BYTES: &[u8] = coursecraft_media::text_metrics::INTER_BOLD;
 
     struct CustomFontMedia;
     impl MediaSource for CustomFontMedia {
@@ -9818,5 +9820,284 @@ fn u11_player_cache_profile_preserves_published_visual_quality() {
     assert_ne!(
         editor_lite_rgba.pixels, baseline.pixels,
         "test slide must exercise shadow/gradient quality differences under editor Lite mode"
+    );
+}
+
+#[test]
+fn pt_02_skrifa_matches_egui_unwrapped_layout() {
+    use crate::compose::ResolvedTextRun;
+    use crate::text_layout::{SCRIPT_SCALE, layout_text_with_wrap};
+    use coursecraft_course::{Align, Autofit, Baseline, VAlign};
+    use coursecraft_media::text_metrics::{
+        MeasuredRun, POINT_TEXT_MIN_W, POINT_TEXT_PAD_X, POINT_TEXT_PAD_Y, TextBoxInsets,
+        measure_unwrapped_text, point_text_box_size,
+    };
+
+    let ctx = text_layout_context();
+
+    let assert_parity = |label: &str,
+                         runs: &[ResolvedTextRun],
+                         default_size: f32,
+                         is_symbol_or_emoji: bool| {
+        let measured_runs: Vec<MeasuredRun<'_>> = runs
+            .iter()
+            .map(|r| MeasuredRun {
+                text: &r.text,
+                size: r.size,
+                bold: r.bold,
+                italic: r.italic,
+                letter_spacing: r.letter_spacing,
+                script_scale: match r.baseline {
+                    Baseline::Normal => 1.0,
+                    Baseline::Superscript | Baseline::Subscript => SCRIPT_SCALE,
+                },
+            })
+            .collect();
+
+        let (content_w, content_h) = measure_unwrapped_text(&measured_runs, &[], default_size);
+        let (box_w, box_h) = point_text_box_size(content_w, content_h, TextBoxInsets::ZERO, false);
+
+        let full_text: String = runs.iter().map(|r| r.text.as_str()).collect();
+        let expected_lines = full_text.split('\n').count();
+
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(box_w, box_h));
+        let unwrapped = layout_text_with_wrap(
+            &ctx,
+            rect,
+            1.0,
+            runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+            false,
+        );
+        let wrapped = layout_text_with_wrap(
+            &ctx,
+            rect,
+            1.0,
+            runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+            true,
+        );
+
+        let galley_w = unwrapped.width;
+        let galley_h = unwrapped.height;
+        let wrapped_rows: usize = wrapped.paragraphs.iter().map(|p| p.galley.rows.len()).sum();
+
+        assert!(
+            galley_w <= box_w,
+            "[{label}] galley_w ({galley_w:.2}) exceeded fitted box_w ({box_w:.2}) [content_w={content_w:.2}]"
+        );
+        assert!(
+            galley_h <= box_h,
+            "[{label}] galley_h ({galley_h:.2}) exceeded fitted box_h ({box_h:.2}) [content_h={content_h:.2}]"
+        );
+        assert_eq!(
+            wrapped_rows, expected_lines,
+            "[{label}] constrained wrap=true wrapped into {wrapped_rows} rows (expected {expected_lines}); box_w={box_w:.2}, galley_w={galley_w:.2}"
+        );
+
+        let max_size = runs.iter().map(|r| r.size).fold(default_size, f32::max);
+        let max_w_slack = if is_symbol_or_emoji {
+            2.0 * POINT_TEXT_PAD_X + max_size * 1.2 + 8.0
+        } else {
+            2.0 * POINT_TEXT_PAD_X + 8.0
+        };
+        let max_allowed_w = (galley_w + max_w_slack).max(POINT_TEXT_MIN_W);
+        assert!(
+            box_w <= max_allowed_w,
+            "[{label}] box_w ({box_w:.2}) too loose vs galley_w ({galley_w:.2}), max_allowed_w={max_allowed_w:.2} (slack={:.2})",
+            box_w - galley_w
+        );
+
+        let max_h_slack = 2.0 * POINT_TEXT_PAD_Y + (expected_lines as f32) * 8.0;
+        assert!(
+            box_h <= galley_h + max_h_slack,
+            "[{label}] box_h ({box_h:.2}) too loose vs galley_h ({galley_h:.2}), slack={:.2}",
+            box_h - galley_h
+        );
+    };
+
+    let make_run = |text: &str,
+                    size: f32,
+                    bold: bool,
+                    italic: bool,
+                    letter_spacing: f32,
+                    baseline: Baseline| ResolvedTextRun {
+        text: text.to_owned(),
+        size,
+        color: Color32::BLACK,
+        bold,
+        italic,
+        underline: false,
+        strikethrough: false,
+        baseline,
+        letter_spacing,
+        font: None,
+        link: None,
+    };
+
+    let latin_strings = [
+        "Text",
+        "Next",
+        "Back",
+        "Submit Answer",
+        "Line 1\nLonger second line",
+    ];
+    let symbol_strings = ["✓ Next →", "★ 100%", "🎉 Done!"];
+    let styles = [
+        ("regular", false, false),
+        ("bold", true, false),
+        ("italic", false, true),
+        ("bold-italic", true, true),
+    ];
+    let sizes = [12.0_f32, 20.0, 36.0, 72.0];
+
+    for &text in &latin_strings {
+        for &(style_name, bold, italic) in &styles {
+            for &size in &sizes {
+                let run = make_run(text, size, bold, italic, 0.0, Baseline::Normal);
+                let label = format!("latin '{text}' {style_name} {size}px");
+                assert_parity(&label, &[run], size, false);
+            }
+        }
+    }
+
+    for &text in &symbol_strings {
+        for &(style_name, bold, italic) in &styles {
+            for &size in &sizes {
+                let run = make_run(text, size, bold, italic, 0.0, Baseline::Normal);
+                let label = format!("symbol '{text}' {style_name} {size}px");
+                assert_parity(&label, &[run], size, true);
+            }
+        }
+    }
+
+    // Positive letter spacing (2.0 and 4.0)
+    for &spacing in &[2.0_f32, 4.0] {
+        for &size in &[16.0_f32, 32.0] {
+            let run = make_run(
+                "Submit Answer",
+                size,
+                false,
+                false,
+                spacing,
+                Baseline::Normal,
+            );
+            let label = format!("letter_spacing={spacing} {size}px");
+            assert_parity(&label, &[run], size, false);
+        }
+    }
+
+    // Superscript & subscript mixed runs
+    for &(script_name, baseline) in &[
+        ("superscript", Baseline::Superscript),
+        ("subscript", Baseline::Subscript),
+    ] {
+        for &size in &[16.0_f32, 24.0, 48.0] {
+            let runs = vec![
+                make_run("H", size, false, false, 0.0, Baseline::Normal),
+                make_run("2", size, false, false, 0.0, baseline),
+                make_run("O formula", size, true, false, 0.0, Baseline::Normal),
+            ];
+            let label = format!("{script_name} {size}px");
+            assert_parity(&label, &runs, size, false);
+        }
+    }
+}
+
+#[test]
+fn pt_08_inline_edit_layout_job_respects_wrap_false() {
+    use crate::compose::ResolvedTextRun;
+    use crate::text_layout::inline_edit_layout_job_with_wrap;
+    use coursecraft_course::{Align, Baseline};
+
+    let ctx = text_layout_context();
+    let run = ResolvedTextRun {
+        text: "A long unwrapped point text line that must never wrap".to_owned(),
+        size: 20.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: None,
+        link: None,
+    };
+
+    let unwrapped_job = inline_edit_layout_job_with_wrap(
+        &ctx,
+        1.0,
+        1.0,
+        std::slice::from_ref(&run),
+        &[],
+        Align::Left,
+        40.0,
+        true,
+        false,
+    );
+    assert_eq!(unwrapped_job.wrap.max_width, f32::INFINITY);
+    assert!(unwrapped_job.break_on_newline);
+    let unwrapped_galley = ctx.fonts_mut(|fonts| fonts.layout_job(unwrapped_job));
+    assert_eq!(
+        unwrapped_galley.rows.len(),
+        1,
+        "wrap=false must stay on one row even with a narrow wrap_width"
+    );
+
+    let wrapped_job = inline_edit_layout_job_with_wrap(
+        &ctx,
+        1.0,
+        1.0,
+        &[run],
+        &[],
+        Align::Left,
+        40.0,
+        true,
+        true,
+    );
+    assert_eq!(wrapped_job.wrap.max_width, 40.0);
+    let wrapped_galley = ctx.fonts_mut(|fonts| fonts.layout_job(wrapped_job));
+    assert!(
+        wrapped_galley.rows.len() > 1,
+        "wrap=true must wrap across rows at wrap_width=40"
+    );
+
+    // Explicit newlines still break lines when wrap=false and multiline=true.
+    let multiline_run = ResolvedTextRun {
+        text: "First line\nSecond line".to_owned(),
+        size: 20.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: None,
+        link: None,
+    };
+    let multi_job = inline_edit_layout_job_with_wrap(
+        &ctx,
+        1.0,
+        1.0,
+        &[multiline_run],
+        &[],
+        Align::Left,
+        40.0,
+        true,
+        false,
+    );
+    let multi_galley = ctx.fonts_mut(|fonts| fonts.layout_job(multi_job));
+    assert_eq!(
+        multi_galley.rows.len(),
+        2,
+        "explicit newline must still break lines when wrap=false"
     );
 }

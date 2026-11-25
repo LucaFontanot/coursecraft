@@ -872,7 +872,7 @@ fn g03_steady_frames_zero_font_def_clones() {
     );
 
     // 2. Course with a registered custom font face: 20 idle frames after settling.
-    const TEST_FONT: &[u8] = include_bytes!("../../render/fonts/Inter-Bold.ttf");
+    const TEST_FONT: &[u8] = coursecraft_media::text_metrics::INTER_BOLD;
     let custom_json = r##"{
         "schema_version": 1,
         "id": "custom-font-guard",

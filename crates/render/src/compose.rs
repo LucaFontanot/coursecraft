@@ -2103,6 +2103,7 @@ fn compose_state_extra(
             paragraphs,
             autofit,
             outline,
+            point_text: _,
         } => {
             let resolved_runs = resolve_state_text_runs(
                 text,
@@ -2663,6 +2664,14 @@ fn push_base_items(
         if sample.opacity <= 0.0 {
             continue;
         }
+        let pointer_id = player
+            .interactive_group_of(&obj.id)
+            .unwrap_or(obj.id.as_str());
+        let pointer = if current_state == "disabled" {
+            PointerState::None
+        } else {
+            pointer_state_for(hovered, pressed, pointer_id)
+        };
         let mut obj_items = compose_object_items_opts(
             obj,
             current_state,
@@ -2673,7 +2682,7 @@ fn push_base_items(
                 marker_pulse: true,
                 authoring: false,
                 timer_remaining_ms: player.timer_remaining_ms(&obj.id),
-                pointer: pointer_state_for(hovered, pressed, &obj.id),
+                pointer,
             },
         );
         if obj_items
@@ -2774,6 +2783,8 @@ pub fn compose_with_pointer(
     let Some(slide) = player.current_slide() else {
         return Vec::new();
     };
+    let hovered = hovered.map(|id| player.interactive_group_of(id).unwrap_or(id));
+    let pressed = pressed.map(|id| player.interactive_group_of(id).unwrap_or(id));
 
     let mut items = Vec::new();
     let base_hidden = player.base_objects_hidden();
@@ -2906,6 +2917,14 @@ pub fn compose_with_pointer(
                 if sample.opacity <= 0.0 {
                     continue;
                 }
+                let pointer_id = player
+                    .interactive_group_of(&obj.id)
+                    .unwrap_or(obj.id.as_str());
+                let pointer = if current_state == "disabled" {
+                    PointerState::None
+                } else {
+                    pointer_state_for(hovered, pressed, pointer_id)
+                };
                 let mut obj_items = compose_object_items_opts(
                     obj,
                     current_state,
@@ -2916,7 +2935,7 @@ pub fn compose_with_pointer(
                         marker_pulse: true,
                         authoring: false,
                         timer_remaining_ms: player.timer_remaining_ms(&obj.id),
-                        pointer: pointer_state_for(hovered, pressed, &obj.id),
+                        pointer,
                     },
                 );
                 if obj_items
@@ -2982,7 +3001,20 @@ pub fn compose_with_pointer(
         push_hotspot_markers(player, &mut items);
     }
     apply_panels(player, slide, &mut items);
+    remap_interactive_group_hits(player, &mut items);
     items
+}
+
+/// Remap member hits to their owning interactive group id so pointer hover,
+/// press, click, and highlight treat all members as one hit target.
+fn remap_interactive_group_hits(player: &Player<'_>, items: &mut [DrawItem]) {
+    for item in items {
+        if let Hit::Object(member_id) = &item.hit
+            && let Some(group_id) = player.interactive_group_of(member_id)
+        {
+            item.hit = Hit::Object(group_id.to_owned());
+        }
+    }
 }
 
 /// Shift and clip scrolling-panel children, update panel scrollbars, and put

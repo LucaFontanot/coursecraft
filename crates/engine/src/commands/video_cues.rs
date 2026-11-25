@@ -398,6 +398,7 @@ pub(super) fn video_add_question_cue(s: &mut Session, p: &Json) -> Result<Json> 
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     };
     slide.layers.push(layer);
     slide.triggers.push(interaction_trigger(

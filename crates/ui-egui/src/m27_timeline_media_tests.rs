@@ -6,8 +6,7 @@ use crate::test_harness::TestHarness;
 use coursecraft_course::{Course, ObjectKind, Timing};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2, vec2};
 
-const INTER_REGULAR: &[u8] = include_bytes!("../../render/fonts/Inter-Regular.ttf");
-const INTER_BOLD: &[u8] = include_bytes!("../../render/fonts/Inter-Bold.ttf");
+use coursecraft_media::text_metrics::{INTER_BOLD, INTER_REGULAR};
 
 fn make_png_bytes(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((w * h * 4) as usize);

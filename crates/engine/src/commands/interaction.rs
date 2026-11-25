@@ -33,6 +33,7 @@ pub(super) fn interaction_text(
             autofit: Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame,
         timing: Timing::default(),
@@ -326,6 +327,7 @@ fn interaction_callout_layer(
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     }
 }
 
@@ -543,6 +545,7 @@ fn insert_tabs(ctx: &mut InteractionCtx<'_>) {
             allow_seek: SeekMode::Auto,
             revisit: RevisitMode::Auto,
             cue_points: Vec::new(),
+            groups: Vec::new(),
         });
     }
     // Clicking a tab shows its layer and moves the selected state.
@@ -644,6 +647,7 @@ fn insert_accordion(ctx: &mut InteractionCtx<'_>) {
             allow_seek: SeekMode::Auto,
             revisit: RevisitMode::Auto,
             cue_points: Vec::new(),
+            groups: Vec::new(),
         };
         let mut layer_headers = Vec::new();
         for (i, base) in base_headers.iter().copied().enumerate() {

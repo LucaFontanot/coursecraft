@@ -266,6 +266,7 @@ impl Session {
                     background: None,
                     objects: Vec::new(),
                     layers: Vec::new(),
+                    groups: Vec::new(),
                     triggers: Vec::new(),
                     cue_points: Vec::new(),
                     transition: None,

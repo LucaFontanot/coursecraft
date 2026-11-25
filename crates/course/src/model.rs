@@ -885,6 +885,33 @@ pub struct SlideCue {
     pub at_ms: u32,
 }
 
+/// Optional metadata record for a group of objects on a slide or layer.
+/// Plain authoring groups omit this record; interactive button groups store
+/// their shared opt-in flag, accessible name, initial state, and focus order here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+    /// Matches `Object.group` on the group's members on this slide/layer.
+    /// Must be unique across objects, layers, and groups on the slide.
+    pub id: String,
+    /// Display and accessible name (e.g. "Back button"). Omitted when empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// When true, the group behaves as one interactive button at play time.
+    /// Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub interactive: bool,
+    /// Initial runtime state for an interactive group (`"normal"` default, omitted).
+    #[serde(default = "normal_state", skip_serializing_if = "is_normal_state")]
+    pub initial_state: String,
+    /// Optional author-set keyboard focus position. Omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_order: Option<u32>,
+    /// Accessible description override. Omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Slide {
@@ -902,6 +929,10 @@ pub struct Slide {
     /// Slide layers, bottom to top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<Layer>,
+    /// Group records carrying group-level behaviour (such as interactive button groups).
+    /// Omitted when empty so existing courses stay byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
     /// Triggers owned by the base layer, in firing order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<Trigger>,
@@ -992,6 +1023,10 @@ pub struct Layer {
     /// Named cue points on this layer's timeline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cue_points: Vec<SlideCue>,
+    /// Group records carrying group-level behaviour (such as interactive button groups).
+    /// Omitted when empty so existing courses stay byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
 }
 
 /// How the learner's seekbar treats a visible layer.
@@ -1521,6 +1556,10 @@ pub struct Point {
 
 fn normal_state() -> String {
     "normal".to_owned()
+}
+
+fn is_normal_state(s: &str) -> bool {
+    s == "normal"
 }
 
 /// Most files a web object's folder source may hold.
@@ -2157,6 +2196,11 @@ pub enum ObjectKind {
         /// Optional border around the text box. Omitted when unset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outline: Option<Outline>,
+        /// When true, the box acts as point text (`style.wrap == false`, `autofit == None`):
+        /// its width and height fit its content automatically as text or style changes.
+        /// Omitted when false so existing courses stay byte-identical.
+        #[serde(default, skip_serializing_if = "is_false")]
+        point_text: bool,
     },
     Shape {
         shape: ShapeKind,
@@ -4067,6 +4111,11 @@ pub enum StateExtraKind {
         autofit: Autofit,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outline: Option<Outline>,
+        /// When true, the box acts as point text (`style.wrap == false`, `autofit == None`):
+        /// its width and height fit its content automatically as text or style changes.
+        /// Omitted when false so existing courses stay byte-identical.
+        #[serde(default, skip_serializing_if = "is_false")]
+        point_text: bool,
     },
     Path {
         #[serde(flatten)]

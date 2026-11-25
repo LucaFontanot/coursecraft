@@ -74,6 +74,7 @@ fn text(id: &str, content: &str, size: f32, color: &str) -> Object {
             autofit: crate::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         (0.0, 0.0, 400.0, 100.0),
     )
@@ -535,6 +536,7 @@ fn runs_are_checked_separately_with_their_own_colours() {
         autofit: crate::Autofit::None,
         text_style: None,
         outline: None,
+        point_text: false,
     };
     slide(&mut course).objects.push(object);
     let findings = findings(&course);
@@ -756,6 +758,7 @@ fn a_pause_trigger_on_a_layer_also_counts() {
         allow_seek: crate::SeekMode::Auto,
         revisit: crate::RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     };
     layer.duration_ms = 5000;
     slide(&mut course).layers.push(layer);

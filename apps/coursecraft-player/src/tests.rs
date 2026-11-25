@@ -1939,3 +1939,314 @@ fn r1_04_player_slide_media_walkers_golden() {
         ]
     );
 }
+
+fn gb_11_interactive_group_course() -> Course {
+    let raw = r##"{
+      "schema_version": 1,
+      "id": "gb-11-player",
+      "title": "GB-11 Interactive Group Player",
+      "slide_size": { "w": 960, "h": 540 },
+      "player": { "show_bar": false },
+      "variables": [
+        { "name": "clicks", "value": 0 },
+        { "name": "hovers", "value": 0 }
+      ],
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Group Button Slide",
+          "duration_ms": 60000,
+          "groups": [{
+            "id": "g-back",
+            "interactive": true
+          }],
+          "objects": [
+            {
+              "id": "m-bg",
+              "name": "Card BG",
+              "group": "g-back",
+              "frame": { "x": 100.0, "y": 140.0, "w": 120.0, "h": 80.0 },
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#224488" },
+              "states": [
+                { "name": "hover", "fill": "#3366CC" },
+                { "name": "down", "fill": "#112255" },
+                { "name": "selected", "fill": "#228844" }
+              ]
+            },
+            {
+              "id": "m-icon",
+              "name": "Arrow",
+              "group": "g-back",
+              "decorative": true,
+              "frame": { "x": 220.0, "y": 140.0, "w": 60.0, "h": 80.0 },
+              "kind": { "type": "shape", "shape": "ellipse", "fill": "#FFFFFF" },
+              "states": [
+                { "name": "hover", "fill": "#FFEE88" },
+                { "name": "down", "fill": "#FFAA22" },
+                { "name": "selected", "fill": "#AAFFAA" }
+              ]
+            },
+            {
+              "id": "m-label",
+              "name": "Label",
+              "group": "g-back",
+              "frame": { "x": 280.0, "y": 140.0, "w": 120.0, "h": 80.0 },
+              "kind": { "type": "text", "text": "BACK" },
+              "states": [
+                { "name": "hover", "text": "BACK!" },
+                { "name": "down", "text": "PRESS" },
+                { "name": "selected", "text": "SELECTED" }
+              ]
+            }
+          ],
+          "triggers": [
+            {
+              "when": { "event": "click", "object": "g-back" },
+              "action": { "action": "set_variable", "variable": "clicks", "op": "add", "value": 1 }
+            },
+            {
+              "when": { "event": "hover_start", "object": "g-back" },
+              "action": { "action": "set_variable", "variable": "hovers", "op": "add", "value": 1 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    Course::from_json(raw).expect("valid gb-11 course")
+}
+
+fn assert_gb_11_items_match(
+    items: &[coursecraft_render::DrawItem],
+    bg: egui::Color32,
+    icon: egui::Color32,
+    label: &str,
+) {
+    use coursecraft_render::Visual;
+    assert!(
+        items
+            .iter()
+            .any(|item| matches!(&item.visual, Visual::Shape { fill, .. } if *fill == bg))
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| matches!(&item.visual, Visual::Shape { fill, .. } if *fill == icon))
+    );
+    assert!(items.iter().any(|item| matches!(
+        &item.visual,
+        Visual::Text { runs, .. } if runs.iter().map(|r| r.text.as_str()).collect::<String>() == label
+    )));
+}
+
+fn assert_gb_11_access_tree(playing: &Playing) {
+    use coursecraft_render::{AccessRole, FocusTarget, build_access_tree};
+    let tree = build_access_tree(
+        &playing.player,
+        &playing.frame,
+        playing.view.last_items(),
+        false,
+        false,
+    );
+    let group_nodes: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|n| n.target == Some(FocusTarget::Object("g-back".into())))
+        .collect();
+    assert_eq!(group_nodes.len(), 1);
+    assert_eq!(group_nodes[0].key, "group:s1:g-back");
+    assert_eq!(group_nodes[0].role, AccessRole::Button);
+    assert_eq!(group_nodes[0].label, "SELECTED");
+    assert_eq!(group_nodes[0].checked, Some(true));
+    assert_eq!(
+        group_nodes[0].rect,
+        egui::Rect::from_min_max(egui::pos2(100.0, 140.0), egui::pos2(400.0, 220.0))
+    );
+    for member_id in ["m-bg", "m-icon", "m-label"] {
+        assert!(
+            !tree.nodes.iter().any(|n| n.key.contains(member_id)),
+            "member {member_id} must not emit a standalone AccessNode"
+        );
+    }
+}
+
+#[test]
+fn gb_11_web_player_interactive_group_pointer_keyboard_and_a11y() {
+    use coursecraft_course::Value;
+    use coursecraft_render::FocusTarget;
+
+    let course = gb_11_interactive_group_course();
+    let mut playing = Playing::from_course(course, false).expect("valid playing");
+    playing.handle_input(&Input::Start, None);
+
+    let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0));
+    let mut time = 0.0_f64;
+
+    fn step(
+        ctx: &egui::Context,
+        screen: egui::Rect,
+        time: &mut f64,
+        playing: &mut Playing,
+        events: Vec<egui::Event>,
+    ) {
+        *time += 1.0 / 60.0;
+        let raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(*time),
+            events,
+            ..Default::default()
+        };
+        let full = ctx.run_ui(raw_input, |ui| {
+            playing.show_ui(ui);
+        });
+        full.drop_without_applying_deltas();
+    }
+
+    step(&ctx, screen, &mut time, &mut playing, Vec::new());
+    let to_screen = |playing: &Playing, x: f32, y: f32| -> egui::Pos2 {
+        playing
+            .view
+            .last_transform()
+            .expect("transform")
+            .to_screen_pos(egui::pos2(x, y))
+    };
+
+    let member_a = to_screen(&playing, 160.0, 180.0);
+    let member_b = to_screen(&playing, 250.0, 180.0);
+    let member_c = to_screen(&playing, 340.0, 180.0);
+    let empty_pt = to_screen(&playing, 20.0, 20.0);
+
+    // Hover member A -> all 3 members enter hover state together, hover_start fires once.
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![egui::Event::PointerMoved(member_a)],
+    );
+    step(&ctx, screen, &mut time, &mut playing, Vec::new());
+    assert_eq!(playing.player.variable("hovers"), Some(&Value::Number(1.0)));
+    assert_gb_11_items_match(
+        playing.view.last_items(),
+        egui::Color32::from_rgb(0x33, 0x66, 0xCC),
+        egui::Color32::from_rgb(0xFF, 0xEE, 0x88),
+        "BACK!",
+    );
+
+    // Move across to member B -> no hover flicker.
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![egui::Event::PointerMoved(member_b)],
+    );
+    step(&ctx, screen, &mut time, &mut playing, Vec::new());
+    assert_eq!(
+        playing.player.variable("hovers"),
+        Some(&Value::Number(1.0)),
+        "moving across members must not flicker hover"
+    );
+
+    // Press on member B -> all 3 members render down state.
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![egui::Event::PointerButton {
+            pos: member_b,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    assert_gb_11_items_match(
+        playing.view.last_items(),
+        egui::Color32::from_rgb(0x11, 0x22, 0x55),
+        egui::Color32::from_rgb(0xFF, 0xAA, 0x22),
+        "PRESS",
+    );
+
+    // Release on member C -> single click fires, counter=1, shared state becomes selected.
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![
+            egui::Event::PointerMoved(member_c),
+            egui::Event::PointerButton {
+                pos: member_c,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![egui::Event::PointerMoved(empty_pt)],
+    );
+    step(&ctx, screen, &mut time, &mut playing, Vec::new());
+    assert_eq!(playing.player.variable("clicks"), Some(&Value::Number(1.0)));
+    for id in ["g-back", "m-bg", "m-icon", "m-label"] {
+        assert_eq!(playing.player.object_state(id), Some("selected"));
+    }
+
+    // Keyboard Tab -> single Tab stop on g-back.
+    let key = |k: egui::Key| egui::Event::Key {
+        key: k,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![key(egui::Key::Tab)],
+    );
+    step(&ctx, screen, &mut time, &mut playing, Vec::new());
+    assert_eq!(
+        playing.frame.focus().list(),
+        &[FocusTarget::Object("g-back".into())]
+    );
+    assert_eq!(
+        playing.frame.focus().focused(),
+        Some(&FocusTarget::Object("g-back".into()))
+    );
+    assert_gb_11_access_tree(&playing);
+
+    // Enter activates g-back once (clicks=2, selected toggles back to normal).
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![key(egui::Key::Enter)],
+    );
+    step(&ctx, screen, &mut time, &mut playing, Vec::new());
+    assert_eq!(playing.player.variable("clicks"), Some(&Value::Number(2.0)));
+    assert_eq!(playing.player.object_state("g-back"), Some("normal"));
+
+    // Space activates g-back once (clicks=3, selected toggles back to selected).
+    step(
+        &ctx,
+        screen,
+        &mut time,
+        &mut playing,
+        vec![key(egui::Key::Space)],
+    );
+    step(&ctx, screen, &mut time, &mut playing, Vec::new());
+    assert_eq!(playing.player.variable("clicks"), Some(&Value::Number(3.0)));
+    assert_eq!(playing.player.object_state("g-back"), Some("selected"));
+}

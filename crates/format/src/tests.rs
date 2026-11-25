@@ -32,6 +32,7 @@ fn minimal_course(title: &str) -> Course {
                 revisit: coursecraft_course::RevisitMode::Auto,
                 player: None,
                 cue_points: Vec::new(),
+                groups: Vec::new(),
             }],
         }],
         masters: Vec::new(),
@@ -1183,5 +1184,74 @@ fn u06_open_project_from_matches_open_project_and_rejects_hostile_zips() {
     assert_eq!(
         open_project_from(std::io::Cursor::new(&evil)),
         Err(FormatError::UnsafePath("../escape.png".to_string()))
+    );
+}
+
+#[test]
+fn m37_golden_ccraft_roundtrip() {
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    fn extract_course_json(archive_bytes: &[u8]) -> Vec<u8> {
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(archive_bytes)).expect("open zip");
+        let mut entry = archive.by_name("course.json").expect("course.json entry");
+        let mut out = Vec::new();
+        entry.read_to_end(&mut out).expect("read course.json");
+        out
+    }
+
+    const SHOWCASE_COURSE_JSON: &str = include_str!("../../../examples/showcase/course.json");
+    let expected: [(&str, usize, u64); 2] = [
+        ("hello-course", 19_661, 0x0376_c459_8af0_a02c),
+        ("showcase", 92_523, 0xf72d_eff4_ae12_2639),
+    ];
+
+    let mut actual = Vec::new();
+    for (name, raw) in [
+        ("hello-course", HELLO_COURSE_JSON),
+        ("showcase", SHOWCASE_COURSE_JSON),
+    ] {
+        let course = Course::from_json(raw).expect("parse example course");
+        let empty_media: Vec<(String, Vec<u8>)> = Vec::new();
+        let archive1 = save_project(&course, &empty_media).expect("save first ccraft");
+        let opened = open_project(&archive1).expect("open first ccraft");
+        assert_eq!(opened.course, course, "{name}: reopened course must match");
+
+        let archive2 = save_project(&opened.course, &opened.media).expect("save second ccraft");
+        let json1 = extract_course_json(&archive1);
+        let json2 = extract_course_json(&archive2);
+        assert_eq!(
+            json1, json2,
+            "{name}: course.json inside .ccraft must be byte-identical after reload"
+        );
+        assert_eq!(
+            archive1, archive2,
+            "{name}: full .ccraft archive must be byte-identical after reload"
+        );
+
+        let text = std::str::from_utf8(&json1).expect("utf8 course.json");
+        assert!(
+            !text.contains("\"point_text\""),
+            "{name}: .ccraft course.json must not emit point_text"
+        );
+        assert!(
+            !text.contains("\"groups\""),
+            "{name}: .ccraft course.json must not emit groups"
+        );
+
+        actual.push((name, json1.len(), fnv1a64(&json1)));
+    }
+
+    assert_eq!(
+        actual.as_slice(),
+        &expected,
+        ".ccraft course.json changed: {actual:#x?}"
     );
 }

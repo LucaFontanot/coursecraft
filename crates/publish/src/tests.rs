@@ -34,6 +34,7 @@ fn minimal_course(title: &str) -> Course {
                 revisit: coursecraft_course::RevisitMode::Auto,
                 player: None,
                 cue_points: Vec::new(),
+                groups: Vec::new(),
             }],
         }],
         masters: Vec::new(),
@@ -3546,4 +3547,69 @@ fn r2_01_shared_package_zipper_matches_zip_package_across_chunk_sizes() {
     let done = empty_zipper.step(1024).expect("empty zipper step");
     assert_eq!(done, ZipStep::Done(expected_empty));
     assert!(matches!(empty_zipper.step(1024), Err(PublishError::Zip(_))));
+}
+
+#[test]
+fn m37_golden_published_course_json() {
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    let course = Course::from_json(HELLO_COURSE_JSON).expect("parse hello-course");
+    let course_json = course.to_json_compact().expect("compact serialize");
+    let player_files = fake_player();
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &no_media,
+    };
+
+    let scorm_files = build_package(&input).expect("publish SCORM 1.2");
+    let web_files = build_package_standard(&input, PackageStandard::Web).expect("publish Web");
+
+    let scorm_course = scorm_files
+        .iter()
+        .find(|f| f.path == "course.json")
+        .expect("SCORM package has course.json");
+    let web_course = web_files
+        .iter()
+        .find(|f| f.path == "course.json")
+        .expect("Web package has course.json");
+    assert_eq!(
+        scorm_course.bytes.as_ref(),
+        web_course.bytes.as_ref(),
+        "SCORM and Web published course.json must match"
+    );
+
+    let bytes = scorm_course.bytes.as_ref();
+    let text = std::str::from_utf8(bytes).expect("utf8 published course.json");
+    assert!(
+        !text.contains("\"point_text\""),
+        "published course.json must not emit point_text"
+    );
+    assert!(
+        !text.contains("\"groups\""),
+        "published course.json must not emit groups"
+    );
+    assert_eq!(
+        Course::from_json(text).expect("reparse published course.json"),
+        course
+    );
+
+    const EXPECTED_LEN: usize = 7_600;
+    const EXPECTED_HASH: u64 = 0xb5d1_0cbc_64a1_ffc2;
+    let hash = fnv1a64(bytes);
+    assert_eq!(
+        (bytes.len(), hash),
+        (EXPECTED_LEN, EXPECTED_HASH),
+        "published course.json changed (len={}, hash=0x{hash:016x})",
+        bytes.len()
+    );
 }

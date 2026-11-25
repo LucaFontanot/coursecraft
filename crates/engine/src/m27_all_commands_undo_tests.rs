@@ -7,9 +7,9 @@ use std::collections::HashSet;
 
 use coursecraft_course::{
     Action, BackgroundAudio, BankDraw, Choice, Color, Course, Cue, DragItem, Event, FontFace,
-    FontStyle, GlossaryEntry, Guide, HotspotRegion, HotspotShape, Layer, MatchPair, MotionPath,
-    NamedTextStyle, Object, ObjectKind, Outline, PaletteColor, Path, PathPoint, Point, Question,
-    QuestionBank, QuestionKind, Rect, Resource, ResourceTarget, Scene, Scoring, Severity,
+    FontStyle, GlossaryEntry, Group, Guide, HotspotRegion, HotspotShape, Layer, MatchPair,
+    MotionPath, NamedTextStyle, Object, ObjectKind, Outline, PaletteColor, Path, PathPoint, Point,
+    Question, QuestionBank, QuestionKind, Rect, Resource, ResourceTarget, Scene, Scoring, Severity,
     ShapeKind, Slide, SlideCue, StateDef, StateExtra, StateExtraKind, TableBorders, TableCell,
     TableRow, TextStyle, Timing, Trigger, Value, VariableDef,
 };
@@ -69,6 +69,7 @@ fn make_text_obj(id: &str, text: &str, x: f32, y: f32) -> Object {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
         Rect {
             x,
@@ -102,6 +103,7 @@ fn make_empty_slide(id: &str, title: &str) -> Slide {
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -361,6 +363,7 @@ fn fixture_session() -> Session {
                         paragraphs: vec![],
                         autofit: Default::default(),
                         outline: None,
+                        point_text: false,
                     },
                     frame: Rect {
                         x: 0.0,
@@ -399,6 +402,11 @@ fn fixture_session() -> Session {
     obj_g1.group = Some("grp1".into());
     let mut obj_g2 = make_shape_obj("obj_g2", 580.0, 40.0, 60.0, 60.0, "#AABBCC");
     obj_g2.group = Some("grp1".into());
+
+    let mut obj_ig1 = make_shape_obj("obj_ig1", 500.0, 120.0, 60.0, 40.0, "#1D4ED8");
+    obj_ig1.group = Some("grp_btn".into());
+    let mut obj_ig2 = make_text_obj("obj_ig2", "Go", 505.0, 125.0);
+    obj_ig2.group = Some("grp_btn".into());
 
     let obj_text = make_text_obj("obj_text", "Hello world", 40.0, 140.0);
 
@@ -595,8 +603,16 @@ fn fixture_session() -> Session {
     s1.objects = vec![
         obj_shape, obj_shape2, obj_shape3, obj_g1, obj_g2, obj_text, obj_pic, obj_video,
         obj_lottie, obj_web, obj_input, obj_marker, obj_scroll, obj_timer, obj_meter, obj_path,
-        obj_table,
+        obj_table, obj_ig1, obj_ig2,
     ];
+    s1.groups = vec![Group {
+        id: "grp_btn".into(),
+        name: "Go".into(),
+        interactive: true,
+        initial_state: "normal".into(),
+        focus_order: None,
+        description: None,
+    }];
     s1.layers = vec![
         Layer {
             id: "layer1".into(),
@@ -612,6 +628,7 @@ fn fixture_session() -> Session {
             objects: Vec::new(),
             triggers: Vec::new(),
             cue_points: Vec::new(),
+            groups: Vec::new(),
         },
         Layer {
             id: "layer2".into(),
@@ -627,6 +644,7 @@ fn fixture_session() -> Session {
             objects: Vec::new(),
             triggers: Vec::new(),
             cue_points: Vec::new(),
+            groups: Vec::new(),
         },
     ];
     s1.cue_points = vec![SlideCue {
@@ -1065,6 +1083,14 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         (
             "object.ungroup",
             json!({ "slide": "slide1", "objects": ["obj_g1", "obj_g2"] }),
+        ),
+        (
+            "group.set_interactive",
+            json!({ "slide": "slide1", "group": "grp1", "interactive": true, "name": "Card button" }),
+        ),
+        (
+            "group.update",
+            json!({ "slide": "slide1", "group": "grp_btn", "name": "Start button", "focus_order": 5, "description": "Starts course" }),
         ),
         (
             "object.duplicate",
@@ -2192,4 +2218,242 @@ fn u05_scoped_validation_matches_full_validation_across_all_commands() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+#[test]
+fn pt_07_point_text_single_step_undo() {
+    let mut s = Session::blank("Point Text Undo");
+    assert_eq!(s.undo_len(), 0);
+
+    // 1. Insert point text = 1 undo step.
+    s.execute(
+        "object.add",
+        &json!({
+            "slide": "slide1",
+            "id": "pt1",
+            "kind": { "type": "text", "text": "Next", "point_text": true },
+            "frame": { "x": 100.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    )
+    .expect("add point text");
+    assert_eq!(s.undo_len(), 1);
+    let after_add = s.course.clone();
+    let initial_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt1")
+        .unwrap()
+        .0
+        .frame;
+    assert!(initial_frame.w < 120.0);
+
+    // 2. text.set (text + refitted frame) = 1 undo step.
+    s.execute(
+        "text.set",
+        &json!({
+            "slide": "slide1",
+            "object": "pt1",
+            "text": "Continue to Module 2"
+        }),
+    )
+    .expect("text.set");
+    assert_eq!(s.undo_len(), 2);
+    let after_edit = s.course.clone();
+    let edited_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt1")
+        .unwrap()
+        .0
+        .frame;
+    assert!(edited_frame.w > initial_frame.w * 2.0);
+
+    // 3. Width resize conversion = 1 undo step.
+    let resized_w = edited_frame.w + 80.0;
+    s.execute(
+        "object.set_frame",
+        &json!({
+            "slide": "slide1",
+            "object": "pt1",
+            "frame": {
+                "x": edited_frame.x,
+                "y": edited_frame.y,
+                "w": resized_w,
+                "h": edited_frame.h
+            }
+        }),
+    )
+    .expect("resize width");
+    assert_eq!(s.undo_len(), 3);
+    let after_convert = s.course.clone();
+    match &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt1")
+        .unwrap()
+        .0
+        .kind
+    {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(!*point_text);
+            assert!(style.wrap);
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // Undo resize conversion in 1 step -> restores point_text = true, wrap = false, old width.
+    s.execute("edit.undo", &json!({})).expect("undo resize");
+    assert_eq!(s.course, after_edit);
+    let (obj_after_undo_resize, _) = s.course.slide("slide1").unwrap().object("pt1").unwrap();
+    assert_eq!(obj_after_undo_resize.frame, edited_frame);
+    assert!(matches!(
+        &obj_after_undo_resize.kind,
+        ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // Undo text.set in 1 step -> restores both old text AND old fitted frame.
+    s.execute("edit.undo", &json!({})).expect("undo text.set");
+    assert_eq!(s.course, after_add);
+    let (obj_after_undo_edit, _) = s.course.slide("slide1").unwrap().object("pt1").unwrap();
+    assert_eq!(obj_after_undo_edit.frame, initial_frame);
+    assert!(matches!(
+        &obj_after_undo_edit.kind,
+        ObjectKind::Text { text, point_text: true, style, .. }
+            if text == "Next" && !style.wrap
+    ));
+
+    // Undo insert in 1 step -> object removed.
+    s.execute("edit.undo", &json!({})).expect("undo add");
+    assert!(s.course.slide("slide1").unwrap().object("pt1").is_none());
+
+    // Redo all 3 steps restores exact states.
+    s.execute("edit.redo", &json!({})).expect("redo add");
+    assert_eq!(s.course, after_add);
+    s.execute("edit.redo", &json!({})).expect("redo text.set");
+    assert_eq!(s.course, after_edit);
+    s.execute("edit.redo", &json!({})).expect("redo resize");
+    assert_eq!(s.course, after_convert);
+}
+
+fn assert_one_step_undo_redo(s: &mut Session, cmd: &str, params: &Json, keep_applied: bool) {
+    let before = s.course.clone();
+    let undo_before = s.undo_len();
+    s.execute(cmd, params).expect(cmd);
+    assert_eq!(s.undo_len(), undo_before + 1, "{cmd} must be one undo step");
+    let after = s.course.clone();
+    assert_ne!(after, before, "{cmd} must mutate course");
+    s.execute("edit.undo", &json!({})).expect("undo");
+    assert_eq!(s.course, before, "{cmd} undo must restore before");
+    s.execute("edit.redo", &json!({})).expect("redo");
+    assert_eq!(s.course, after, "{cmd} redo must restore after");
+    if !keep_applied {
+        s.execute("edit.undo", &json!({})).expect("revert");
+        assert_eq!(s.course, before);
+    }
+}
+
+#[test]
+fn gb_12_interactive_group_commands_single_step_undo() {
+    let mut s = Session::blank("Interactive Group Undo");
+    s.execute(
+        "object.add",
+        &json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+            "frame": { "x": 60.0, "y": 60.0, "w": 160.0, "h": 48.0 }
+        }),
+    )
+    .expect("add bg");
+    s.execute(
+        "object.add",
+        &json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": { "type": "text", "text": "Submit" },
+            "frame": { "x": 80.0, "y": 70.0, "w": 100.0, "h": 28.0 }
+        }),
+    )
+    .expect("add lbl");
+    let gid = s
+        .execute(
+            "object.group",
+            &json!({ "slide": "slide1", "objects": ["bg", "lbl"] }),
+        )
+        .expect("group")["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // 1. group.set_interactive ON, group.update, and group.set_interactive OFF.
+    assert_one_step_undo_redo(
+        &mut s,
+        "group.set_interactive",
+        &json!({ "slide": "slide1", "group": gid, "interactive": true }),
+        true,
+    );
+    assert_one_step_undo_redo(
+        &mut s,
+        "group.update",
+        &json!({
+            "slide": "slide1",
+            "group": gid,
+            "name": "Submit answers",
+            "initial_state": "disabled",
+            "focus_order": 2,
+            "description": "Submits the form"
+        }),
+        true,
+    );
+    assert_one_step_undo_redo(
+        &mut s,
+        "group.set_interactive",
+        &json!({ "slide": "slide1", "group": gid, "interactive": false }),
+        false,
+    );
+
+    // Add a group trigger to verify 1-step undo of duplicate, ungroup, and delete.
+    s.execute(
+        "trigger.add",
+        &json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": gid },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    )
+    .expect("add group trigger");
+
+    assert_one_step_undo_redo(
+        &mut s,
+        "object.duplicate",
+        &json!({ "slide": "slide1", "objects": ["bg", "lbl"] }),
+        false,
+    );
+    assert_one_step_undo_redo(
+        &mut s,
+        "object.ungroup",
+        &json!({ "slide": "slide1", "objects": ["bg", "lbl"] }),
+        false,
+    );
+    assert_one_step_undo_redo(
+        &mut s,
+        "object.delete",
+        &json!({ "slide": "slide1", "object": "bg" }),
+        true,
+    );
+    assert_one_step_undo_redo(
+        &mut s,
+        "object.delete",
+        &json!({ "slide": "slide1", "object": "lbl" }),
+        true,
+    );
+    assert!(s.course.slide("slide1").unwrap().groups.is_empty());
+    assert!(s.course.slide("slide1").unwrap().triggers.is_empty());
 }

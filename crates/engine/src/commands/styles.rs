@@ -3,9 +3,9 @@
 //! them course-wide, and the renderer and player never read a style by name.
 
 use coursecraft_course::{
-    Color, Course, MAX_PALETTE_COLORS, MAX_TEXT_STYLES, NamedTextStyle, Object, ObjectKind,
-    PaletteColor, Paragraph, Slide, TextStyle, apply_named_style, normalize_hex, recolor_course,
-    style_of_text_box,
+    Autofit, Color, Course, MAX_PALETTE_COLORS, MAX_TEXT_STYLES, NamedTextStyle, Object,
+    ObjectKind, PaletteColor, Paragraph, Slide, TextStyle, apply_named_style, normalize_hex,
+    recolor_course, style_of_text_box,
 };
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
@@ -280,6 +280,42 @@ struct FromObject {
     object: String,
 }
 
+/// Apply the point-text rule after a named text style is copied onto `object`:
+/// if the object is point text and the resulting style has `wrap: true` (or
+/// `autofit == Autofit::Shrink`), convert it to area text (`point_text = false`)
+/// keeping its existing frame; otherwise refit its frame with alignment anchoring.
+/// Area text is untouched.
+fn sync_point_text_after_named_style(object: &mut Object) {
+    let ObjectKind::Text {
+        text,
+        style,
+        runs,
+        paragraphs,
+        autofit,
+        point_text,
+        ..
+    } = &mut object.kind
+    else {
+        return;
+    };
+    if !*point_text {
+        return;
+    }
+    if style.wrap || *autofit == Autofit::Shrink {
+        *point_text = false;
+    } else {
+        super::text::fit_point_text_frame(
+            &mut object.frame,
+            text,
+            runs,
+            style,
+            paragraphs,
+            None,
+            false,
+        );
+    }
+}
+
 /// Put the named style on every text box linked to it, in the whole course.
 fn reapply(course: &mut Course, index: usize) -> usize {
     let Some(named) = course.text_styles.get(index).cloned() else {
@@ -293,6 +329,7 @@ fn reapply(course: &mut Course, index: usize) -> usize {
                 ObjectKind::Text { text_style: Some(id), .. } if *id == named.id
             );
             if linked && apply_named_style(&mut object.kind, &named, false) {
+                sync_point_text_after_named_style(object);
                 count += 1;
             }
         }
@@ -385,6 +422,7 @@ pub(super) fn text_style_apply(s: &mut Session, p: &Json) -> Result<Json> {
         if !apply_named_style(&mut object.kind, &named, clear) {
             return Err(bad(C, format!("object {oid:?} is not a text box")));
         }
+        sync_point_text_after_named_style(object);
     }
     Ok(json!({ "applied": objects.len() }))
 }

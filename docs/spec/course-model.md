@@ -41,11 +41,13 @@ Course
 ├─ scenes[] {id, title}
    └─ slides[] {id, title, duration_ms=5000, background?, transition?, notes?, master?, revisit=auto, draw?, player?}
       ├─ objects[]      base layer, bottom → top (timing, states, entrance?, exit?, motion_paths[])
+      ├─ groups[]?      {id, name?, interactive?, initial_state?="normal", focus_order?, description?} (omitted when empty)
       ├─ layers[] {id, name, duration_ms, hide_other_layers=true,   (back → front)
       │            pause_base_timeline=false, prevent_base_clicks=false,
       │            hide_base_objects=false, hide_when_timeline_ends=false,
       │            allow_seek=auto, revisit=auto}
       │   ├─ objects[]
+      │   ├─ groups[]?
       │   └─ triggers[]
       ├─ triggers[]     base-layer triggers
       └─ question?  {kind, prompt, choices[{id,text,correct,points=0}], points=10,
@@ -64,7 +66,7 @@ Course
 
 | `kind.type` | fields |
 |---|---|
-| `text` | `text`, `style {font, size, color, bold, italic?, underline?, strikethrough?, baseline?, letter_spacing?, align?, valign?, wrap?, insets?, direction?}`, `runs? [{text, bold?, italic?, underline?, strikethrough?, baseline?, letter_spacing?, size?, color?, font?, link?}]`, `paragraphs? [Paragraph]`, `autofit?`, `outline? {color, width, dash?}` |
+| `text` | `text`, `style {font, size, color, bold, italic?, underline?, strikethrough?, baseline?, letter_spacing?, align?, valign?, wrap?, insets?, direction?}`, `runs? [{text, bold?, italic?, underline?, strikethrough?, baseline?, letter_spacing?, size?, color?, font?, link?}]`, `paragraphs? [Paragraph]`, `autofit?`, `outline? {color, width, dash?}`, `point_text?` |
 | `shape` | `shape` (see [Shapes](#shapes)), `fill`, `fill_style?`, `outline? {color, width, dash?}`, `text? {text, style, runs?, paragraphs?, autofit?}`, `adjust? [number]` |
 | `image` | `src`, `alt`, `crop?`, `outline? {color, width, dash?}`, `shape?` |
 | `audio` / `video` | `src`, `autoplay`, `captions?`, `volume?`, `trim?`, `cues[]?` (video only, see [Interactive video cues](#interactive-video-cues)), `poster?` (video only) |
@@ -84,6 +86,8 @@ Course
 | `table` | `columns [number]`, `rows [{height, cells [{text, style?, runs?, paragraphs?, fill?, row_span?, col_span?, valign?}]}]`, `borders?`, `header_row?` |
 
 Colours are `#RRGGBB` or `#RRGGBBAA`. `style.font`, a run's `font` and `theme.font` name `Inter` (the legacy `Open Sans` also means Inter) or any family in `course.fonts`; an unknown name falls back to Inter and validation reports a warning. `style.italic`, `style.underline` and `style.strikethrough` default to false and are omitted when false. `style.baseline` is `normal` (default, omitted), `superscript` or `subscript`; those draw at 65% size, raised or lowered. `style.letter_spacing` is extra space after each letter in points, default 0 (omitted), repaired to 0 when not finite and clamped to -5..=50. A run may override each of the three; omitted overrides inherit the style. `style.align` defaults to `left` (`left`, `center`, `right`) and `style.valign` defaults to `top` (`top`, `middle`, `bottom`), omitted when default. Media `src` (such as `Image.src`) is a relative path under the project's `media/` folder, and the editor stores imported files there.
+
+`point_text` on `text` objects (and state-extra `text` items) is an optional boolean (default `false`, omitted when `false`). A point-text box uses `style.wrap: false` and `autofit: none`, auto-fits its frame width and height to its content on text or style edits, and converts to fixed-width area text (`point_text: false`) when wrap is turned on or its width is resized.
 
 Audio and video may set `captions` to a WebVTT file path relative to `media/`, for example `"captions": "intro.vtt"`. The path follows the same safe-relative-path rule as `src` and must end in `.vtt` (case-insensitive); validation rejects anything else and names the object. The field is omitted when unset, so existing courses stay byte-identical. Captions are presentational: they are never part of `coursecraft-logic` state and never send inputs.
 
@@ -435,13 +439,44 @@ Layer options beyond the basic flags are omitted from JSON when default, so exis
 
 ### Groups
 
-`group: Option<String>` is an authoring-only grouping id. It is omitted from JSON when the object is not grouped, so existing courses and golden files stay byte-identical. Logic, render and publish ignore it, so `simulate` output does not change.
+`Object.group: Option<String>` assigns an object to a group on its slide layer. It is omitted from JSON when the object is not grouped, so existing courses and golden files stay byte-identical. Plain authoring groups (without a `Group` record, or with `interactive: false`) are authoring-only: logic, render and publish ignore them, so `simulate` output does not change.
 
 - All members of a group sit on the same slide layer, and their ids are contiguous in z-order.
 - Grouping an object that already belongs to a group pulls the whole group in and flattens it; nested groups are not supported.
 - A group id with only one member on a slide layer is a validation **warning** (it never blocks play or publish).
 - `object.paste` and `object.duplicate` give the copies fresh group ids shared by the copies. `slide.paste` and `slide.duplicate` keep the source slide's group ids, because group ids are scoped per slide.
 - Clicking any member selects the whole group. Double-clicking a member of a selected group focuses just that member for editing; clicking away clears the focus.
+
+`Slide.groups` (for base-layer groups) and `Layer.groups` (for slide-layer groups) hold optional `Vec<Group>` records carrying group-level metadata and interactive button behaviour. Both lists are omitted from JSON when empty so existing courses stay byte-identical.
+
+```json
+{
+  "id": "g-back",
+  "name": "Back button",
+  "interactive": true,
+  "initial_state": "normal",
+  "focus_order": 1,
+  "description": "Returns to the previous slide"
+}
+```
+
+| field | meaning |
+|---|---|
+| `id` | Matches `Object.group` on the group's members on this slide/layer. Valid ID (`1–128` chars of `[A-Za-z0-9_-]`), unique across all objects, layers and groups on the slide. |
+| `name` | Optional display and accessible name. Default `""`, omitted when empty. |
+| `interactive` | When `true`, the group acts as one interactive button sharing runtime and pointer states across all members. Default `false`, omitted when `false`. |
+| `initial_state` | Initial runtime state for an interactive group. Default `"normal"`, omitted when `"normal"`. Must be `"normal"`, `"hidden"`, `"disabled"`, or a state defined on at least one member. |
+| `focus_order` | Optional author-set keyboard focus position (`Option<u32>`). Omitted when unset. |
+| `description` | Optional accessible description override (`Option<String>`). Omitted when unset. |
+
+Validation rules for `Group` records and interactive groups:
+
+- Every `Group.id` must be a valid non-empty ID, unique across all groups on the slide, and disjoint from all object and layer IDs on the slide.
+- Every `Group` record must have at least one member object on its owning layer (`Slide.objects` for `Slide.groups`, `Layer.objects` for `Layer.groups`); zero members is a validation error.
+- Interactive groups (`interactive: true`) are forbidden on master slides (masters carry no play-time behaviour).
+- Interactive group members must be visual objects (`shape`, `text`, `image`, `path`, `button`, `lottie`, `timer`, `progress_meter`). Input widgets (`text_entry`, `slider`, `dial`, `checkbox`, `radio_group`), `scroll_panel`, `web`, `audio`, `video`, `marker`, `table`, draggable objects (`drag`), and question hotspot images or drag items are rejected.
+- Triggers may target an interactive group ID in `Event::Click`, `Event::HoverStart`, `Event::HoverEnd`, `Event::KeyPressed { object: Some(..) }`, `Event::StateChanges`, `Action::ChangeState`, and `Condition::ObjectState`. Plain (non-interactive) group IDs are rejected by trigger validation.
+- For interactive group targets, `initial_state`, `Action::ChangeState`, and `Condition::ObjectState` accept `"normal"`, `"hidden"`, `"disabled"`, or any state defined on at least one member; `Event::StateChanges` also accepts any built-in state name.
 
 ### Slide masters and templates
 
@@ -584,7 +619,7 @@ Applying a style copies it into the object's base style and sets the link; per-r
 - `name` (required), `fill?`, `text?`, `src?` (for `image` / `video`; empty or absent keeps the base picture, base `alt` is kept).
 - Widened visual overrides (omitted when `null` / inherit): `fill_style?`, `outline?`, `text_style?`, `runs?`, `paragraphs?`, `autofit?`, `opacity?` (clamped `0..=1` on load), `shadow?`, `glow?`, `crop?`, `image_shape?`, `rotation?` (normalised `0..360` on load), `flip_h?`, `flip_v?`.
 - Tri-state clear flags for nullable properties (`clear_fill_style`, `clear_outline`, `clear_shadow`, `clear_glow`, `clear_crop`, `clear_image_shape`, omitted when `false`): `None` + `false` inherits from lower layers; `Some(v)` + `false` overrides; `None` + `true` explicitly clears Normal's property. Setting both a field and its `clear_*` flag is a validation error. All new fields have `#[serde(default)]` and `skip_serializing_if` so pre-M29 files round-trip unchanged, while 0.3.x refuses unknown M29 fields loudly (`deny_unknown_fields`).
-- `extras` (omitted when empty): up to 16 (`MAX_STATE_EXTRAS`) visual-only `StateExtra` items rendered relative to the parent object's unrotated top-left `(0, 0)` while the state is active. Each `StateExtra` has `id` (`1..=128` `[A-Za-z0-9_-]`, unique within the state), optional `name`, `kind: StateExtraKind` (`shape`, `image`, `text`, or `path` without `connector`/`start_glue`/`end_glue`), `frame` (negative `x`/`y` or overhanging extents allowed; positive finite `w`/`h`), `rotation` (`0..360`), `flip_h`, `flip_v`, `opacity` (`0..=1`), `shadow?`, and `glow?`.
+- `extras` (omitted when empty): up to 16 (`MAX_STATE_EXTRAS`) visual-only `StateExtra` items rendered relative to the parent object's unrotated top-left `(0, 0)` while the state is active. Each `StateExtra` has `id` (`1..=128` `[A-Za-z0-9_-]`, unique within the state), optional `name`, `kind: StateExtraKind` (`shape`, `image`, `text` — including optional `point_text?` — or `path` without `connector`/`start_glue`/`end_glue`), `frame` (negative `x`/`y` or overhanging extents allowed; positive finite `w`/`h`), `rotation` (`0..360`), `flip_h`, `flip_v`, `opacity` (`0..=1`), `shadow?`, and `glow?`.
 
 Built-in names have player meaning:
 
@@ -627,7 +662,7 @@ Pair ids and hotspot region ids follow the id rule below (1–128 characters of 
 ## IDs
 
 - Slide ids are unique across scenes, masters and templates. Scene ids are unique per course.
-- Object and layer ids share one namespace per slide; triggers can only reference things on their own slide.
+- Object, layer and `Group` record ids share one namespace per slide; triggers can only reference things on their own slide.
 - ids are 1–128 characters of `[A-Za-z0-9_-]`, so they are safe in URLs, file names and SCORM identifiers.
 
 ## Triggers

@@ -4,14 +4,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use coursecraft_course::{
-    Color, CropRect, FillStyle, Glow, Glue, Object, ObjectKind, Outline, RadioOption, Rect, Shadow,
-    Slide, TextRun, TextStyle, Timing, Trigger, Trim, WebSource,
+    Action, Autofit, Color, Condition, CropRect, Event, FillStyle, Glow, Glue, Group, Object,
+    ObjectKind, Outline, RadioOption, Rect, Shadow, Slide, TextRun, TextStyle, Timing, Trigger,
+    Trim, WebSource,
 };
 use serde_json::{Value as Json, json};
 
 use super::{
     bad, clamp_frame, fresh_id, fresh_id_in, keep_valid, kind_prefix, layer_mut, obj, opt,
-    remap_object_glue, remap_object_glues, remap_trigger, req, slide_mut, text, validate_id,
+    remap_object_glue, remap_object_glues, remap_trigger, remove_dangling_triggers, req, slide_mut,
+    text, validate_id,
 };
 use crate::{EngineError, Result, Session};
 
@@ -22,7 +24,29 @@ pub(super) fn object_add(s: &mut Session, p: &Json) -> Result<Json> {
     let layer: Option<String> = opt(C, p, "layer")?;
     let mut kind: ObjectKind = req(C, p, "kind")?;
     clamp_shape_adjust(&mut kind);
-    let frame: Rect = req(C, p, "frame")?;
+    let mut frame: Rect = req(C, p, "frame")?;
+    if let ObjectKind::Text {
+        text,
+        style,
+        runs,
+        paragraphs,
+        autofit,
+        point_text: true,
+        ..
+    } = &mut kind
+    {
+        style.wrap = false;
+        *autofit = Autofit::None;
+        super::text::fit_point_text_frame(
+            &mut frame,
+            text,
+            runs,
+            style,
+            paragraphs,
+            super::text::parse_measured_size(p),
+            true,
+        );
+    }
     let name: Option<String> = opt(C, p, "name")?;
     let timing: Option<Timing> = opt(C, p, "timing")?;
     let id: Option<String> = opt(C, p, "id")?;
@@ -162,7 +186,41 @@ pub(super) fn object_update(s: &mut Session, p: &Json) -> Result<Json> {
     }
     if let Some(mut k) = kind {
         keep_text_style_link(&obj.kind, &mut k, kind_omits_text_style(p));
+        let mut should_refit = false;
+        if let ObjectKind::Text {
+            style,
+            autofit,
+            point_text,
+            ..
+        } = &mut k
+            && *point_text
+        {
+            if style.wrap || *autofit == Autofit::Shrink {
+                *point_text = false;
+            } else {
+                should_refit = true;
+            }
+        }
         obj.kind = k;
+        if should_refit
+            && let ObjectKind::Text {
+                text,
+                style,
+                runs,
+                paragraphs,
+                ..
+            } = &obj.kind
+        {
+            super::text::fit_point_text_frame(
+                &mut obj.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                None,
+                false,
+            );
+        }
     }
     if let Some(t) = timing {
         obj.timing = t;
@@ -583,6 +641,13 @@ fn objects_vec_mut<'a>(slide: &'a mut Slide, layer: Option<&str>) -> Result<&'a 
     }
 }
 
+fn groups_vec_mut<'a>(slide: &'a mut Slide, layer: Option<&str>) -> Result<&'a mut Vec<Group>> {
+    match layer {
+        Some(lid) => Ok(&mut layer_mut(slide, lid)?.groups),
+        None => Ok(&mut slide.groups),
+    }
+}
+
 pub(super) fn all_group_ids(slide: &Slide) -> Vec<String> {
     slide
         .objects
@@ -590,6 +655,154 @@ pub(super) fn all_group_ids(slide: &Slide) -> Vec<String> {
         .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
         .filter_map(|object| object.group.clone())
         .collect()
+}
+
+/// Remove any [`Group`] records on `slide` (base or layers) that have zero
+/// member objects remaining on their owning layer. Returns the removed group
+/// IDs so callers can clean up dangling triggers in the same undo step.
+pub(super) fn remove_empty_group_records(slide: &mut Slide) -> Vec<String> {
+    let mut removed = Vec::new();
+    let base_objects = &slide.objects;
+    slide.groups.retain(|g| {
+        let has_member = base_objects
+            .iter()
+            .any(|o| o.group.as_deref() == Some(g.id.as_str()));
+        if !has_member {
+            removed.push(g.id.clone());
+        }
+        has_member
+    });
+    for layer in &mut slide.layers {
+        let layer_objects = &layer.objects;
+        layer.groups.retain(|g| {
+            let has_member = layer_objects
+                .iter()
+                .any(|o| o.group.as_deref() == Some(g.id.as_str()));
+            if !has_member {
+                removed.push(g.id.clone());
+            }
+            has_member
+        });
+    }
+    removed
+}
+
+fn cleanup_empty_groups_and_triggers(s: &mut Session, sid: &str) -> Result<usize> {
+    let removed_groups = {
+        let slide = slide_mut(s, sid)?;
+        remove_empty_group_records(slide)
+    };
+    if removed_groups.is_empty() {
+        return Ok(0);
+    }
+    let mut needles = Vec::with_capacity(removed_groups.len().saturating_mul(3));
+    for gid in &removed_groups {
+        needles.push(format!("object {gid:?} is not on slide"));
+        needles.push(format!("target {gid:?} is not on slide"));
+        needles.push(format!("group {gid:?} on slide"));
+    }
+    Ok(remove_dangling_triggers(s, sid, &needles))
+}
+
+fn event_references_target(event: &Event, target_id: &str) -> bool {
+    match event {
+        Event::Click { object }
+        | Event::HoverStart { object }
+        | Event::HoverEnd { object }
+        | Event::StateChanges { object, .. }
+        | Event::MediaEnds { object }
+        | Event::CueReached { object, .. }
+        | Event::AnimationCompletes { object, .. }
+        | Event::MarkerOpened { object }
+        | Event::MarkerClosed { object } => object == target_id,
+        Event::KeyPressed { object, .. } => object.as_deref() == Some(target_id),
+        Event::DroppedOn { object, target } => object == target_id || target == target_id,
+        Event::ObjectsIntersect { a, b } | Event::ObjectsStopIntersecting { a, b } => {
+            a == target_id || b == target_id
+        }
+        Event::TimerEnds { timer } => timer == target_id,
+        Event::TimelineStarts { .. }
+        | Event::TimelineEnds { .. }
+        | Event::TimelineReaches { .. }
+        | Event::VariableChanges { .. }
+        | Event::Submit => false,
+    }
+}
+
+fn action_references_target(action: &Action, target_id: &str) -> bool {
+    match action {
+        Action::ChangeState { object, .. }
+        | Action::PlayMedia { object }
+        | Action::PauseMedia { object }
+        | Action::StopMedia { object }
+        | Action::MoveOnPath { object, .. } => object == target_id,
+        Action::StartTimer { timer }
+        | Action::PauseTimer { timer }
+        | Action::ResetTimer { timer } => timer == target_id,
+        Action::JumpToSlide { .. }
+        | Action::ShowLayer { .. }
+        | Action::HideLayer { .. }
+        | Action::SetVariable { .. }
+        | Action::PauseTimeline
+        | Action::ResumeTimeline
+        | Action::SubmitQuestion
+        | Action::SubmitResults
+        | Action::RetryQuiz
+        | Action::ReviewQuiz
+        | Action::ExitReview
+        | Action::PrintSlide
+        | Action::CompleteCourse { .. }
+        | Action::ExitCourse
+        | Action::OpenUrl { .. }
+        | Action::RunJavaScript { .. }
+        | Action::LightboxSlide { .. }
+        | Action::CloseLightbox => false,
+    }
+}
+
+fn condition_references_target(condition: &Condition, target_id: &str) -> bool {
+    match condition {
+        Condition::All(list) | Condition::Any(list) => list
+            .iter()
+            .any(|inner| condition_references_target(inner, target_id)),
+        Condition::Not(inner) => condition_references_target(inner, target_id),
+        Condition::ObjectState { object, .. } => object == target_id,
+        Condition::Compare { .. } => false,
+    }
+}
+
+fn trigger_references_target(trigger: &Trigger, target_id: &str) -> bool {
+    event_references_target(&trigger.when, target_id)
+        || action_references_target(&trigger.action, target_id)
+        || trigger
+            .condition
+            .as_ref()
+            .is_some_and(|c| condition_references_target(c, target_id))
+}
+
+fn derive_group_name(members: &[&Object]) -> String {
+    const MAX_NAME_CHARS: usize = 48;
+    for member in members {
+        let raw = match &member.kind {
+            ObjectKind::Text { text, .. } => Some(text.as_str()),
+            ObjectKind::Button { label, .. } => Some(label.as_str()),
+            _ => None,
+        };
+        if let Some(raw) = raw {
+            let cleaned = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !cleaned.is_empty() {
+                return cleaned.chars().take(MAX_NAME_CHARS).collect();
+            }
+        }
+    }
+    "Button group".to_owned()
+}
+
+fn members_have_state(members: &[&Object], state: &str) -> bool {
+    matches!(state, "normal" | "hidden" | "disabled")
+        || members
+            .iter()
+            .any(|m| m.states.iter().any(|s| s.name == state))
 }
 
 pub(super) fn object_group(s: &mut Session, p: &Json) -> Result<Json> {
@@ -644,31 +857,36 @@ pub(super) fn object_group(s: &mut Session, p: &Json) -> Result<Json> {
             .max()
             .ok_or_else(|| bad(C, "group members are not on this layer"))?;
         let insert_at = topmost.saturating_add(1).saturating_sub(member_ids.len());
-        let taken = all_group_ids(slide);
-        let new_group = fresh_id("group", taken.iter().map(String::as_str));
+        let mut taken: BTreeSet<String> = slide.local_ids().map(str::to_owned).collect();
+        taken.extend(all_group_ids(slide));
+        let new_group = fresh_id_in("group", &taken);
         (layer, member_ids, insert_at, new_group)
     };
 
     let member_set: BTreeSet<&str> = member_ids.iter().map(String::as_str).collect();
-    let slide = slide_mut(s, &sid)?;
-    let layer_objects = objects_vec_mut(slide, layer.as_deref())?;
-    let mut extracted: Vec<Object> = Vec::new();
-    let mut index = 0usize;
-    while index < layer_objects.len() {
-        if member_set.contains(layer_objects[index].id.as_str()) {
-            extracted.push(layer_objects.remove(index));
-        } else {
-            index = index.saturating_add(1);
+    let count = {
+        let slide = slide_mut(s, &sid)?;
+        let layer_objects = objects_vec_mut(slide, layer.as_deref())?;
+        let mut extracted: Vec<Object> = Vec::new();
+        let mut index = 0usize;
+        while index < layer_objects.len() {
+            if member_set.contains(layer_objects[index].id.as_str()) {
+                extracted.push(layer_objects.remove(index));
+            } else {
+                index = index.saturating_add(1);
+            }
         }
-    }
-    for object in &mut extracted {
-        object.group = Some(new_group.clone());
-    }
-    let count = extracted.len();
-    let at = insert_at.min(layer_objects.len());
-    for (offset, object) in extracted.into_iter().enumerate() {
-        layer_objects.insert(at.saturating_add(offset), object);
-    }
+        for object in &mut extracted {
+            object.group = Some(new_group.clone());
+        }
+        let count = extracted.len();
+        let at = insert_at.min(layer_objects.len());
+        for (offset, object) in extracted.into_iter().enumerate() {
+            layer_objects.insert(at.saturating_add(offset), object);
+        }
+        count
+    };
+    let _ = cleanup_empty_groups_and_triggers(s, &sid)?;
 
     keep_valid(s, was_valid)?;
     Ok(json!({ "group": new_group, "objects": count }))
@@ -701,24 +919,317 @@ pub(super) fn object_ungroup(s: &mut Session, p: &Json) -> Result<Json> {
     }
 
     let mut count = 0usize;
-    let slide = slide_mut(s, &sid)?;
-    for object in slide.objects.iter_mut().chain(
-        slide
-            .layers
-            .iter_mut()
-            .flat_map(|layer| layer.objects.iter_mut()),
-    ) {
-        if object
-            .group
-            .as_ref()
-            .is_some_and(|group| groups.contains(group))
-        {
-            object.group = None;
-            count = count.saturating_add(1);
+    {
+        let slide = slide_mut(s, &sid)?;
+        for object in slide.objects.iter_mut().chain(
+            slide
+                .layers
+                .iter_mut()
+                .flat_map(|layer| layer.objects.iter_mut()),
+        ) {
+            if object
+                .group
+                .as_ref()
+                .is_some_and(|group| groups.contains(group))
+            {
+                object.group = None;
+                count = count.saturating_add(1);
+            }
         }
     }
+    let _ = cleanup_empty_groups_and_triggers(s, &sid)?;
     keep_valid(s, was_valid)?;
     Ok(json!({ "objects": count }))
+}
+
+pub(super) fn group_set_interactive(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "group.set_interactive";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let group_id: String = req(C, p, "group")?;
+    let interactive: bool = req(C, p, "interactive")?;
+    let name_param: Option<String> = match opt::<String>(C, p, "name")? {
+        Some(n) => Some(text(C, n, "name")?),
+        None => None,
+    };
+
+    if interactive {
+        if s.course.master(&sid).is_some() {
+            return Err(bad(C, "master slides cannot have interactive groups"));
+        }
+
+        let (owner, effective_id, rewrite_members, derived_name) = {
+            let slide = s
+                .course
+                .slide(&sid)
+                .ok_or_else(|| EngineError::NotFound(format!("slide {sid:?} does not exist")))?;
+
+            let mut owners: Vec<(Option<String>, Vec<&Object>)> = Vec::new();
+            let base_members: Vec<&Object> = slide
+                .objects
+                .iter()
+                .filter(|o| o.group.as_deref() == Some(group_id.as_str()))
+                .collect();
+            if !base_members.is_empty() {
+                owners.push((None, base_members));
+            }
+            for layer in &slide.layers {
+                let layer_members: Vec<&Object> = layer
+                    .objects
+                    .iter()
+                    .filter(|o| o.group.as_deref() == Some(group_id.as_str()))
+                    .collect();
+                if !layer_members.is_empty() {
+                    owners.push((Some(layer.id.clone()), layer_members));
+                }
+            }
+            if owners.is_empty() {
+                return Err(EngineError::NotFound(format!(
+                    "group {group_id:?} is not on slide {sid:?}"
+                )));
+            }
+            if owners.len() > 1 {
+                return Err(bad(
+                    C,
+                    "all group members must be on the same layer to make an interactive group",
+                ));
+            }
+            let Some((owner, members)) = owners.into_iter().next() else {
+                return Err(EngineError::NotFound(format!(
+                    "group {group_id:?} is not on slide {sid:?}"
+                )));
+            };
+            if members.len() < 2 {
+                return Err(bad(C, "interactive group needs at least 2 members"));
+            }
+            for member in &members {
+                if coursecraft_course::is_disallowed_interactive_group_member(
+                    member,
+                    slide.question.as_ref(),
+                ) {
+                    return Err(bad(
+                        C,
+                        format!(
+                            "interactive group cannot contain {:?} (inputs, scrolling panels, web, media, markers, tables, draggable objects, and question items are not allowed)",
+                            member.id
+                        ),
+                    ));
+                }
+            }
+
+            let collides_with_other_group = slide
+                .group(&group_id)
+                .is_some_and(|(_, existing_owner)| existing_owner != owner.as_deref());
+            let collides = slide.object(&group_id).is_some()
+                || slide.layer(&group_id).is_some()
+                || collides_with_other_group
+                || validate_id(C, &group_id).is_err();
+
+            let (effective_id, rewrite_members) = if collides {
+                let mut taken: BTreeSet<String> = slide.local_ids().map(str::to_owned).collect();
+                taken.extend(all_group_ids(slide));
+                (fresh_id_in("grp-", &taken), true)
+            } else {
+                (group_id.clone(), false)
+            };
+
+            let derived_name = derive_group_name(&members);
+            (owner, effective_id, rewrite_members, derived_name)
+        };
+
+        // Never move, rewrite, or delete existing member triggers when opting in.
+        let slide = slide_mut(s, &sid)?;
+        if rewrite_members {
+            let layer_objects = objects_vec_mut(slide, owner.as_deref())?;
+            for obj in layer_objects.iter_mut() {
+                if obj.group.as_deref() == Some(group_id.as_str()) {
+                    obj.group = Some(effective_id.clone());
+                }
+            }
+        }
+        let groups = groups_vec_mut(slide, owner.as_deref())?;
+        if let Some(existing) = groups.iter_mut().find(|g| g.id == effective_id) {
+            existing.interactive = true;
+            if let Some(n) = name_param {
+                existing.name = n;
+            } else if existing.name.trim().is_empty() {
+                existing.name = derived_name;
+            }
+        } else {
+            groups.push(Group {
+                id: effective_id.clone(),
+                name: name_param.unwrap_or(derived_name),
+                interactive: true,
+                initial_state: "normal".to_owned(),
+                focus_order: None,
+                description: None,
+            });
+        }
+
+        keep_valid(s, was_valid)?;
+        Ok(json!({ "group": effective_id }))
+    } else {
+        let has_record = {
+            let slide = s
+                .course
+                .slide(&sid)
+                .ok_or_else(|| EngineError::NotFound(format!("slide {sid:?} does not exist")))?;
+            let has_record = slide.group(&group_id).is_some();
+            if !has_record && slide.group_members(&group_id).is_empty() {
+                return Err(EngineError::NotFound(format!(
+                    "group {group_id:?} is not on slide {sid:?}"
+                )));
+            }
+            if has_record {
+                let has_trigger = slide
+                    .triggers
+                    .iter()
+                    .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+                    .any(|t| trigger_references_target(t, &group_id))
+                    || slide
+                        .question
+                        .as_ref()
+                        .and_then(|q| q.correct_when.as_ref())
+                        .is_some_and(|c| condition_references_target(c, &group_id));
+                if has_trigger {
+                    return Err(EngineError::Invalid(
+                        "Cannot remove button behaviour while triggers reference this group; delete or retarget those triggers first".to_owned(),
+                    ));
+                }
+            }
+            has_record
+        };
+        if !has_record {
+            s.skip_undo = true;
+            return Ok(json!({ "group": group_id }));
+        }
+
+        let slide = slide_mut(s, &sid)?;
+        let mut removed_any = false;
+        let before = slide.groups.len();
+        slide.groups.retain(|g| g.id != group_id);
+        if slide.groups.len() != before {
+            removed_any = true;
+        }
+        for layer in &mut slide.layers {
+            let before_layer = layer.groups.len();
+            layer.groups.retain(|g| g.id != group_id);
+            if layer.groups.len() != before_layer {
+                removed_any = true;
+            }
+        }
+        if !removed_any {
+            s.skip_undo = true;
+            return Ok(json!({ "group": group_id }));
+        }
+
+        keep_valid(s, was_valid)?;
+        Ok(json!({ "group": group_id }))
+    }
+}
+
+pub(super) fn group_update(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "group.update";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let gid: String = req(C, p, "group")?;
+    let name: Option<String> = match opt::<String>(C, p, "name")? {
+        Some(n) => Some(text(C, n, "name")?),
+        None => None,
+    };
+    let initial_state: Option<String> = match opt::<String>(C, p, "initial_state")? {
+        Some(is) => {
+            let is = text(C, is, "initial_state")?;
+            if is.trim().is_empty() {
+                return Err(bad(C, "initial_state is empty"));
+            }
+            Some(is)
+        }
+        None => None,
+    };
+    let map = obj(C, p)?;
+    let focus_order_patch: Option<Option<u32>> = if let Some(v) = map.get("focus_order") {
+        let parsed = match v {
+            Json::Null => None,
+            Json::Number(n) => {
+                let Some(value) = n.as_u64().filter(|n| *n <= u64::from(u32::MAX)) else {
+                    return Err(bad(
+                        C,
+                        "`focus_order` must be an unsigned 32-bit integer or null",
+                    ));
+                };
+                #[allow(clippy::cast_possible_truncation)]
+                Some(value as u32)
+            }
+            _ => {
+                return Err(bad(
+                    C,
+                    "`focus_order`: expected an unsigned integer or null",
+                ));
+            }
+        };
+        Some(parsed)
+    } else {
+        None
+    };
+    let description_patch: Option<Option<String>> = if let Some(v) = map.get("description") {
+        let parsed = match v {
+            Json::Null => None,
+            Json::String(desc) => {
+                let desc = text(C, desc.clone(), "description")?;
+                if desc.trim().is_empty() {
+                    None
+                } else {
+                    Some(desc)
+                }
+            }
+            _ => return Err(bad(C, "`description`: expected string or null")),
+        };
+        Some(parsed)
+    } else {
+        None
+    };
+
+    let owner = {
+        let slide = s
+            .course
+            .slide(&sid)
+            .ok_or_else(|| EngineError::NotFound(format!("slide {sid:?} does not exist")))?;
+        let (_, owner) = slide.group(&gid).ok_or_else(|| {
+            EngineError::NotFound(format!("group {gid:?} is not on slide {sid:?}"))
+        })?;
+        if let Some(ref state) = initial_state
+            && !slide.group_has_state(&gid, state)
+        {
+            return Err(bad(
+                C,
+                format!("state {state:?} is not defined on group {gid:?}"),
+            ));
+        }
+        owner.map(str::to_owned)
+    };
+
+    let slide = slide_mut(s, &sid)?;
+    let groups = groups_vec_mut(slide, owner.as_deref())?;
+    let group = groups
+        .iter_mut()
+        .find(|g| g.id == gid)
+        .ok_or_else(|| EngineError::NotFound(format!("group {gid:?} is not on slide {sid:?}")))?;
+    if let Some(n) = name {
+        group.name = n;
+    }
+    if let Some(is) = initial_state {
+        group.initial_state = is;
+    }
+    if let Some(fo) = focus_order_patch {
+        group.focus_order = fo;
+    }
+    if let Some(desc) = description_patch {
+        group.description = desc;
+    }
+
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "group": gid }))
 }
 
 pub(super) fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
@@ -745,7 +1256,8 @@ pub(super) fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(C, "`objects` is empty"));
     }
 
-    let (sources, mut taken, mut taken_groups) = {
+    let is_master = s.course.master(&sid).is_some();
+    let (sources, mut taken, source_groups) = {
         let slide = s
             .course
             .slide(&sid)
@@ -757,12 +1269,21 @@ pub(super) fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
             })?;
             sources.push((object.clone(), layer.map(str::to_owned)));
         }
-        let taken: BTreeSet<String> = slide.local_ids().map(str::to_owned).collect();
-        let taken_groups: BTreeSet<String> = all_group_ids(slide).into_iter().collect();
-        (sources, taken, taken_groups)
+        let mut taken: BTreeSet<String> = slide.local_ids().map(str::to_owned).collect();
+        taken.extend(all_group_ids(slide));
+        let mut source_groups: BTreeMap<(Option<String>, String), Group> = BTreeMap::new();
+        for g in &slide.groups {
+            source_groups.insert((None, g.id.clone()), g.clone());
+        }
+        for layer in &slide.layers {
+            for g in &layer.groups {
+                source_groups.insert((Some(layer.id.clone()), g.id.clone()), g.clone());
+            }
+        }
+        (sources, taken, source_groups)
     };
 
-    let mut group_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut group_map: BTreeMap<(Option<String>, String), String> = BTreeMap::new();
     let mut copy_map: BTreeMap<String, String> = BTreeMap::new();
     let mut cloned: Vec<(Object, Option<String>)> = Vec::new();
     let mut new_ids: Vec<String> = Vec::new();
@@ -774,11 +1295,13 @@ pub(super) fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
         object.frame.x += dx;
         object.frame.y += dy;
         if let Some(old_group) = object.group.clone() {
-            let new_group = group_map.entry(old_group).or_insert_with(|| {
-                let fresh = fresh_id_in("group", &taken_groups);
-                taken_groups.insert(fresh.clone());
-                fresh
-            });
+            let new_group = group_map
+                .entry((layer.clone(), old_group))
+                .or_insert_with(|| {
+                    let fresh = fresh_id_in("group", &taken);
+                    taken.insert(fresh.clone());
+                    fresh
+                });
             object.group = Some(new_group.clone());
         }
         new_ids.push(new_id);
@@ -788,14 +1311,71 @@ pub(super) fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
         remap_object_glue(object, &copy_map);
     }
 
+    let mut cloned_groups: Vec<(Option<String>, Group)> = Vec::new();
+    for ((owner, old_group), new_group) in &group_map {
+        let Some(src_group) = source_groups.get(&(owner.clone(), old_group.clone())) else {
+            continue;
+        };
+        if is_master && src_group.interactive {
+            continue;
+        }
+        let mut g = src_group.clone();
+        g.id = new_group.clone();
+        if g.interactive {
+            let members: Vec<&Object> = cloned
+                .iter()
+                .filter(|(o, l)| l == owner && o.group.as_deref() == Some(new_group.as_str()))
+                .map(|(o, _)| o)
+                .collect();
+            if !members_have_state(&members, &g.initial_state) {
+                g.initial_state = "normal".to_owned();
+            }
+        }
+        cloned_groups.push((owner.clone(), g));
+    }
+
     let slide = slide_mut(s, &sid)?;
     for (object, layer) in cloned {
         objects_vec_mut(slide, layer.as_deref())?.push(object);
+    }
+    for (owner, group) in cloned_groups {
+        groups_vec_mut(slide, owner.as_deref())?.push(group);
     }
 
     keep_valid(s, was_valid)?;
     let first = new_ids.first().cloned().unwrap_or_default();
     Ok(json!({ "id": first, "ids": new_ids }))
+}
+
+fn collect_paste_source_groups(
+    cmd: &str,
+    src_slide: Option<&Slide>,
+    groups_param: Vec<Group>,
+) -> Result<BTreeMap<String, Group>> {
+    let mut source_groups: BTreeMap<String, Group> = BTreeMap::new();
+    if let Some(src_slide) = src_slide {
+        for g in &src_slide.groups {
+            source_groups.insert(g.id.clone(), g.clone());
+        }
+        for l in &src_slide.layers {
+            for g in &l.groups {
+                source_groups.insert(g.id.clone(), g.clone());
+            }
+        }
+    }
+    for mut g in groups_param {
+        g.name = text(cmd, g.name, "name")?;
+        if let Some(desc) = g.description {
+            let desc = text(cmd, desc, "description")?;
+            g.description = if desc.trim().is_empty() {
+                None
+            } else {
+                Some(desc)
+            };
+        }
+        source_groups.insert(g.id.clone(), g);
+    }
+    Ok(source_groups)
 }
 
 pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
@@ -805,13 +1385,14 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
     let layer: Option<String> = opt(C, p, "layer")?;
     let objects: Vec<Object> = req(C, p, "objects")?;
     let triggers: Vec<Trigger> = opt(C, p, "triggers")?.unwrap_or_default();
+    let groups_param: Vec<Group> = opt(C, p, "groups")?.unwrap_or_default();
     let offset: Option<f32> = opt(C, p, "offset")?;
     let source_slide: Option<String> = opt(C, p, "source_slide")?;
 
     if objects.is_empty() {
         return Err(bad(C, "`objects` is empty"));
     }
-    if objects.len() > 500 || triggers.len() > 1000 {
+    if objects.len() > 500 || triggers.len() > 1000 || groups_param.len() > 500 {
         return Err(bad(C, "clipboard payload is too large"));
     }
     let offset = offset.unwrap_or(20.0);
@@ -853,11 +1434,7 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     let same_slide = source_slide.as_deref().is_none_or(|source| source == sid);
-    let (mut taken, layers, mut taken_groups): (
-        BTreeSet<String>,
-        BTreeMap<String, String>,
-        BTreeSet<String>,
-    ) = {
+    let (mut taken, layers): (BTreeSet<String>, BTreeMap<String, String>) = {
         let slide = s
             .course
             .slide(&sid)
@@ -869,8 +1446,10 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
                 "layer {lid:?} is not on slide {sid:?}"
             )));
         }
+        let mut taken: BTreeSet<String> = slide.local_ids().map(str::to_owned).collect();
+        taken.extend(all_group_ids(slide));
         (
-            slide.local_ids().map(str::to_owned).collect(),
+            taken,
             if same_slide {
                 slide
                     .layers
@@ -880,9 +1459,11 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
             } else {
                 BTreeMap::new()
             },
-            all_group_ids(slide).into_iter().collect(),
         )
     };
+
+    let src_sid = source_slide.as_deref().unwrap_or(&sid);
+    let source_groups = collect_paste_source_groups(C, s.course.slide(src_sid), groups_param)?;
 
     let mut object_map: BTreeMap<String, String> = BTreeMap::new();
     let mut pasted: Vec<Object> = Vec::with_capacity(objects.len());
@@ -910,11 +1491,43 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
     for object in &mut pasted {
         if let Some(old_group) = object.group.clone() {
             let new_group = group_map.entry(old_group).or_insert_with(|| {
-                let fresh = fresh_id_in("group", &taken_groups);
-                taken_groups.insert(fresh.clone());
+                let fresh = fresh_id_in("group", &taken);
+                taken.insert(fresh.clone());
                 fresh
             });
             object.group = Some(new_group.clone());
+        }
+    }
+
+    let mut pasted_groups: Vec<Group> = Vec::new();
+    let mut trigger_targets = object_map.clone();
+    if !is_master {
+        let target_question = s.course.slide(&sid).and_then(|sl| sl.question.as_ref());
+        for (old_group, new_group) in &group_map {
+            let Some(src_group) = source_groups.get(old_group) else {
+                continue;
+            };
+            let members: Vec<&Object> = pasted
+                .iter()
+                .filter(|o| o.group.as_deref() == Some(new_group.as_str()))
+                .collect();
+            if members.is_empty() {
+                continue;
+            }
+            let mut g = src_group.clone();
+            g.id = new_group.clone();
+            if g.interactive {
+                if members.iter().any(|m| {
+                    coursecraft_course::is_disallowed_interactive_group_member(m, target_question)
+                }) {
+                    continue;
+                }
+                if !members_have_state(&members, &g.initial_state) {
+                    g.initial_state = "normal".to_owned();
+                }
+                trigger_targets.insert(old_group.clone(), new_group.clone());
+            }
+            pasted_groups.push(g);
         }
     }
 
@@ -929,7 +1542,7 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
         let owner = if same_slide { layer.as_deref() } else { None };
         if remap_trigger(
             &mut trigger,
-            &object_map,
+            &trigger_targets,
             &layers,
             &s.course,
             None,
@@ -947,10 +1560,12 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
         Some(lid) => {
             let target = layer_mut(slide, lid)?;
             target.objects.extend(pasted);
+            target.groups.extend(pasted_groups);
             target.triggers.extend(kept);
         }
         None => {
             slide.objects.extend(pasted);
+            slide.groups.extend(pasted_groups);
             slide.triggers.extend(kept);
         }
     }
@@ -972,7 +1587,19 @@ pub(super) fn object_set_frame(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     let was_valid = s.is_playable();
-    find_object_mut(slide_mut(s, &sid)?, &oid)?.frame = frame;
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    let width_changed =
+        frame.w.is_finite() && obj.frame.w.is_finite() && (frame.w - obj.frame.w).abs() > 0.5;
+    obj.frame = frame;
+    if width_changed
+        && let ObjectKind::Text {
+            point_text, style, ..
+        } = &mut obj.kind
+        && *point_text
+    {
+        *point_text = false;
+        style.wrap = true;
+    }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
 }
@@ -1178,10 +1805,19 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
     object.shadow = look.shadow.clone();
     object.glow = look.glow.clone();
     match &mut object.kind {
-        ObjectKind::Text { style, runs, .. } => {
+        ObjectKind::Text {
+            style,
+            runs,
+            point_text,
+            ..
+        } => {
             if let Some(src) = &look.text_style {
+                let was_point_text = *point_text;
                 *style = src.clone();
                 clear_run_look(runs);
+                if was_point_text {
+                    style.wrap = false;
+                }
             }
         }
         ObjectKind::Shape {
@@ -1233,6 +1869,27 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             }
         }
         _ => {}
+    }
+    if look.text_style.is_some()
+        && let ObjectKind::Text {
+            text,
+            style,
+            runs,
+            paragraphs,
+            point_text: true,
+            ..
+        } = &object.kind
+        && !style.wrap
+    {
+        super::text::fit_point_text_frame(
+            &mut object.frame,
+            text,
+            runs,
+            style,
+            paragraphs,
+            None,
+            false,
+        );
     }
     *object != before
 }

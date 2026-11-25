@@ -290,3 +290,266 @@ fn button_hover_and_down_fill_behaviour_unchanged() {
         other => panic!("expected Visual::Button, got {other:?}"),
     }
 }
+
+fn pixel_at(img: &crate::offscreen::RgbaImage, x: u32, y: u32) -> [u8; 4] {
+    let idx = ((y * img.width + x) * 4) as usize;
+    [
+        img.pixels[idx],
+        img.pixels[idx + 1],
+        img.pixels[idx + 2],
+        img.pixels[idx + 3],
+    ]
+}
+
+fn render_items_offscreen(
+    course: &Course,
+    items: &[crate::compose::DrawItem],
+    highlight: crate::paint::Highlight,
+) -> crate::offscreen::RgbaImage {
+    let slide = &course.scenes[0].slides[0];
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0));
+    let transform = crate::layout::SlideTransform::fit(screen, course.slide_size).expect("fit");
+    crate::offscreen::render_ui(
+        1280,
+        720,
+        1.0,
+        |_| {},
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            crate::paint::paint(
+                &painter,
+                &transform,
+                items,
+                highlight.clone(),
+                None,
+                Some(&course.theme),
+                Some(course.slide_background(slide)),
+            );
+        },
+    )
+    .expect("offscreen render")
+}
+
+#[test]
+fn gb_06_interactive_group_shared_hover_down_and_disabled() {
+    let raw = serde_json::json!({
+        "schema_version": 1,
+        "id": "c-gb-06",
+        "title": "GB-06 Interactive Group States",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "scene-1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "background": "#FFFFFF",
+                "groups": [{
+                    "id": "g-btn",
+                    "name": "Grouped Button",
+                    "interactive": true
+                }],
+                "objects": [
+                    {
+                        "id": "m-rect",
+                        "name": "Rect",
+                        "group": "g-btn",
+                        "frame": { "x": 100, "y": 100, "w": 120, "h": 100 },
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#224488" },
+                        "states": [
+                            { "name": "hover", "fill": "#11AA22" },
+                            { "name": "down", "fill": "#DD3311" }
+                        ]
+                    },
+                    {
+                        "id": "m-icon",
+                        "name": "Icon",
+                        "group": "g-btn",
+                        "frame": { "x": 260, "y": 100, "w": 120, "h": 100 },
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#335599" },
+                        "states": [
+                            { "name": "hover", "fill": "#22BBCC" }
+                        ]
+                    },
+                    {
+                        "id": "m-text",
+                        "name": "Label",
+                        "group": "g-btn",
+                        "frame": { "x": 420, "y": 100, "w": 220, "h": 100 },
+                        "kind": {
+                            "type": "text",
+                            "text": "MMMM",
+                            "style": { "size": 48, "bold": true, "color": "#112233" }
+                        },
+                        "states": [
+                            { "name": "hover", "fill": "#FF00AA" }
+                        ]
+                    },
+                    {
+                        "id": "m-plain",
+                        "name": "Plain",
+                        "group": "g-btn",
+                        "frame": { "x": 680, "y": 100, "w": 120, "h": 100 },
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#776655" }
+                    },
+                    {
+                        "id": "btn-disable",
+                        "name": "Disable",
+                        "frame": { "x": 100, "y": 320, "w": 120, "h": 60 },
+                        "kind": { "type": "button", "label": "Disable" }
+                    }
+                ],
+                "triggers": [
+                    {
+                        "when": { "event": "click", "object": "btn-disable" },
+                        "action": { "action": "change_state", "object": "g-btn", "state": "disabled" }
+                    }
+                ]
+            }]
+        }]
+    });
+    let course: Course = serde_json::from_value(raw).expect("valid course");
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+
+    let has_magenta_text_pixel = |img: &crate::offscreen::RgbaImage| -> bool {
+        (100..200).any(|y| {
+            (420..640).any(|x| {
+                let [r, g, b, _] = pixel_at(img, x, y);
+                r > 180 && g < 80 && b > 110
+            })
+        })
+    };
+
+    // Baseline (unhovered) pixels.
+    let normal_items = crate::compose::compose_with_pointer(&player, None, None);
+    let normal_img =
+        render_items_offscreen(&course, &normal_items, crate::paint::Highlight::default());
+    assert_eq!(pixel_at(&normal_img, 160, 150), [0x22, 0x44, 0x88, 0xFF]);
+    assert_eq!(pixel_at(&normal_img, 320, 150), [0x33, 0x55, 0x99, 0xFF]);
+    assert!(!has_magenta_text_pixel(&normal_img));
+    assert_eq!(pixel_at(&normal_img, 740, 150), [0x77, 0x66, 0x55, 0xFF]);
+
+    // Hovering ANY member (test member 4, which has no hover state of its own, and member 2)
+    // puts members 1–3 into hover while member 4 stays normal.
+    let ctx = egui::Context::default();
+    let mut view = SlideView::new();
+    for (i, (mx, my)) in [(740.0, 150.0), (320.0, 150.0)].into_iter().enumerate() {
+        run_slide_frame(
+            &ctx,
+            &mut view,
+            &player,
+            pointer_move(mx, my),
+            i as f64 * 0.1,
+        );
+        assert_eq!(view.hovered_object(), Some("g-btn"));
+        let hover_img = render_items_offscreen(
+            &course,
+            view.last_items(),
+            crate::paint::Highlight {
+                hovered: Some(crate::compose::Hit::Object("g-btn".to_owned())),
+                pressed: None,
+            },
+        );
+        assert_eq!(
+            pixel_at(&hover_img, 160, 150),
+            [0x11, 0xAA, 0x22, 0xFF],
+            "member 1 must render hover fill when hovering ({mx}, {my})"
+        );
+        assert_eq!(
+            pixel_at(&hover_img, 320, 150),
+            [0x22, 0xBB, 0xCC, 0xFF],
+            "member 2 must render hover fill when hovering ({mx}, {my})"
+        );
+        assert!(
+            has_magenta_text_pixel(&hover_img),
+            "member 3 text must render hover colour when hovering ({mx}, {my})"
+        );
+        assert_eq!(
+            pixel_at(&hover_img, 740, 150),
+            [0x77, 0x66, 0x55, 0xFF],
+            "member 4 with no hover state must stay normal"
+        );
+    }
+
+    // Pressing any member renders `down` pixels via `resolve_pointer_fill` (member 1 uses down
+    // fill, member 2 keeps hover fill while pressed+hovered, member 4 stays normal).
+    run_slide_frame(&ctx, &mut view, &player, pointer_press(320.0, 150.0), 0.3);
+    let down_img = render_items_offscreen(
+        &course,
+        view.last_items(),
+        crate::paint::Highlight {
+            hovered: Some(crate::compose::Hit::Object("g-btn".to_owned())),
+            pressed: Some(crate::compose::Hit::Object("g-btn".to_owned())),
+        },
+    );
+    assert_eq!(
+        pixel_at(&down_img, 160, 150),
+        [0xDD, 0x33, 0x11, 0xFF],
+        "member 1 must render down fill while pressed"
+    );
+    assert_eq!(
+        pixel_at(&down_img, 320, 150),
+        [0x22, 0xBB, 0xCC, 0xFF],
+        "member 2 without down state keeps hover fill via resolve_pointer_fill while pressed+hovered"
+    );
+    assert_eq!(
+        pixel_at(&down_img, 740, 150),
+        [0x77, 0x66, 0x55, 0xFF],
+        "member 4 without down/hover states stays normal while pressed"
+    );
+
+    // Disabling the group ignores hover and down pixels on EVERY member.
+    player.handle(&Input::Click {
+        object: "btn-disable".to_owned(),
+    });
+    assert_eq!(player.object_state("g-btn"), Some("disabled"));
+    run_slide_frame(&ctx, &mut view, &player, pointer_press(160.0, 150.0), 0.4);
+    let disabled_img = render_items_offscreen(
+        &course,
+        view.last_items(),
+        crate::paint::Highlight {
+            hovered: Some(crate::compose::Hit::Object("g-btn".to_owned())),
+            pressed: Some(crate::compose::Hit::Object("g-btn".to_owned())),
+        },
+    );
+    assert_eq!(
+        pixel_at(&disabled_img, 160, 150),
+        [0x22, 0x44, 0x88, 0xFF],
+        "disabled member 1 must ignore hover/down"
+    );
+    assert_eq!(
+        pixel_at(&disabled_img, 320, 150),
+        [0x33, 0x55, 0x99, 0xFF],
+        "disabled member 2 must ignore hover/down"
+    );
+    assert!(
+        !has_magenta_text_pixel(&disabled_img),
+        "disabled member 3 text must ignore hover colour"
+    );
+    assert_eq!(
+        pixel_at(&disabled_img, 740, 150),
+        [0x77, 0x66, 0x55, 0xFF],
+        "disabled member 4 stays normal"
+    );
+
+    // PrintSlide exclude omits all members of an excluded interactive group.
+    struct EmptyMedia;
+    impl crate::media::MediaSource for EmptyMedia {
+        fn get(&self, _src: &str) -> crate::media::MediaFetch {
+            crate::media::MediaFetch::Missing
+        }
+    }
+    let empty_media = EmptyMedia;
+    let excluded_img = crate::offscreen::render_player_rgba(
+        &player,
+        1280,
+        &["g-btn".to_owned()],
+        &empty_media,
+        None,
+    )
+    .expect("excluded render");
+    assert_eq!(pixel_at(&excluded_img, 160, 150), [0xFF, 0xFF, 0xFF, 0xFF]);
+    assert_eq!(pixel_at(&excluded_img, 320, 150), [0xFF, 0xFF, 0xFF, 0xFF]);
+    assert_eq!(pixel_at(&excluded_img, 740, 150), [0xFF, 0xFF, 0xFF, 0xFF]);
+}
