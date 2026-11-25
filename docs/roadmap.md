@@ -528,7 +528,13 @@ rebuilt Animations panel; live preview on the canvas.
   preview on the canvas through the player's sampler: once on ▶ or a pick, looping while an effect
   tile is hovered in the ribbon or the picker, stopped by a click on the slide or a new selection.
   Auto-preview turns the automatic previews off.
-- Next: emphasis, build by paragraph, transitions.
+- Phase 6 (emphasis and Animation Painter) **built (2026-11-26)**: `Object.emphasis` (12 effects:
+  Pulse, Grow and shrink, Teeter, Spin, Shake, Heartbeat, Jump, Blink, Transparency, Darken, Lighten,
+  Colour pulse) with start, duration and repeat, layered over the entrance or exit at runtime;
+  `object.add_emphasis`, `object.set_emphasis`, `object.remove_emphasis` and
+  `object.copy_animation`; the Emphasis gallery in the ribbon, the Emphasis card in the Animate
+  inspector, amber, green and red strips on timeline bars, and the Animation Painter.
+- Next: build by paragraph, transitions.
 
 ## After the first release
 

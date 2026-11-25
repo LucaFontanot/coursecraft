@@ -187,6 +187,8 @@ pub enum UiAction {
     Cut,
     Copy,
     FormatPainter,
+    /// Animations › Animation Painter: copy entrance, exit and emphasis onto other objects.
+    AnimationPainter,
     NewSlide,
     NewScene,
     DuplicateSlide,
@@ -289,6 +291,8 @@ pub enum Gallery {
     Transitions,
     Entrance,
     Exit,
+    /// Emphasis: a pick adds one (it never shows as selected).
+    Emphasis,
 }
 
 /// What an effect option acts on.
@@ -2005,7 +2009,7 @@ const ANIMATIONS: &[Group] = &[
             "Animation Painter",
             Icon::PaintBrush,
             Large,
-            NotYet("the Animation Painter"),
+            Ui(UiAction::AnimationPainter),
         )],
     },
     Group {
@@ -2076,12 +2080,15 @@ const ANIMATIONS: &[Group] = &[
         id: "animations.emphasis",
         label: "Emphasis Animations",
         launcher: None,
-        items: &[item(
-            "animations.emphasis",
-            "Add Emphasis Animation",
-            Icon::Sparkle,
-            LargeSplit,
-            NotYet("emphasis animations"),
+        items: &[helped(
+            item(
+                "animations.emphasis",
+                "Add Emphasis Animation",
+                Icon::Sparkle,
+                Kind::Gallery { tiles: 4 },
+                Ui(UiAction::Gallery(Gallery::Emphasis)),
+            ),
+            "Add an emphasis to the selected objects, at the playhead.",
         )],
     },
     Group {

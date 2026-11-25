@@ -362,6 +362,10 @@ object.state_reorder_extra -                  -          {"slide": id, "object":
 object.delete        Edit/Delete              Delete     {"slide": id, "object": id}
 animation.effects    -                        -          {}
 object.set_animation -                        -          {"slide": id, "object": id, "which": "entrance"|"exit", "animation": Animation|null}
+object.add_emphasis  -                        -          {"slide": id, "object": id, "effect": EmphasisId, "start_ms"?: u32, "duration_ms"?: u32, "easing"?: Easing, "repeat"?: u8}
+object.set_emphasis  -                        -          {"slide": id, "object": id, "index": usize, "emphasis": Emphasis}
+object.remove_emphasis -                        -          {"slide": id, "object": id, "index": usize}
+object.copy_animation -                        -          {"slide": id, "from": id, "from_slide"?: id, "objects": id[]}
 interaction.insert   -                        -          {"slide": id, "kind": "tabs"|"accordion"}
 object.add_motion_path -                        -          {"slide": id, "object": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}
 object.update_motion_path -                        -          {"slide": id, "object": id, "path": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}

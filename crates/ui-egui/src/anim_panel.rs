@@ -449,3 +449,152 @@ fn easing_row(ui: &mut Ui, easing: &mut Easing) -> bool {
     });
     changed
 }
+
+/// What the Emphasis card asks for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EmphasisRequest {
+    /// Add this emphasis.
+    Add(coursecraft_course::Emphasis),
+    /// Replace emphasis `index`.
+    Set(usize, coursecraft_course::Emphasis),
+    Remove(usize),
+    /// Play emphasis `index` once on the canvas.
+    Play(usize),
+    /// Loop this effect while its tile is hovered.
+    Hover(coursecraft_course::EmphasisEffect),
+}
+
+/// The Emphasis card of one object: its emphasis list and an Add emphasis picker. `start` is
+/// where a new one begins (the playhead or the object's start).
+pub fn show_emphasis_card(
+    ui: &mut Ui,
+    emphasis: &[coursecraft_course::Emphasis],
+    start: u32,
+    out: &mut Vec<EmphasisRequest>,
+) {
+    let p = coursecraft_render::palette(ui.ctx());
+    let card_w = ui.available_width();
+    egui::Frame::NONE
+        .fill(p.raised)
+        .stroke(Stroke::new(1.0, p.border))
+        .corner_radius(CornerRadius::same(coursecraft_render::RADIUS_MD as u8))
+        .inner_margin(egui::Margin::same(coursecraft_render::SPACE_MD as i8))
+        .show(ui, |ui| {
+            ui.set_width((card_w - 2.0 * (coursecraft_render::SPACE_MD + 1.0)).max(60.0));
+            for (i, e) in emphasis.iter().enumerate() {
+                if i > 0 {
+                    ui.separator();
+                }
+                emphasis_row(ui, i, e, out);
+            }
+            if emphasis.len() < coursecraft_course::MAX_EMPHASIS_PER_OBJECT {
+                if !emphasis.is_empty() {
+                    ui.add_space(4.0);
+                }
+                let add = ui.add(egui::Button::new(
+                    RichText::new(format!("+ {}", tl!("Add emphasis"))).color(p.accent_text),
+                ));
+                egui::Popup::menu(&add).show(|ui| {
+                    ui.set_width(4.0 * 60.0 + 8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                        for d in coursecraft_course::EMPHASIS {
+                            let effect = coursecraft_course::EmphasisEffect::new(d.id);
+                            let r =
+                                crate::ribbon::gallery::emphasis_tile(ui, d.label, effect.clone())
+                                    .on_hover_text(tl!(d.hint));
+                            if r.clicked() {
+                                out.push(EmphasisRequest::Add(coursecraft_course::Emphasis::new(
+                                    d.id, start,
+                                )));
+                                ui.close();
+                            } else if r.hovered() {
+                                out.push(EmphasisRequest::Hover(effect));
+                            }
+                        }
+                    });
+                });
+            }
+        });
+}
+
+fn emphasis_row(
+    ui: &mut Ui,
+    i: usize,
+    e: &coursecraft_course::Emphasis,
+    out: &mut Vec<EmphasisRequest>,
+) {
+    let p = coursecraft_render::palette(ui.ctx());
+    let label = tl!(e.effect.def().map_or("Unknown effect", |d| d.label));
+    ui.horizontal(|ui| {
+        let (art, _) = ui.allocate_exact_size(vec2(32.0, 24.0), Sense::hover());
+        crate::ribbon::effect_art::paint_emphasis(
+            ui.painter(),
+            art,
+            &e.effect,
+            p.warning,
+            p.border_strong,
+            None,
+        );
+        ui.label(RichText::new(label).color(p.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if crate::widgets::icon_button_danger(
+                ui,
+                coursecraft_render::Icon::Trash,
+                true,
+                tl!("Remove this emphasis"),
+            )
+            .clicked()
+            {
+                out.push(EmphasisRequest::Remove(i));
+            }
+            if crate::widgets::icon_button(
+                ui,
+                coursecraft_render::Icon::Play,
+                tl!("Play this emphasis on the canvas"),
+            )
+            .clicked()
+            {
+                out.push(EmphasisRequest::Play(i));
+            }
+        });
+    });
+    let mut changed = e.clone();
+    let mut commit = false;
+    let mut seconds_row = |ui: &mut Ui, name: &str, ms: &mut u32, min: f64| {
+        crate::properties::inspector_row(ui, tl!(name), |ui| {
+            let mut s = f64::from(*ms) / 1000.0;
+            let r = ui.add(
+                egui::DragValue::new(&mut s)
+                    .speed(0.05)
+                    .range(min..=600.0)
+                    .fixed_decimals(2)
+                    .suffix(" s"),
+            );
+            *ms = (s * 1000.0).round().clamp(0.0, 600_000.0) as u32;
+            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if r.drag_stopped() || r.lost_focus() || enter {
+                commit = true;
+            }
+        });
+    };
+    seconds_row(ui, "Start", &mut changed.start_ms, 0.0);
+    seconds_row(ui, "Duration", &mut changed.duration_ms, 0.05);
+    changed.duration_ms = changed.duration_ms.clamp(1, 60_000);
+    crate::properties::inspector_row(ui, tl!("Repeat"), |ui| {
+        let mut n = changed.repeat;
+        let r = ui.add(
+            egui::DragValue::new(&mut n)
+                .speed(0.1)
+                .range(1..=coursecraft_course::MAX_EMPHASIS_REPEAT)
+                .suffix("×"),
+        );
+        changed.repeat = n;
+        if r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged()) {
+            commit = true;
+        }
+    });
+    if commit && changed != *e {
+        out.push(EmphasisRequest::Set(i, changed));
+    }
+}

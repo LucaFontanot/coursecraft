@@ -990,12 +990,168 @@ fn check_effect(cmd: &str, effect: &coursecraft_course::AnimEffect) -> Result<()
     Ok(())
 }
 
-/// `animation.effects`: the effect registry, for agents and tools.
+/// `animation.effects`: the effect registries (entrance/exit and emphasis), for agents and
+/// tools.
 pub(super) fn animation_effects(_s: &mut Session, _p: &Json) -> Result<Json> {
     Ok(serde_json::json!({
         "effects": coursecraft_course::EFFECTS,
         "fallback": coursecraft_course::FALLBACK_EFFECT,
+        "emphasis": coursecraft_course::EMPHASIS,
+        "emphasis_fallback": coursecraft_course::FALLBACK_EMPHASIS,
     }))
+}
+
+/// Refuse an emphasis the registry doesn't know or whose numbers are out of range.
+fn check_emphasis(cmd: &str, e: &coursecraft_course::Emphasis) -> Result<()> {
+    if e.effect.def().is_none() {
+        return Err(bad(
+            cmd,
+            format!(
+                "unknown emphasis {:?}; `animation.effects` lists them under `emphasis`",
+                e.effect.id
+            ),
+        ));
+    }
+    if e.duration_ms < 1 || e.duration_ms > 60_000 {
+        return Err(bad(cmd, "emphasis duration_ms must be 1..=60000"));
+    }
+    if e.repeat == 0 || e.repeat > coursecraft_course::MAX_EMPHASIS_REPEAT {
+        return Err(bad(
+            cmd,
+            format!(
+                "emphasis repeat must be 1..={}",
+                coursecraft_course::MAX_EMPHASIS_REPEAT
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// `object.add_emphasis`: append an emphasis (registry defaults for what is left out).
+/// Returns its index.
+pub(super) fn object_add_emphasis(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.add_emphasis";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let effect: String = req(C, p, "effect")?;
+    let start_ms: Option<u32> = opt(C, p, "start_ms")?;
+    let duration_ms: Option<u32> = opt(C, p, "duration_ms")?;
+    let easing: Option<Easing> = opt(C, p, "easing")?;
+    let repeat: Option<u8> = opt(C, p, "repeat")?;
+    let slide = slide_mut(s, &sid)?;
+    let target = find_object_mut(slide, &oid)?;
+    if target.emphasis.len() >= coursecraft_course::MAX_EMPHASIS_PER_OBJECT {
+        return Err(bad(
+            C,
+            format!(
+                "an object has at most {} emphasis animations",
+                coursecraft_course::MAX_EMPHASIS_PER_OBJECT
+            ),
+        ));
+    }
+    let mut e =
+        coursecraft_course::Emphasis::new(&effect, start_ms.unwrap_or(target.timing.start_ms));
+    if let Some(d) = duration_ms {
+        e.duration_ms = d;
+    }
+    if let Some(easing) = easing {
+        e.easing = easing;
+    }
+    if let Some(r) = repeat {
+        e.repeat = r;
+    }
+    check_emphasis(C, &e)?;
+    target.emphasis.push(e);
+    let index = target.emphasis.len() - 1;
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "index": index }))
+}
+
+/// `object.set_emphasis`: replace emphasis `index` of an object.
+pub(super) fn object_set_emphasis(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.set_emphasis";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let index: usize = req(C, p, "index")?;
+    let e: coursecraft_course::Emphasis = req(C, p, "emphasis")?;
+    check_emphasis(C, &e)?;
+    let slide = slide_mut(s, &sid)?;
+    let target = find_object_mut(slide, &oid)?;
+    let slot = target
+        .emphasis
+        .get_mut(index)
+        .ok_or_else(|| bad(C, format!("object {oid:?} has no emphasis {index}")))?;
+    *slot = e;
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+/// `object.remove_emphasis`: remove emphasis `index` of an object.
+pub(super) fn object_remove_emphasis(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.remove_emphasis";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let index: usize = req(C, p, "index")?;
+    let slide = slide_mut(s, &sid)?;
+    let target = find_object_mut(slide, &oid)?;
+    if index >= target.emphasis.len() {
+        return Err(bad(C, format!("object {oid:?} has no emphasis {index}")));
+    }
+    target.emphasis.remove(index);
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+/// `object.copy_animation` (Animation Painter): give `objects` the entrance, exit and emphasis
+/// of `from`. Emphasis keeps its offset from the object's start, so it lands at the same moment
+/// of each target's timing. Motion paths stay where they are.
+pub(super) fn object_copy_animation(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.copy_animation";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let from: String = req(C, p, "from")?;
+    let from_slide: Option<String> = opt(C, p, "from_slide")?;
+    let targets: Vec<String> = req(C, p, "objects")?;
+    if targets.is_empty() {
+        return Err(bad(C, "`objects` lists no object"));
+    }
+    let source_slide = from_slide.unwrap_or_else(|| sid.clone());
+    let (entrance, exit, emphasis, start) = {
+        let slide = slide_mut(s, &source_slide)?;
+        let o = find_object_mut(slide, &from)?;
+        (
+            o.entrance.clone(),
+            o.exit.clone(),
+            o.emphasis.clone(),
+            o.timing.start_ms,
+        )
+    };
+    let slide = slide_mut(s, &sid)?;
+    let mut copied = 0;
+    for id in &targets {
+        if *id == from && source_slide == sid {
+            continue;
+        }
+        let o = find_object_mut(slide, id)?;
+        o.entrance = entrance.clone();
+        o.exit = exit.clone();
+        o.emphasis = emphasis
+            .iter()
+            .map(|e| coursecraft_course::Emphasis {
+                start_ms: o
+                    .timing
+                    .start_ms
+                    .saturating_add(e.start_ms.saturating_sub(start)),
+                ..e.clone()
+            })
+            .collect();
+        copied += 1;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "copied": copied }))
 }
 
 pub(super) fn object_add_motion_path(s: &mut Session, p: &Json) -> Result<Json> {

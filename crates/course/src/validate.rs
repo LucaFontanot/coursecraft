@@ -3320,6 +3320,39 @@ fn check_object_animations(cx: &mut Ctx<'_>, o: &Object) {
             "animation duration_ms must be 1..=60000",
         );
     }
+    if o.emphasis.len() > crate::MAX_EMPHASIS_PER_OBJECT {
+        cx.err_at(
+            "emphasis",
+            format!(
+                "an object has at most {} emphasis animations",
+                crate::MAX_EMPHASIS_PER_OBJECT
+            ),
+        );
+    }
+    for (i, e) in o.emphasis.iter().enumerate() {
+        if e.effect.def().is_none() {
+            cx.warn_at(
+                &format!("emphasis/{i}/effect/type"),
+                format!(
+                    "unknown emphasis effect `{}`; it plays as `{}`",
+                    e.effect.id,
+                    crate::FALLBACK_EMPHASIS
+                ),
+            );
+        }
+        if e.duration_ms == 0 || e.duration_ms > 60000 {
+            cx.err_at(
+                &format!("emphasis/{i}/duration_ms"),
+                "emphasis duration_ms must be 1..=60000",
+            );
+        }
+        if e.repeat == 0 || e.repeat > crate::MAX_EMPHASIS_REPEAT {
+            cx.err_at(
+                &format!("emphasis/{i}/repeat"),
+                format!("emphasis repeat must be 1..={}", crate::MAX_EMPHASIS_REPEAT),
+            );
+        }
+    }
 }
 
 /// Unknown effect ids and options the effect does not take are warnings: the file still

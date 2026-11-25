@@ -166,6 +166,21 @@ impl ObjectSample {
         (s, s)
     }
 
+    /// `self` with `over` layered on top (an emphasis over an entrance or exit): offsets add,
+    /// scales and opacities multiply, rotations add, `over`'s tint wins, and the reveal (clip,
+    /// mask) stays `self`'s.
+    #[must_use]
+    pub fn then(self, over: &Self) -> Self {
+        Self {
+            offset: (self.offset.0 + over.offset.0, self.offset.1 + over.offset.1),
+            scale: (self.scale.0 * over.scale.0, self.scale.1 * over.scale.1),
+            rotation_deg: self.rotation_deg + over.rotation_deg,
+            opacity: self.opacity * over.opacity,
+            tint: over.tint.or(self.tint),
+            ..self
+        }
+    }
+
     /// Repair non-finite numbers (to identity), clamp opacity and tint amount to `[0, 1]`,
     /// scale to `[0, 100]` and rotation to ±3600°, and sanitize the mask, so a sample function
     /// can never hand the renderer hostile values.

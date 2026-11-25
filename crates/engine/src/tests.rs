@@ -3315,6 +3315,105 @@ fn hostile_input_handling_in_text_and_theme_commands() {
 }
 
 #[test]
+fn emphasis_commands_and_the_animation_painter() {
+    let mut s = Session::blank("Test");
+    let add = |s: &mut Session, x: f32| {
+        s.execute(
+            "object.add",
+            &json!({
+                "slide": "slide1",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                "frame": { "x": x, "y": 10.0, "w": 100.0, "h": 50.0 }
+            }),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let a = add(&mut s, 10.0);
+    let b = add(&mut s, 200.0);
+    let get = |s: &Session, id: &str| {
+        s.course
+            .slide("slide1")
+            .unwrap()
+            .object(id)
+            .unwrap()
+            .0
+            .clone()
+    };
+
+    let r = s
+        .execute(
+            "object.add_emphasis",
+            &json!({ "slide": "slide1", "object": a, "effect": "shake", "start_ms": 1500 }),
+        )
+        .unwrap();
+    assert_eq!(r["index"], 0);
+    assert_eq!(
+        get(&s, &a).emphasis[0].duration_ms,
+        600,
+        "the registry default"
+    );
+    assert!(
+        s.execute(
+            "object.add_emphasis",
+            &json!({ "slide": "slide1", "object": a, "effect": "wobble" }),
+        )
+        .is_err(),
+        "unknown emphasis"
+    );
+    assert!(
+        s.execute(
+            "object.set_emphasis",
+            &json!({ "slide": "slide1", "object": a, "index": 3, "emphasis": { "effect": { "type": "spin" } } }),
+        )
+        .is_err(),
+        "no such index"
+    );
+    s.execute(
+        "object.set_emphasis",
+        &json!({ "slide": "slide1", "object": a, "index": 0, "emphasis": { "effect": { "type": "spin" }, "start_ms": 1000, "repeat": 2 } }),
+    )
+    .unwrap();
+    assert_eq!(get(&s, &a).emphasis[0].effect.id, "spin");
+    assert_eq!(get(&s, &a).emphasis[0].end_ms(), 3000);
+
+    // The painter copies entrance, exit and emphasis; emphasis keeps its offset from the start.
+    s.execute(
+        "object.set_animation",
+        &json!({ "slide": "slide1", "object": a, "which": "entrance",
+                 "animation": { "effect": { "type": "wipe" }, "duration_ms": 700 } }),
+    )
+    .unwrap();
+    s.execute(
+        "timing.set",
+        &json!({ "slide": "slide1", "object": b, "start_ms": 2000 }),
+    )
+    .ok();
+    let b_start = get(&s, &b).timing.start_ms;
+    s.execute(
+        "object.copy_animation",
+        &json!({ "slide": "slide1", "from": a, "objects": [b] }),
+    )
+    .unwrap();
+    let copied = get(&s, &b);
+    assert_eq!(copied.entrance, get(&s, &a).entrance);
+    assert_eq!(copied.emphasis[0].start_ms, b_start + 1000);
+    s.undo().unwrap();
+    assert!(get(&s, &b).entrance.is_none() && get(&s, &b).emphasis.is_empty());
+
+    s.execute(
+        "object.remove_emphasis",
+        &json!({ "slide": "slide1", "object": a, "index": 0 }),
+    )
+    .unwrap();
+    assert!(get(&s, &a).emphasis.is_empty());
+    s.undo().unwrap();
+    assert_eq!(get(&s, &a).emphasis.len(), 1);
+}
+
+#[test]
 fn object_set_animation_and_undo() {
     let mut s = Session::blank("Test");
     let obj_id = s
@@ -10732,7 +10831,7 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
     };
 
     let cmds = crate::registry();
-    assert_eq!(cmds.len(), 191, "unexpected registry command count");
+    assert_eq!(cmds.len(), 195, "unexpected registry command count");
 
     for cmd in cmds {
         check_phrase(cmd.label, &format!("label for {}", cmd.id));
@@ -12248,7 +12347,7 @@ fn r5_01_registry_golden_lock() {
     use crate::delta::UndoScope;
 
     let reg = registry();
-    assert_eq!(reg.len(), 191);
+    assert_eq!(reg.len(), 195);
 
     const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
         ("course.info", false, UndoScope::FullCourse, false),
@@ -12436,6 +12535,10 @@ fn r5_01_registry_golden_lock() {
         ("object.delete", true, UndoScope::SingleSlide, true),
         ("animation.effects", false, UndoScope::FullCourse, false),
         ("object.set_animation", true, UndoScope::SingleSlide, true),
+        ("object.add_emphasis", true, UndoScope::SingleSlide, true),
+        ("object.set_emphasis", true, UndoScope::SingleSlide, true),
+        ("object.remove_emphasis", true, UndoScope::SingleSlide, true),
+        ("object.copy_animation", true, UndoScope::SingleSlide, true),
         ("object.add_motion_path", true, UndoScope::SingleSlide, true),
         (
             "object.update_motion_path",
@@ -12617,10 +12720,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 24_638, "registry golden table byte length");
+    assert_eq!(table.len(), 25_187, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        8_547_860_670_930_556_965,
+        1_910_133_271_443_093_977,
         "registry golden table FNV-1a hash"
     );
 }

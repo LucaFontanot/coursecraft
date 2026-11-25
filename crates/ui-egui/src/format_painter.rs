@@ -8,11 +8,22 @@ use serde_json::json;
 
 use crate::Editor;
 
+/// What an armed painter copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PainterKind {
+    /// The look (`object.apply_style`).
+    #[default]
+    Format,
+    /// Entrance, exit and emphasis (`object.copy_animation`, Animations › Animation Painter).
+    Animation,
+}
+
 /// An armed format painter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatPainter {
     pub source_slide: String,
     pub source: String,
+    pub kind: PainterKind,
     /// Stays armed after an application.
     pub sticky: bool,
     /// Suppresses the release `clicked()` of the double-click that armed sticky mode.
@@ -37,6 +48,24 @@ impl Editor {
 
     /// Arm the painter from the selected object. Does nothing without one.
     pub fn arm_format_painter(&mut self, sticky: bool) {
+        self.arm_painter(PainterKind::Format, sticky);
+    }
+
+    /// Arm the Animation Painter from the selected object.
+    pub fn arm_animation_painter(&mut self, sticky: bool) {
+        self.arm_painter(PainterKind::Animation, sticky);
+    }
+
+    /// Whether the armed painter (if any) is the Animation Painter.
+    #[must_use]
+    pub fn animation_painter_armed(&self) -> bool {
+        self.ui
+            .format_painter
+            .as_ref()
+            .is_some_and(|p| p.kind == PainterKind::Animation)
+    }
+
+    fn arm_painter(&mut self, kind: PainterKind, sticky: bool) {
         if !self.can_arm_format_painter() {
             return;
         }
@@ -47,6 +76,7 @@ impl Editor {
         self.ui.format_painter = Some(FormatPainter {
             source_slide: self.selection.slide.clone(),
             source,
+            kind,
             sticky,
             just_double_clicked: false,
         });
@@ -60,15 +90,26 @@ impl Editor {
         };
         let targets: Vec<&String> = targets.iter().filter(|id| **id != painter.source).collect();
         if !targets.is_empty() {
-            self.run(
-                "object.apply_style",
-                json!({
-                    "slide": self.selection.slide,
-                    "source_slide": painter.source_slide,
-                    "source": painter.source,
-                    "objects": targets,
-                }),
-            );
+            match painter.kind {
+                PainterKind::Format => self.run(
+                    "object.apply_style",
+                    json!({
+                        "slide": self.selection.slide,
+                        "source_slide": painter.source_slide,
+                        "source": painter.source,
+                        "objects": targets,
+                    }),
+                ),
+                PainterKind::Animation => self.run(
+                    "object.copy_animation",
+                    json!({
+                        "slide": self.selection.slide,
+                        "from_slide": painter.source_slide,
+                        "from": painter.source,
+                        "objects": targets,
+                    }),
+                ),
+            };
         }
         if !painter.sticky {
             self.ui.format_painter = None;

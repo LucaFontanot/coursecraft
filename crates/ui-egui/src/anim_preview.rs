@@ -6,8 +6,8 @@
 //! an effect or option is picked or ▶ Preview is pressed, and loops while the pointer rests on
 //! an effect tile. It stops when the selection changes or the canvas is clicked.
 
-use coursecraft_course::{AnimEffect, Animation, Course, Easing};
-use coursecraft_logic::{AnimationPhase, sample_animation};
+use coursecraft_course::{AnimEffect, Animation, Course, Easing, Emphasis, EmphasisEffect};
+use coursecraft_logic::{AnimationPhase, ObjectSample, ease, sample_animation};
 use coursecraft_render::{DrawItem, Hit};
 
 /// Which animation of the object plays.
@@ -34,13 +34,56 @@ enum Mode {
     },
 }
 
+/// What a preview plays.
+#[derive(Debug, Clone, PartialEq)]
+enum Played {
+    Anim(Slot, Animation),
+    Emphasis(Emphasis),
+}
+
+impl Played {
+    /// Length of the whole run, in ms.
+    fn duration_ms(&self) -> f64 {
+        match self {
+            Self::Anim(_, a) => f64::from(a.duration_ms.max(1)),
+            Self::Emphasis(e) => f64::from(e.duration_ms.max(1)) * f64::from(e.repeat.clamp(1, 20)),
+        }
+    }
+
+    /// The sample of an object with `frame` at `t_ms` into the run.
+    fn sample(
+        &self,
+        t_ms: f64,
+        frame: coursecraft_course::Rect,
+        size: coursecraft_course::Size,
+    ) -> ObjectSample {
+        match self {
+            Self::Anim(slot, a) => {
+                let progress = (t_ms / f64::from(a.duration_ms.max(1))).clamp(0.0, 1.0) as f32;
+                let phase = match slot {
+                    Slot::Entrance => AnimationPhase::Entering,
+                    Slot::Exit => AnimationPhase::Exiting,
+                };
+                sample_animation(a, phase, progress, frame, size)
+            }
+            Self::Emphasis(e) => {
+                let dur = f64::from(e.duration_ms.max(1));
+                if t_ms <= 0.0 || t_ms >= self.duration_ms() {
+                    return ObjectSample::IDENTITY;
+                }
+                let t = ease(e.easing, ((t_ms % dur) / dur) as f32);
+                coursecraft_logic::effects::sample_emphasis(&e.effect, t, frame)
+            }
+        }
+    }
+}
+
 /// One preview in progress.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnimPreview {
     slide: String,
     objects: Vec<String>,
-    slot: Slot,
-    animation: Animation,
+    what: Played,
     mode: Mode,
     /// Input time the preview started at; set by the first canvas frame that draws it.
     started: Option<f64>,
@@ -85,9 +128,55 @@ impl PreviewState {
         self.current = Some(AnimPreview {
             slide: slide.to_owned(),
             objects,
-            slot,
-            animation,
+            what: Played::Anim(slot, animation),
             mode: Mode::Once,
+            started: None,
+        });
+    }
+
+    /// Play `emphasis` once on `objects` of `slide` (from its first pass, not its start time).
+    pub fn play_emphasis(&mut self, slide: &str, objects: Vec<String>, emphasis: Emphasis) {
+        if objects.is_empty() {
+            return;
+        }
+        self.current = Some(AnimPreview {
+            slide: slide.to_owned(),
+            objects,
+            what: Played::Emphasis(emphasis),
+            mode: Mode::Once,
+            started: None,
+        });
+    }
+
+    /// Loop emphasis `effect` (one pass of its default length) while called every frame.
+    pub fn hover_emphasis(
+        &mut self,
+        slide: &str,
+        objects: Vec<String>,
+        effect: &EmphasisEffect,
+        pass: u64,
+    ) {
+        let e = Emphasis::new(&effect.id, 0);
+        self.hover_played(slide, objects, Played::Emphasis(e), pass);
+    }
+
+    fn hover_played(&mut self, slide: &str, objects: Vec<String>, what: Played, pass: u64) {
+        if !self.auto || objects.is_empty() {
+            return;
+        }
+        if let Some(p) = &mut self.current
+            && matches!(p.mode, Mode::Hover { .. })
+            && p.what == what
+            && p.objects == objects
+        {
+            p.mode = Mode::Hover { pass };
+            return;
+        }
+        self.current = Some(AnimPreview {
+            slide: slide.to_owned(),
+            objects,
+            what,
+            mode: Mode::Hover { pass },
             started: None,
         });
     }
@@ -105,30 +194,15 @@ impl PreviewState {
         easing: Easing,
         pass: u64,
     ) {
-        if !self.auto || objects.is_empty() {
-            return;
-        }
-        if let Some(p) = &mut self.current
-            && matches!(p.mode, Mode::Hover { .. })
-            && p.slot == slot
-            && p.animation.effect == effect
-            && p.objects == objects
-        {
-            p.mode = Mode::Hover { pass };
-            return;
-        }
-        self.current = Some(AnimPreview {
-            slide: slide.to_owned(),
-            objects,
+        let what = Played::Anim(
             slot,
-            animation: Animation {
+            Animation {
                 effect,
                 duration_ms,
                 easing,
             },
-            mode: Mode::Hover { pass },
-            started: None,
-        });
+        );
+        self.hover_played(slide, objects, what, pass);
     }
 
     /// Note `id` as just picked.
@@ -172,7 +246,7 @@ impl PreviewState {
         let slide = course.slide(&p.slide)?;
         let started = *p.started.get_or_insert(now);
         let elapsed_ms = ((now - started) * 1000.0).max(0.0);
-        let duration = f64::from(p.animation.duration_ms.max(1));
+        let duration = p.what.duration_ms();
         let cycle = LEAD_MS + duration + HOLD_MS;
         let t = match p.mode {
             Mode::Once if elapsed_ms > cycle => {
@@ -182,11 +256,7 @@ impl PreviewState {
             Mode::Once => elapsed_ms,
             Mode::Hover { .. } => elapsed_ms % cycle,
         };
-        let progress = (((t - LEAD_MS) / duration).clamp(0.0, 1.0)) as f32;
-        let phase = match p.slot {
-            Slot::Entrance => AnimationPhase::Entering,
-            Slot::Exit => AnimationPhase::Exiting,
-        };
+        let into = (t - LEAD_MS).clamp(0.0, duration);
         let out = items
             .iter()
             .filter_map(|item| {
@@ -199,8 +269,7 @@ impl PreviewState {
                 let Some((obj, _)) = slide.object(id) else {
                     return Some(item.clone());
                 };
-                let sample =
-                    sample_animation(&p.animation, phase, progress, obj.frame, course.slide_size);
+                let sample = p.what.sample(into, obj.frame, course.slide_size);
                 if sample.opacity <= 0.0 {
                     return None;
                 }
@@ -332,5 +401,19 @@ mod tests {
         assert_eq!(s.recent.len(), RECENT_MAX);
         assert_eq!(s.recent[0], "e");
         assert_eq!(s.recent.iter().filter(|r| *r == "fade").count(), 1);
+    }
+
+    #[test]
+    fn an_emphasis_preview_moves_the_object_and_ends_at_rest() {
+        let c = course();
+        let base = items(&c);
+        let sel = vec!["a".to_owned()];
+        let mut s = PreviewState::default();
+        s.play_emphasis("sl", sel.clone(), Emphasis::new("grow_shrink", 2000));
+        let _ = s.items(&c, ("sl", &sel), &base, 0.0, 1).expect("playing");
+        let mid = s.items(&c, ("sl", &sel), &base, 0.65, 2).expect("playing");
+        assert_ne!(rect_of(&mid, "a"), rect_of(&base, "a"), "grown mid-way");
+        let held = s.items(&c, ("sl", &sel), &base, 1.3, 3).expect("holding");
+        assert_eq!(rect_of(&held, "a"), rect_of(&base, "a"), "back at rest");
     }
 }

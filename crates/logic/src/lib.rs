@@ -104,6 +104,17 @@ pub fn sample_timed_animation(
             );
         }
     }
+    // Emphasis plays over whatever the entrance or exit is doing.
+    for e in &obj.emphasis {
+        let dur = e.duration_ms.max(1);
+        if clock_ms < e.start_ms || clock_ms >= e.end_ms() {
+            continue;
+        }
+        let into_pass = clock_ms.saturating_sub(e.start_ms) % dur;
+        let t = ease(e.easing, into_pass as f32 / dur as f32);
+        let over = effects::sample_emphasis(&e.effect, t, obj.frame);
+        anim_sample = anim_sample.then(&over);
+    }
     Some(anim_sample)
 }
 

@@ -2015,10 +2015,30 @@ fn run_card_preview(
     exit: bool,
     preview: Option<crate::anim_panel::PanelPreview>,
 ) {
+    let slide = editor.selection.slide.clone();
+    let ids = editor.selection.ids();
+    apply_card_preview(
+        &mut editor.ui.anim_preview,
+        &editor.ui.properties,
+        (&slide, ids),
+        ctx,
+        exit,
+        preview,
+    );
+}
+
+/// [`run_card_preview`] on borrowed parts of the editor.
+fn apply_card_preview(
+    pv: &mut crate::anim_preview::PreviewState,
+    props: &PropertiesState,
+    (slide, ids): (&str, Vec<String>),
+    ctx: &egui::Context,
+    exit: bool,
+    preview: Option<crate::anim_panel::PanelPreview>,
+) {
     let Some(preview) = preview else {
         return;
     };
-    let props = &editor.ui.properties;
     let (effect, fx, duration_ms, easing) = if exit {
         (
             &props.exit_effect,
@@ -2035,8 +2055,6 @@ fn run_card_preview(
         )
     };
     let slot = crate::anim_preview::Slot::of_exit(exit);
-    let slide = editor.selection.slide.clone();
-    let ids = editor.selection.ids();
     match preview {
         crate::anim_panel::PanelPreview::Play => {
             if effect.as_str() == "none" {
@@ -2047,21 +2065,19 @@ fn run_card_preview(
                 duration_ms,
                 easing,
             };
-            editor.ui.anim_preview.play(&slide, ids, slot, animation);
+            pv.play(slide, ids, slot, animation);
         }
-        crate::anim_panel::PanelPreview::Hover(effect) => {
-            let duration = if props.entrance_effect == "none" && !exit
-                || props.exit_effect == "none" && exit
-            {
-                effect.def().map_or(500, |d| d.default_duration_ms)
+        crate::anim_panel::PanelPreview::Hover(hovered) => {
+            let duration = if effect.as_str() == "none" {
+                hovered.def().map_or(500, |d| d.default_duration_ms)
             } else {
                 duration_ms
             };
-            editor.ui.anim_preview.hover(
-                &slide,
+            pv.hover(
+                slide,
                 ids,
                 slot,
-                effect,
+                hovered,
                 duration,
                 easing,
                 ctx.cumulative_pass_nr(),
@@ -11541,6 +11557,8 @@ pub fn show_animations_section(
     };
 
     auto_preview_toggle(ui, &mut editor.ui.anim_preview.auto);
+    let editor_playhead = editor.ui.timeline.playhead_ms;
+    let selected_ids = editor.selection.ids();
     let props = &mut editor.ui.properties;
     let pv = &mut editor.ui.anim_preview;
     let mut action_to_run: Option<(&'static str, Json)> = None;
@@ -11559,6 +11577,22 @@ pub fn show_animations_section(
         &mut action_to_run,
         pv,
         &mut entrance_preview,
+    );
+    inspector_separator(ui);
+    inspector_section_header(ui, "Emphasis");
+    let playhead = editor_playhead;
+    let emphasis_start =
+        if playhead >= obj.timing.start_ms && obj.timing.end_ms.is_none_or(|end| playhead < end) {
+            playhead
+        } else {
+            obj.timing.start_ms
+        };
+    let mut emphasis_requests = Vec::new();
+    crate::anim_panel::show_emphasis_card(
+        ui,
+        &obj.emphasis,
+        emphasis_start,
+        &mut emphasis_requests,
     );
     inspector_separator(ui);
     show_anim_row(
@@ -11734,6 +11768,69 @@ pub fn show_animations_section(
                     ));
                 }
             });
+    }
+
+    let ctx = ui.ctx().clone();
+    apply_card_preview(
+        pv,
+        props,
+        (&slide.id, selected_ids.clone()),
+        &ctx,
+        false,
+        entrance_preview,
+    );
+    apply_card_preview(
+        pv,
+        props,
+        (&slide.id, selected_ids.clone()),
+        &ctx,
+        true,
+        exit_preview,
+    );
+    for request in emphasis_requests {
+        use crate::anim_panel::EmphasisRequest as R;
+        match request {
+            R::Add(e) => {
+                if pv.auto {
+                    pv.play_emphasis(&slide.id, selected_ids.clone(), e.clone());
+                }
+                actions_to_run.push((
+                    "object.add_emphasis",
+                    serde_json::json!({
+                        "slide": slide.id, "object": obj.id, "effect": e.effect.id,
+                        "start_ms": e.start_ms,
+                    }),
+                ));
+            }
+            R::Set(index, e) => {
+                if pv.auto {
+                    pv.play_emphasis(&slide.id, selected_ids.clone(), e.clone());
+                }
+                actions_to_run.push((
+                    "object.set_emphasis",
+                    serde_json::json!({
+                        "slide": slide.id, "object": obj.id, "index": index, "emphasis": e,
+                    }),
+                ));
+            }
+            R::Remove(index) => actions_to_run.push((
+                "object.remove_emphasis",
+                serde_json::json!({ "slide": slide.id, "object": obj.id, "index": index }),
+            )),
+            R::Play(index) => {
+                if let Some(e) = obj.emphasis.get(index) {
+                    pv.play_emphasis(&slide.id, selected_ids.clone(), e.clone());
+                }
+            }
+            R::Hover(effect) => {
+                pv.hover_emphasis(
+                    &slide.id,
+                    selected_ids.clone(),
+                    &effect,
+                    ctx.cumulative_pass_nr(),
+                );
+            }
+        }
     }
 
     if let Some(act) = action_to_run

@@ -210,3 +210,75 @@ fn the_effect_options_menu_sets_an_option() {
     );
     assert!(h.find_text("Diamond").is_none(), "the menu closes");
 }
+
+#[test]
+fn the_emphasis_gallery_adds_an_emphasis_at_the_playhead() {
+    let mut h = harness();
+    h.editor.selection.object = Some("sh1".into());
+    h.editor.ui.timeline.playhead_ms = 1500;
+    open_tab(&mut h, "animations");
+    let pulse = h.find_texts("Pulse");
+    let tile = pulse.first().copied().expect("Pulse tile");
+    h.click_at(tile);
+    frames(&mut h, 2);
+    let emphasis = h
+        .editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("sh1"))
+        .map(|(o, _)| o.emphasis.clone())
+        .expect("shape");
+    assert_eq!(emphasis.len(), 1);
+    assert_eq!(emphasis[0].effect.id, "pulse");
+    assert_eq!(emphasis[0].start_ms, 1500);
+    assert!(h.editor.ui.anim_preview.is_playing(), "a pick plays it");
+}
+
+#[test]
+fn the_animation_painter_copies_animations_onto_a_clicked_object() {
+    let json = serde_json::json!({
+        "schema_version": 1, "id": "ap", "title": "Painter",
+        "slide_size": { "w": 1000, "h": 600 },
+        "scenes": [{ "id": "sc1", "title": "Scene 1", "slides": [
+            { "id": "sl1", "title": "One", "duration_ms": 5000, "objects": [
+                { "id": "src", "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                  "frame": { "x": 100, "y": 100, "w": 200, "h": 120 },
+                  "entrance": { "effect": { "type": "wipe" }, "duration_ms": 700 },
+                  "emphasis": [{ "effect": { "type": "shake" }, "start_ms": 1000 }] },
+                { "id": "dst", "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+                  "frame": { "x": 600, "y": 100, "w": 200, "h": 120 } }
+            ] }
+        ] }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid course");
+    let mut h = TestHarness::new_with_size(course, (2400.0, 900.0));
+    h.editor.ui.ribbon.visible = true;
+    h.editor.selection = crate::Selection::new("sl1");
+    h.editor.selection.object = Some("src".into());
+    frames(&mut h, 2);
+    h.editor.arm_animation_painter(false);
+    assert!(h.editor.animation_painter_armed());
+    h.editor.apply_format_painter(&["dst".to_owned()]);
+    let dst = h
+        .editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("dst"))
+        .map(|(o, _)| o.clone())
+        .expect("dst");
+    assert_eq!(dst.entrance.map(|a| a.effect.id), Some("wipe".to_owned()));
+    assert_eq!(dst.emphasis.len(), 1);
+    assert!(h.editor.ui.format_painter.is_none(), "one use disarms");
+    // The ribbon button reports why it is off with nothing selected.
+    h.editor.selection.clear_objects();
+    assert!(
+        super::availability(
+            &h.editor,
+            super::spec::Action::Ui(super::spec::UiAction::AnimationPainter),
+            None
+        )
+        .is_err()
+    );
+}

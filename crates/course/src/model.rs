@@ -1155,6 +1155,9 @@ pub struct Object {
     pub exit: Option<Animation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub motion_paths: Vec<MotionPath>,
+    /// Emphasis animations on the timeline (M46 phase 6), in the order they were added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emphasis: Vec<Emphasis>,
     /// Author-set keyboard focus position. Lower runs first; ties keep the
     /// default reading order. Omitted when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1525,6 +1528,52 @@ pub struct Animation {
     pub duration_ms: u32,
     #[serde(default)]
     pub easing: Easing,
+}
+
+/// An emphasis animation: the object stays on screen and pulses, turns, shakes or changes
+/// colour for a while, then returns to its resting look.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Emphasis {
+    pub effect: EmphasisEffect,
+    /// When it starts on the object's timeline (slide or layer), in ms.
+    #[serde(default)]
+    pub start_ms: u32,
+    /// One pass, in ms.
+    #[serde(default = "d1000")]
+    pub duration_ms: u32,
+    #[serde(default = "linear", skip_serializing_if = "is_linear")]
+    pub easing: Easing,
+    /// How many passes play back to back (1..=20).
+    #[serde(default = "one_u8", skip_serializing_if = "is_one_u8")]
+    pub repeat: u8,
+}
+
+/// An emphasis effect: a registry id (`coursecraft_course::EMPHASIS`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmphasisEffect {
+    #[serde(rename = "type")]
+    pub id: String,
+}
+
+impl Emphasis {
+    /// When the last pass ends, in ms.
+    #[must_use]
+    pub fn end_ms(&self) -> u32 {
+        self.start_ms.saturating_add(
+            self.duration_ms
+                .saturating_mul(u32::from(self.repeat.max(1))),
+        )
+    }
+}
+
+fn linear() -> Easing {
+    Easing::Linear
+}
+
+fn is_linear(e: &Easing) -> bool {
+    *e == Easing::Linear
 }
 
 pub fn d500() -> u32 {
@@ -4156,6 +4205,12 @@ pub struct Timing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<u32>,
 }
+
+/// Maximum number of emphasis animations on a single object.
+pub const MAX_EMPHASIS_PER_OBJECT: usize = 16;
+
+/// Maximum passes of one emphasis.
+pub const MAX_EMPHASIS_REPEAT: u8 = 20;
 
 /// Maximum number of custom states on a single object.
 pub const MAX_STATES_PER_OBJECT: usize = 32;

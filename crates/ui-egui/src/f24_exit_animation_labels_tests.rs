@@ -48,9 +48,6 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     let ent_header = harness
         .find_text_in("Entrance animation", harness.right_panel_rect())
         .expect("Entrance animation header");
-    let exit_header = harness
-        .find_text_in("Exit animation", harness.right_panel_rect())
-        .expect("Exit animation header");
 
     // Open Entrance Effect dropdown.
     let ent_combo = find_text_below_in_inspector(&mut harness, "None", ent_header.y)
@@ -72,6 +69,14 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     let fly_in = harness.find_text_last("Fly in").expect("Fly in option");
     harness.click_at(fly_in);
     harness.idle_frame();
+
+    // The Entrance and Emphasis cards push Exit down: scroll the inspector to it.
+    let panel = harness.right_panel_rect();
+    harness.scroll_over(panel.center(), -300.0);
+    harness.idle_frame();
+    let exit_header = harness
+        .find_text_in("Exit animation", harness.right_panel_rect())
+        .expect("Exit animation header after scrolling");
 
     // Now open Exit Effect dropdown.
     let exit_combo = find_text_below_in_inspector(&mut harness, "None", exit_header.y)
@@ -245,5 +250,35 @@ fn multi_selection_shows_entrance_and_exit_names_and_undo_redo() {
     assert!(
         find_text_below_in_inspector(&mut harness, "Zoom out", exit_header.y).is_some(),
         "after redo exit combo should display 'Zoom out'"
+    );
+}
+
+#[test]
+fn the_emphasis_card_adds_and_lists_an_emphasis() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 900.0));
+    select_button_animate(&mut harness);
+    let add = harness
+        .find_text_in("+ Add emphasis", harness.right_panel_rect())
+        .expect("Add emphasis button");
+    harness.click_at(add);
+    harness.idle_frame();
+    let tile = harness.find_text_last("Heartbeat").expect("Heartbeat tile");
+    harness.click_at(tile);
+    harness.idle_frame();
+    let emphasis = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .and_then(|s| s.object("btn-start"))
+        .map(|(o, _)| o.emphasis.clone())
+        .expect("btn-start");
+    assert_eq!(emphasis.len(), 1);
+    assert_eq!(emphasis[0].effect.id, "heartbeat");
+    assert!(
+        harness
+            .find_text_in("Heartbeat", harness.right_panel_rect())
+            .is_some(),
+        "the card lists it"
     );
 }

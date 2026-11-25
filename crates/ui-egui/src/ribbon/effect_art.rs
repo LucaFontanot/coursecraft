@@ -8,8 +8,8 @@
 //! subset has no diagonal or diamond, and a drawn wheel for spokes.
 
 use coursecraft_course::{
-    AnimEffect, Direction, EffectOptionDef, InOut, Orientation, Rect as SlideRect, RevealShape,
-    Size,
+    AnimEffect, Direction, EffectOptionDef, EmphasisEffect, InOut, Orientation, Rect as SlideRect,
+    RevealShape, Size,
 };
 use coursecraft_logic::effects::{EffectCtx, sample_effect};
 use coursecraft_logic::{AnimationPhase, ObjectSample};
@@ -158,6 +158,28 @@ pub fn effect_pieces(effect: &AnimEffect, exit: bool, at: Option<f32>) -> Vec<Pi
     }
 }
 
+/// What an emphasis icon draws, in stage units: still (`None`) a ghost early in the pass when it
+/// moves, then the card part way through; `Some(t)` one frame of the hover loop.
+#[must_use]
+pub fn emphasis_pieces(effect: &EmphasisEffect, at: Option<f32>) -> Vec<Piece> {
+    let sample = |t: f32| coursecraft_logic::effects::sample_emphasis(effect, t, CARD);
+    match at {
+        Some(t) => pieces_of(&sample(t.clamp(0.0, 1.0)), 0.0),
+        None => {
+            let early = sample(0.2);
+            let mut out = Vec::new();
+            if moves(&early) {
+                out.extend(pieces_of(&early, 0.0).into_iter().map(|p| Piece {
+                    alpha: p.alpha.min(0.3),
+                    ..p
+                }));
+            }
+            out.extend(pieces_of(&sample(0.42), 0.45));
+            out
+        }
+    }
+}
+
 /// The hover loop's frame at `time` seconds: 0→1 over a second, then a short hold at rest.
 #[must_use]
 pub fn hover_shown(time: f64) -> f32 {
@@ -188,6 +210,22 @@ pub fn paint_effect(
     rest: Color32,
     at: Option<f32>,
 ) {
+    paint_pieces(painter, art, effect_pieces(effect, exit, at), ink, rest);
+}
+
+/// Paint an emphasis icon into `art` (see [`paint_effect`]).
+pub fn paint_emphasis(
+    painter: &Painter,
+    art: Rect,
+    effect: &EmphasisEffect,
+    ink: Color32,
+    rest: Color32,
+    at: Option<f32>,
+) {
+    paint_pieces(painter, art, emphasis_pieces(effect, at), ink, rest);
+}
+
+fn paint_pieces(painter: &Painter, art: Rect, pieces: Vec<Piece>, ink: Color32, rest: Color32) {
     let k = (art.width() / STAGE.x).min(art.height() / STAGE.y);
     let origin = art.center() - STAGE * k / 2.0;
     let map = |p: Pos2| origin + p.to_vec2() * k;
@@ -202,7 +240,7 @@ pub fn paint_effect(
         Stroke::new(1.0, rest),
         egui::StrokeKind::Inside,
     );
-    for piece in effect_pieces(effect, exit, at) {
+    for piece in pieces {
         let points: Vec<Pos2> = piece.points.iter().map(|&p| map(p)).collect();
         if points.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
             let color = washed(ink, piece.tint, piece.alpha);
@@ -460,5 +498,27 @@ mod tests {
         assert!((hover_shown(0.5) - 0.5).abs() < 1e-6);
         assert!((hover_shown(1.2) - 1.0).abs() < 1e-6);
         assert!(hover_shown(1.45) < 0.1);
+    }
+
+    #[test]
+    fn every_emphasis_has_a_finite_icon_of_its_own() {
+        let mut seen: Vec<Vec<Piece>> = Vec::new();
+        for def in coursecraft_course::EMPHASIS {
+            let e = EmphasisEffect::new(def.id);
+            for at in [None, Some(0.0), Some(0.5), Some(1.0)] {
+                for p in emphasis_pieces(&e, at) {
+                    assert!(p.points.iter().all(|q| q.x.is_finite() && q.y.is_finite()));
+                }
+            }
+            let still = emphasis_pieces(&e, None);
+            assert!(!still.is_empty(), "`{}` draws nothing", def.id);
+            seen.push(still);
+        }
+        let distinct = seen
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| seen[..*i].iter().all(|q| q != *p))
+            .count();
+        assert_eq!(distinct, seen.len(), "every emphasis icon is its own");
     }
 }

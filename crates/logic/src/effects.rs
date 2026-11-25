@@ -9,10 +9,11 @@
 //! entrance backwards, so each effect is written once.
 
 use coursecraft_course::{
-    AnimEffect, Direction, FALLBACK_EFFECT, InOut, Orientation, Rect, RevealShape, Size,
+    AnimEffect, Direction, EmphasisEffect, FALLBACK_EFFECT, FALLBACK_EMPHASIS, InOut, Orientation,
+    Rect, RevealShape, Size,
 };
 
-use crate::animation::{AnimationPhase, ClipFrac, ConvexPoly, Mask, ObjectSample};
+use crate::animation::{AnimationPhase, ClipFrac, ConvexPoly, Mask, ObjectSample, Tint};
 
 /// What a sample function gets besides the effect's options.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -748,6 +749,165 @@ fn pop(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Emphasis (M46 phase 6)
+// ---------------------------------------------------------------------------
+
+/// One emphasis's sample function: `t` is the eased progress of one pass in `[0, 1]`, `frame`
+/// the object's frame. Every function returns the resting look at 0 and 1.
+pub type EmphasisFn = fn(f32, Rect) -> ObjectSample;
+
+/// One emphasis id and its sample function.
+pub struct EmphasisImpl {
+    pub id: &'static str,
+    pub sample: EmphasisFn,
+}
+
+macro_rules! emphasis_impls {
+    ($($id:literal => $f:ident),* $(,)?) => {
+        /// Every emphasis the runtime can play. Must list exactly the ids of
+        /// [`coursecraft_course::EMPHASIS`].
+        pub static EMPHASIS_IMPLS: &[EmphasisImpl] = &[$(EmphasisImpl { id: $id, sample: $f }),*];
+    };
+}
+
+emphasis_impls! {
+    "pulse" => e_pulse,
+    "grow_shrink" => e_grow_shrink,
+    "teeter" => e_teeter,
+    "spin" => e_spin,
+    "shake" => e_shake,
+    "heartbeat" => e_heartbeat,
+    "jump" => e_jump,
+    "blink" => e_blink,
+    "transparency" => e_transparency,
+    "darken" => e_darken,
+    "lighten" => e_lighten,
+    "color_pulse" => e_color_pulse,
+}
+
+/// 0 at both ends, 1 in the middle.
+fn hump(t: f32) -> f32 {
+    (t * std::f32::consts::PI).sin().max(0.0)
+}
+
+fn e_pulse(t: f32, _: Rect) -> ObjectSample {
+    ObjectSample {
+        scale: ObjectSample::uniform(1.0 + 0.08 * hump(t)),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_grow_shrink(t: f32, _: Rect) -> ObjectSample {
+    ObjectSample {
+        scale: ObjectSample::uniform(1.0 + 0.25 * hump(t)),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_teeter(t: f32, _: Rect) -> ObjectSample {
+    ObjectSample {
+        rotation_deg: 7.0 * (t * 4.0 * std::f32::consts::TAU / 2.0).sin() * (1.0 - t),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_spin(t: f32, _: Rect) -> ObjectSample {
+    ObjectSample {
+        rotation_deg: 360.0 * t,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_shake(t: f32, frame: Rect) -> ObjectSample {
+    let amp = (frame.w * 0.06).clamp(4.0, 24.0);
+    ObjectSample {
+        offset: (
+            amp * (t * 5.0 * std::f32::consts::TAU).sin() * (1.0 - t),
+            0.0,
+        ),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_heartbeat(t: f32, _: Rect) -> ObjectSample {
+    // Two beats: a strong one at 0.15 and a softer one at 0.45, then rest.
+    let beat = |c: f32, w: f32| (1.0 - ((t - c) / w).powi(2)).max(0.0);
+    ObjectSample {
+        scale: ObjectSample::uniform(1.0 + 0.14 * beat(0.15, 0.12) + 0.09 * beat(0.45, 0.12)),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_jump(t: f32, frame: Rect) -> ObjectSample {
+    let h = (frame.h * 0.3).clamp(8.0, 80.0);
+    // Up and down once, with a little squash on landing.
+    let up = (1.0 - (2.0 * t - 1.0).powi(2)).max(0.0);
+    let squash = if t > 0.85 {
+        hump((t - 0.85) / 0.15) * 0.06
+    } else {
+        0.0
+    };
+    ObjectSample {
+        offset: (0.0, -h * up),
+        scale: (1.0 + squash, 1.0 - squash),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_blink(t: f32, _: Rect) -> ObjectSample {
+    // Off three times.
+    let phase = (t * 3.0).fract();
+    let off = (0.25..0.6).contains(&phase) && t < 1.0;
+    ObjectSample {
+        opacity: if off { 0.1 } else { 1.0 },
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_transparency(t: f32, _: Rect) -> ObjectSample {
+    ObjectSample {
+        opacity: 1.0 - 0.55 * hump(t),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn wash(rgb: [u8; 3], amount: f32) -> ObjectSample {
+    ObjectSample {
+        tint: (amount > 0.0).then_some(Tint { rgb, amount }),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn e_darken(t: f32, _: Rect) -> ObjectSample {
+    wash([0, 0, 0], 0.45 * hump(t))
+}
+
+fn e_lighten(t: f32, _: Rect) -> ObjectSample {
+    wash([255, 255, 255], 0.55 * hump(t))
+}
+
+fn e_color_pulse(t: f32, _: Rect) -> ObjectSample {
+    wash([242, 177, 58], 0.7 * hump(t))
+}
+
+fn emphasis_sampler(id: &str) -> Option<EmphasisFn> {
+    EMPHASIS_IMPLS.iter().find(|i| i.id == id).map(|i| i.sample)
+}
+
+/// `effect` at eased progress `t` of one pass. The resting look at `t <= 0` and `t >= 1`; an
+/// unknown id plays as [`coursecraft_course::FALLBACK_EMPHASIS`].
+#[must_use]
+pub fn sample_emphasis(effect: &EmphasisEffect, t: f32, frame: Rect) -> ObjectSample {
+    if !t.is_finite() || t <= 0.0 || t >= 1.0 {
+        return ObjectSample::IDENTITY;
+    }
+    let sample = emphasis_sampler(&effect.id)
+        .or_else(|| emphasis_sampler(FALLBACK_EMPHASIS))
+        .unwrap_or(e_pulse);
+    sample(t, frame).sanitized()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1010,5 +1170,72 @@ mod tests {
                 last = area;
             }
         }
+    }
+
+    #[test]
+    fn emphasis_impls_match_the_registry() {
+        let ids: Vec<&str> = EMPHASIS_IMPLS.iter().map(|i| i.id).collect();
+        let reg: Vec<&str> = coursecraft_course::EMPHASIS.iter().map(|d| d.id).collect();
+        assert_eq!(ids, reg);
+        assert!(coursecraft_course::emphasis_def(FALLBACK_EMPHASIS).is_some());
+    }
+
+    #[test]
+    fn every_emphasis_rests_at_both_ends_and_moves_in_between() {
+        let frame = Rect {
+            x: 100.0,
+            y: 100.0,
+            w: 200.0,
+            h: 100.0,
+        };
+        for def in coursecraft_course::EMPHASIS {
+            let e = EmphasisEffect::new(def.id);
+            for t in [0.0, 1.0, -1.0, 2.0, f32::NAN] {
+                assert_eq!(
+                    sample_emphasis(&e, t, frame),
+                    ObjectSample::IDENTITY,
+                    "`{}` at {t}",
+                    def.id
+                );
+            }
+            let mut moved = false;
+            for i in 1..40 {
+                let s = sample_emphasis(&e, i as f32 / 40.0, frame);
+                assert!(s.opacity.is_finite() && s.rotation_deg.is_finite());
+                moved |= s != ObjectSample::IDENTITY;
+            }
+            assert!(moved, "`{}` never changes the look", def.id);
+            // Near the ends it is close to rest, so passes join without a jump.
+            for t in [0.001_f32, 0.999] {
+                let s = sample_emphasis(&e, t, frame);
+                assert!(
+                    (s.scale.0 - 1.0).abs() < 0.02
+                        && s.offset.0.abs() < 1.0
+                        && s.offset.1.abs() < 1.0,
+                    "`{}` jumps at {t}: {s:?}",
+                    def.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn emphasis_layers_over_the_timeline() {
+        let json = serde_json::json!({
+            "id": "o", "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 0, "y": 0, "w": 100, "h": 100 },
+            "entrance": { "effect": { "type": "fade" }, "duration_ms": 1000, "easing": "linear" },
+            "emphasis": [{ "effect": { "type": "grow_shrink" }, "start_ms": 500, "duration_ms": 1000, "repeat": 2 }]
+        });
+        let obj: coursecraft_course::Object = serde_json::from_value(json).expect("object");
+        let size = Size { w: 960, h: 540 };
+        let at = |ms| crate::sample_timed_animation(&obj, ms, 10_000, size).expect("visible");
+        assert_eq!(at(400).scale, (1.0, 1.0));
+        // Mid entrance and mid first pass: half faded and grown.
+        let both = at(800);
+        assert!(both.opacity < 0.9 && both.scale.0 > 1.15, "{both:?}");
+        // Second pass, then rest.
+        assert!(at(2000).scale.0 > 1.2);
+        assert_eq!(at(2600), ObjectSample::IDENTITY);
     }
 }

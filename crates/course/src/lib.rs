@@ -34,7 +34,8 @@ pub use connector_route::{
     CONNECTOR_MIN_LEAD, connector_site, connector_site_direction, route_connector,
 };
 pub use effects::{
-    EFFECTS, EffectCategory, EffectDef, EffectOptionDef, FALLBACK_EFFECT, OPTION_FIELDS, effect_def,
+    EFFECTS, EMPHASIS, EffectCategory, EffectDef, EffectOptionDef, EmphasisDef, FALLBACK_EFFECT,
+    FALLBACK_EMPHASIS, OPTION_FIELDS, effect_def, emphasis_def,
 };
 
 pub use course_map::{
@@ -60,9 +61,10 @@ pub use model::{
     BUILTIN_VARIABLES, BackgroundAudio, BankDraw, BaseSlideView, Baseline, CHROME_STRINGS, Choice,
     CmpOp, Color, CompletionStatus, Condition, ConnectorStyle, Course, CropRect, Cue,
     DEFAULT_TIMER_DURATION_MS, DashStyle, Direction, DragItem, DragSpec, Easing, EditorSettings,
-    Event, FillStyle, FontFace, FontStyle, GlossaryEntry, Glow, Glue, GradientStop, Group, Guide,
-    HotspotRegion, HotspotShape, InOut, InputKind, LOTTIE_MAX_SPEED, LOTTIE_MIN_SPEED, Layer,
-    LineEnd, LineJoin, Link, ListKind, LmsStatus, MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS,
+    Emphasis, EmphasisEffect, Event, FillStyle, FontFace, FontStyle, GlossaryEntry, Glow, Glue,
+    GradientStop, Group, Guide, HotspotRegion, HotspotShape, InOut, InputKind, LOTTIE_MAX_SPEED,
+    LOTTIE_MIN_SPEED, Layer, LineEnd, LineJoin, Link, ListKind, LmsStatus, MAX_CUES,
+    MAX_EMPHASIS_PER_OBJECT, MAX_EMPHASIS_REPEAT, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS,
     MAX_GRADIENT_STOPS, MAX_INPUT_CHARS, MAX_JAVASCRIPT_BYTES, MAX_LETTER_SPACING,
     MAX_OBJECT_FRAME_SIZE, MAX_PALETTE_COLORS, MAX_RADIO_OPTIONS, MAX_SCROLL_CONTENT_HEIGHT,
     MAX_STATE_EXTRAS, MAX_STATE_NAME_CHARS, MAX_STATES_PER_OBJECT, MAX_TEXT_STYLES,

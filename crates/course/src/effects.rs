@@ -373,6 +373,100 @@ pub fn effect_def(id: &str) -> Option<&'static EffectDef> {
     EFFECTS.iter().find(|d| d.id == id)
 }
 
+/// One emphasis effect. Every emphasis starts and ends at the object's resting look.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EmphasisDef {
+    /// Stored id (`"pulse"`), the `type` of an [`crate::EmphasisEffect`].
+    pub id: &'static str,
+    /// English name ("Pulse").
+    pub label: &'static str,
+    /// What it is for, in a few words (gallery tooltip). English.
+    pub hint: &'static str,
+    pub default_duration_ms: u32,
+}
+
+const fn emph(id: &'static str, label: &'static str, hint: &'static str, ms: u32) -> EmphasisDef {
+    EmphasisDef {
+        id,
+        label,
+        hint,
+        default_duration_ms: ms,
+    }
+}
+
+/// Every emphasis effect, in gallery order. `coursecraft-logic` has one sample function per id.
+pub static EMPHASIS: &[EmphasisDef] = &[
+    emph("pulse", "Pulse", "Grows a little and back", 500),
+    emph(
+        "grow_shrink",
+        "Grow and shrink",
+        "Grows by a quarter and back",
+        1000,
+    ),
+    emph("teeter", "Teeter", "Rocks from side to side", 1000),
+    emph("spin", "Spin", "One full turn", 1000),
+    emph("shake", "Shake", "Shakes sideways, for a wrong answer", 600),
+    emph(
+        "heartbeat",
+        "Heartbeat",
+        "Two quick beats, for a call to action",
+        1000,
+    ),
+    emph("jump", "Jump", "Hops up and lands", 800),
+    emph("blink", "Blink", "Flashes off and on", 900),
+    emph(
+        "transparency",
+        "Transparency",
+        "Fades halfway and back",
+        1000,
+    ),
+    emph("darken", "Darken", "Darkens and back", 1000),
+    emph("lighten", "Lighten", "Lightens and back", 1000),
+    emph(
+        "color_pulse",
+        "Colour pulse",
+        "Washes with gold and back",
+        1000,
+    ),
+];
+
+/// The emphasis played for an id this build does not know. The validator warns about it.
+pub const FALLBACK_EMPHASIS: &str = "pulse";
+
+/// The emphasis registry entry for `id`, if this build knows it.
+#[must_use]
+pub fn emphasis_def(id: &str) -> Option<&'static EmphasisDef> {
+    EMPHASIS.iter().find(|d| d.id == id)
+}
+
+impl crate::EmphasisEffect {
+    /// An emphasis effect with registry id `id`.
+    #[must_use]
+    pub fn new(id: &str) -> Self {
+        Self { id: id.to_owned() }
+    }
+
+    /// Its registry entry, if this build knows it.
+    #[must_use]
+    pub fn def(&self) -> Option<&'static EmphasisDef> {
+        emphasis_def(&self.id)
+    }
+}
+
+impl crate::Emphasis {
+    /// A new emphasis of `id` at `start_ms` with the effect's default duration.
+    #[must_use]
+    pub fn new(id: &str, start_ms: u32) -> Self {
+        Self {
+            effect: crate::EmphasisEffect::new(id),
+            start_ms,
+            duration_ms: emphasis_def(id).map_or(1000, |d| d.default_duration_ms),
+            easing: crate::Easing::Linear,
+            repeat: 1,
+        }
+    }
+}
+
 impl AnimEffect {
     /// The effect `id` with every option at its default (written out, so the stored file says
     /// what plays).

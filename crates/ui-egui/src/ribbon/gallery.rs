@@ -21,6 +21,8 @@ pub struct Tile {
     /// An entrance/exit effect, drawn by its own sample function instead of the icon
     /// (`effect_art`); `true` for an exit.
     pub effect: Option<(AnimEffect, bool)>,
+    /// An emphasis effect, drawn by its own sample function (amber).
+    pub emphasis: Option<coursecraft_course::EmphasisEffect>,
     pub selected: bool,
 }
 
@@ -160,6 +162,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                     icon: Icon::Palette,
                     swatch: Some([hex(t.background), hex(t.accent), hex(t.text)]),
                     effect: None,
+                    emphasis: None,
                     selected: same_color(&theme.accent.0, t.accent)
                         && same_color(&theme.background.0, t.background)
                         && same_color(&theme.text.0, t.text),
@@ -176,6 +179,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                     icon: *icon,
                     swatch: None,
                     effect: None,
+                    emphasis: None,
                     selected: current == Some(i),
                 })
                 .collect()
@@ -193,6 +197,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                 icon: Icon::XCircle,
                 swatch: None,
                 effect: None,
+                emphasis: None,
                 selected: current == Some(0),
             };
             std::iter::once(none)
@@ -207,16 +212,29 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                         icon: Icon::Sparkle,
                         swatch: None,
                         effect: Some((effect, exit)),
+                        emphasis: None,
                         selected: current == Some(i + 1),
                     }
                 }))
                 .collect()
         }
+        Gallery::Emphasis => coursecraft_course::EMPHASIS
+            .iter()
+            .map(|d| Tile {
+                label: d.label,
+                icon: Icon::Sparkle,
+                swatch: None,
+                effect: None,
+                emphasis: Some(coursecraft_course::EmphasisEffect::new(d.id)),
+                selected: false,
+            })
+            .collect(),
     }
 }
 
 fn motion_of(gallery: Gallery) -> Motion {
     match gallery {
+        Gallery::Emphasis => Motion::Entrance,
         Gallery::Exit => Motion::Exit,
         Gallery::Entrance => Motion::Entrance,
         Gallery::Themes | Gallery::Transitions => Motion::Transition,
@@ -228,7 +246,7 @@ pub fn available(editor: &Editor, gallery: Gallery) -> Result<(), &'static str> 
     match gallery {
         Gallery::Themes => Ok(()),
         Gallery::Transitions => transition_available(editor),
-        Gallery::Entrance | Gallery::Exit => animation_available(editor),
+        Gallery::Entrance | Gallery::Exit | Gallery::Emphasis => animation_available(editor),
     }
 }
 
@@ -258,6 +276,7 @@ pub fn apply(editor: &mut Editor, gallery: Gallery, index: usize) {
         return;
     }
     match gallery {
+        Gallery::Emphasis => add_emphasis(editor, index),
         Gallery::Themes => {
             if let Some(t) = THEMES.get(index) {
                 editor.run(
@@ -325,6 +344,44 @@ pub fn apply(editor: &mut Editor, gallery: Gallery, index: usize) {
             }
             preview_current(editor, motion);
         }
+    }
+}
+
+/// Add emphasis `index` of the registry to every selected object, at the timeline's playhead
+/// when it is inside the object's time on screen, else at the object's start. Plays it once.
+fn add_emphasis(editor: &mut Editor, index: usize) {
+    let Some(def) = coursecraft_course::EMPHASIS.get(index) else {
+        return;
+    };
+    let playhead = editor.ui.timeline.playhead_ms;
+    let adds: Vec<(String, String, u32)> = {
+        let Some(s) = slide(editor) else {
+            return;
+        };
+        objects(editor)
+            .iter()
+            .map(|o| {
+                let inside = playhead >= o.timing.start_ms
+                    && o.timing.end_ms.is_none_or(|end| playhead < end);
+                let start = if inside { playhead } else { o.timing.start_ms };
+                (s.id.clone(), o.id.clone(), start)
+            })
+            .collect()
+    };
+    for (slide, object, start) in &adds {
+        editor.run(
+            "object.add_emphasis",
+            json!({ "slide": slide, "object": object, "effect": def.id, "start_ms": start }),
+        );
+    }
+    if editor.ui.anim_preview.auto && !adds.is_empty() {
+        let slide = editor.selection.slide.clone();
+        let ids = editor.selection.ids();
+        editor.ui.anim_preview.play_emphasis(
+            &slide,
+            ids,
+            coursecraft_course::Emphasis::new(def.id, 0),
+        );
     }
 }
 
@@ -696,6 +753,23 @@ fn tile(ui: &mut Ui, t: &Tile, enabled: bool) -> Response {
                 text,
             );
         }
+        None if t.emphasis.is_some() => {
+            if let Some(effect) = &t.emphasis {
+                let at = (enabled && resp.hovered()).then(|| {
+                    ui.ctx().request_repaint();
+                    super::effect_art::hover_shown(ui.input(|i| i.time))
+                });
+                let ink = if enabled { p.warning } else { p.text_disabled };
+                super::effect_art::paint_emphasis(
+                    ui.painter(),
+                    art,
+                    effect,
+                    ink,
+                    p.border_strong,
+                    at,
+                );
+            }
+        }
         None => match &t.effect {
             Some((effect, exit)) => {
                 let kind = if !enabled {
@@ -755,7 +829,25 @@ pub fn effect_tile(
         icon: Icon::XCircle,
         swatch: None,
         effect: effect.map(|e| (e, exit)),
+        emphasis: None,
         selected,
+    };
+    tile(ui, &t, true)
+}
+
+/// One emphasis tile (the Animate panel's emphasis picker).
+pub fn emphasis_tile(
+    ui: &mut Ui,
+    label: &'static str,
+    effect: coursecraft_course::EmphasisEffect,
+) -> Response {
+    let t = Tile {
+        label,
+        icon: Icon::Sparkle,
+        swatch: None,
+        effect: None,
+        emphasis: Some(effect),
+        selected: false,
     };
     tile(ui, &t, true)
 }
@@ -827,14 +919,18 @@ pub fn show(
             });
         });
     });
+    let hovered = hovered.and_then(|i| tiles.get(i));
     if let Some(index) = picked {
         apply(editor, gallery, index);
-    } else if enabled
-        && let Some((effect, _)) = hovered
-            .and_then(|i| tiles.get(i))
-            .and_then(|t| t.effect.as_ref())
-    {
+    } else if enabled && let Some((effect, _)) = hovered.and_then(|t| t.effect.as_ref()) {
         preview_hover(editor, ui.ctx(), motion_of(gallery), effect);
+    } else if enabled && let Some(effect) = hovered.and_then(|t| t.emphasis.as_ref()) {
+        let slide = editor.selection.slide.clone();
+        let ids = editor.selection.ids();
+        editor
+            .ui
+            .anim_preview
+            .hover_emphasis(&slide, ids, effect, ui.ctx().cumulative_pass_nr());
     }
     inner.response
 }

@@ -357,8 +357,34 @@ pub fn preview_slide(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
 /// A click on a Format Painter button: click arms it once, double-click keeps it
 /// armed, a click while armed turns it off. Shared by the toolbar and the ribbon.
 pub(crate) fn format_painter_clicked(editor: &mut Editor, painter_resp: &egui::Response) {
+    painter_clicked(
+        editor,
+        painter_resp,
+        crate::format_painter::PainterKind::Format,
+    );
+}
+
+/// [`format_painter_clicked`] for either painter; a click on one while the other is armed
+/// switches to it.
+pub(crate) fn painter_clicked(
+    editor: &mut Editor,
+    painter_resp: &egui::Response,
+    kind: crate::format_painter::PainterKind,
+) {
+    let arm = |editor: &mut Editor, sticky: bool| match kind {
+        crate::format_painter::PainterKind::Format => editor.arm_format_painter(sticky),
+        crate::format_painter::PainterKind::Animation => editor.arm_animation_painter(sticky),
+    };
+    if editor
+        .ui
+        .format_painter
+        .as_ref()
+        .is_some_and(|p| p.kind != kind)
+    {
+        editor.ui.format_painter = None;
+    }
     if painter_resp.double_clicked() {
-        editor.arm_format_painter(true);
+        arm(editor, true);
         if let Some(p) = editor.ui.format_painter.as_mut() {
             p.sticky = true;
             p.just_double_clicked = true;
@@ -371,7 +397,7 @@ pub(crate) fn format_painter_clicked(editor: &mut Editor, painter_resp: &egui::R
                 editor.ui.format_painter = None;
             }
         } else {
-            editor.arm_format_painter(false);
+            arm(editor, false);
         }
     }
 }
@@ -543,7 +569,11 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Format Painter: click arms once, double click keeps it armed.
     left_ui.add_space(coursecraft_render::SPACE_MD);
-    let painter_armed = editor.ui.format_painter.is_some();
+    let painter_armed = editor
+        .ui
+        .format_painter
+        .as_ref()
+        .is_some_and(|p| p.kind == crate::format_painter::PainterKind::Format);
     let state_edit_locked = editor.ui.editing_state.is_some();
     let painter_enabled =
         !master_view && !state_edit_locked && (painter_armed || editor.can_arm_format_painter());

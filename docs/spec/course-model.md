@@ -562,6 +562,7 @@ Objects may define entrance and exit animations, and one or more motion paths:
 - `entrance`: `Option<Animation>`
 - `exit`: `Option<Animation>`
 - `motion_paths`: `Vec<MotionPath>`
+- `emphasis`: `Vec<Emphasis>` (omitted when empty; at most 16)
 
 ```json
 {
@@ -574,6 +575,7 @@ Objects may define entrance and exit animations, and one or more motion paths:
 ```
 
 - **Effects (`AnimEffect`):** `{ "type": id, ...options }`. The ids and the options each one takes come from the effect registry (`crates/course/src/effects.rs`, listed by the `animation.effects` command): 25 effects. Options: `from` (a side or corner: `left`, `right`, `top`, `bottom`, `top_left`, `top_right`, `bottom_left`, `bottom_right`), `shape` (`circle`, `box`, `diamond`, `plus`), `inout` (`in` closes from the edges, `out` opens from the centre), `spokes` (1, 2, 3, 4 or 8) and `orientation` (`horizontal`, `vertical`). Each effect takes only some options and some values (`peek` and `float` take sides only, `strips` corners only); a value the effect doesn't allow plays its default. Editors write every option the effect takes, at its default when not chosen. The same stored id is used for `entrance` and `exit` (`fly_in` is shown as "Fly In" for entrances and "Fly Out" for exits). Unknown fields are refused when parsing. An unknown `type` (a file from a newer version) still opens: the validator warns and it plays as `fade`. An option the effect doesn't take is a warning and is ignored. `object.set_animation` refuses both.
+- **Emphasis (`Emphasis`):** `{ "effect": { "type": id }, "start_ms": u32, "duration_ms": u32, "easing"?: Easing, "repeat"?: u8 }`. `start_ms` (default 0) is on the object's timeline; `duration_ms` (default 1000, 1–60000) is one pass; `repeat` (default 1, 1–20) passes play back to back; `easing` defaults to `linear` and is omitted then. Ids come from the emphasis registry (`EMPHASIS`, also listed by `animation.effects` under `emphasis`): `pulse`, `grow_shrink`, `teeter`, `spin`, `shake`, `heartbeat`, `jump`, `blink`, `transparency`, `darken`, `lighten`, `color_pulse`. An unknown id warns and plays as `pulse`; `object.add_emphasis` and `object.set_emphasis` refuse it.
 - **Direction (`Direction`):** `left`, `right`, `top`, `bottom`, `top_left`, `top_right`, `bottom_left`, `bottom_right` (default `bottom`). For exits, `from` indicates the direction the object leaves toward. Push and Cover transitions accept every value too (a corner moves the slide diagonally); the editor offers the four sides for them.
 - **Easing (`Easing`):** `linear`, `ease_in`, `ease_out` (default), `ease_in_out`.
 - **Duration (`duration_ms`):** default 500 ms for animations, 1000 ms for motion paths (allowed 1–60000 ms).

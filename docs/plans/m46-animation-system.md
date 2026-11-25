@@ -245,6 +245,19 @@ Each phase updates `docs/spec/triggers.md`, `docs/ui/ribbon.md` and `docs/ui/fea
 - The Emphasis card arrives with phase 6, and Animation Painter with it. There is no reduced-motion
   setting in the editor yet; Auto-preview is the switch for now.
 
+## Phase 6 as built
+
+- Emphasis is timeline-based (`start_ms`, `duration_ms`, `repeat`), not a trigger action. A
+  "play emphasis" trigger action (for Shake on a wrong answer) is a follow-up; today authors put
+  the emphasis on a feedback layer's timeline.
+- `ObjectSample::then` layers an emphasis over the entrance/exit sample; `sample_timed_animation`
+  applies every active emphasis, so the player, the timeline preview and offscreen renders agree.
+- Glow pulse, Desaturate, Bold flash and Wave (text) from the target list are not in this pack:
+  the sample has no glow, saturation or per-letter channel yet.
+- The Animation Painter is the Format Painter with a `PainterKind`, so arming, sticky mode, Esc
+  and canvas clicks are shared; it dispatches `object.copy_animation`.
+- PowerPoint import still reports emphasis presets as not imported.
+
 ## On stock icons from Magnific / Freepik
 
 Searching the stock library for animation icons returned a mixed, mostly premium set ("Sputnik",

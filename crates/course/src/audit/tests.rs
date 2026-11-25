@@ -42,6 +42,7 @@ fn object(id: &str, kind: ObjectKind, (x, y, w, h): (f32, f32, f32, f32)) -> Obj
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
