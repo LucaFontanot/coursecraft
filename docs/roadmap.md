@@ -378,7 +378,7 @@ Plan by Gemini 4 Neon: `docs/testing/m37-plan.md`; report: `docs/testing/m37-rep
 
 CourseCraft's tabbed ribbon and dockable panel workspace. Plan and full inventory:
 `docs/ui/` (start at `docs/ui/README.md`). Feature-level status: `docs/ui/feature-parity.md`
-(2026-11-24: 110 built, 38 partly, 60 not yet, 12 not planned). Layout and look follow
+(2026-11-24: 110 built, 38 partly, 59 not yet, 12 not planned). Layout and look follow
 `DESIGN.md`. Hand checks: `docs/release-checklist.md` § 9.
 
 0. **Foundation** (owner decision 2026-11-23): the new UI is built on `craft-ui` and localized
@@ -417,7 +417,7 @@ CourseCraft's tabbed ribbon and dockable panel workspace. Plan and full inventor
    right after the object is inserted, and goes back to Home when deselected; X, Y, Width and
    Height fields, Edit Points, Crop, Replace and Reset Picture, Replace media, Import Captions,
    the table's rows, columns, header row and split, Shuffle Answers. Slide Master mode has its
-   tab and strip. Still open: Feedback Master, Question form view and the Preview tab strips.
+   tab and strip. Still open: Feedback Layouts, Question form view and the Preview tab strips.
 4. File page (the welcome screen restyled: start actions, Recent with thumbnails, Close project).
 5. Shell: view tabs for open slides, status bar, right panel (Triggers over Slide Layers), Slide
    Properties in the Course Map, collapsible and undockable panels, Reset Panels, tooltips with
@@ -447,22 +447,22 @@ number field, symbol picker, insert variable reference, focus order dialog.
 
 Brightness and contrast, picture styles, crop to shape, zoom picture, recolor photos, reset
 picture, reflection and soft edges, change shape, button icons (gallery, align, colour, remove),
-button sets, When Clicked Action pre-filled, callout shapes, export picture/audio/video, audio and
+selection groups, On Click pre-filled, callout shapes, export picture/audio/video, audio and
 video editor beyond trim, captions add/export/delete, compression, video in a new window, webcam
 recording, a bundled open-licence icon set.
 
 ## M41 Structure, masters and questions (planned)
 
-Starting scene (model field and runtime rule in `docs/spec/triggers.md`), scene index, reset slide
-to layout, master Preserve / Title / Insert Placeholder, hide background graphics, feedback master,
+Start section (model field and runtime rule in `docs/spec/triggers.md`), reset slide
+to layout, master Preserve / Title / Insert Placeholder, hide background graphics, feedback layouts,
 swipe gestures (editor and player), custom mouse cursor, convert slide to custom question, question
 form view, feedback and scoring by choice, media per choice and feedback.
 
 ## M42 Animation and timeline depth (planned)
 
 Full entrance/exit gallery, emphasis animations, animation painter, sequence by paragraph with
-build steps on the timeline, transition effect options and Apply to All, path options, zoom
-regions, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
+build steps on the timeline, transition effect options and Apply to All, path options, camera
+zoom, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
 C adds a cue point while playing, Course Map scene collapse and branch lines.
 
 ## M43 Preview and AI ribbon (planned)

@@ -19,7 +19,7 @@ are kept in the spec for possible future use and hidden from the UI.
 |---|---|
 | [feature-parity.md](feature-parity.md) | One row per feature: CourseCraft status and the milestone (M38–M43) that closes it. The summary the roadmap follows. |
 | [ribbon.md](ribbon.md) | CourseCraft's main tabs: every group and control, its CourseCraft label, kind, command id and status. |
-| [contextual-tabs.md](contextual-tabs.md) | Tabs that appear for a selection or a mode: Drawing Tools, Picture Tools, Audio/Video Tools, Question Tools, Table Tools, Slide Master, Feedback Master, Preview, question form view. |
+| [contextual-tabs.md](contextual-tabs.md) | Tabs that appear for a selection or a mode: Drawing Tools, Picture Tools, Audio/Video Tools, Question Tools, Table Tools, Slide Master, Feedback Layouts, Preview, question form view. |
 | [shell-panels-dialogs.md](shell-panels-dialogs.md) | Window layout around the ribbon: title bar, quick access toolbar, view tabs, panels (Scenes, Timeline/States/Notes, Triggers, Slide Layers, Slide Properties), status bar, context menus and dialogs. |
 | [panels.md](panels.md) | Dock panels by category and the settings panel each ↘ launcher opens: the long-term plan for advanced settings and customization. |
 | [implementation.md](implementation.md) | How to build it in `coursecraft-ui-egui` on `craft-ui` (craft-libs): a declarative ribbon spec, the ribbon widgets to port from DeckCraft, the egui fork, enable rules, tests and the order of work. |
@@ -48,9 +48,10 @@ Read `docs/contributing.md` › Clean-room rules first. For the editor UI it mea
   spacing and fonts come from `DESIGN.md`. No icon, screenshot or asset from any closed-source or
   commercial tool goes into the repository.
 - **Generic and CourseCraft labels.** Standard authoring terms (Home, Insert, Design, Animations,
-  Trigger, Layer, State, Question Bank, Slide Master, Text Styles, Format Painter) are used
-  alongside CourseCraft's own labels: **Course Map**, **Custom Question**, **Library**,
-  **Share for Review**, **Trigger**, **AI**, and **CourseCraft**.
+  Trigger, Layer, State, Question Bank, Slide Master, Text Styles, Format Painter, Focus Order,
+  Scrolling Panel, Preserve) are used alongside CourseCraft's own labels: **Course Map**, **Custom
+  Question**, **On Click**, **Feedback Layouts**, **Camera Zoom**, **Selection Group**, **Start
+  Section**, **Library**, **Share for Review**, **Trigger**, **AI**, and **CourseCraft**.
 
 ## How to add or wire a button
 

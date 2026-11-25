@@ -14,7 +14,7 @@
 | Area | ✅ | 🟡 | ⛔ | 🚫 / — |
 |---|---|---|---|---|
 | Project and file | 7 | 2 | 1 | 2 |
-| Structure: scenes, slides, masters | 8 | 3 | 7 | 0 |
+| Structure: scenes, slides, masters | 8 | 3 | 6 | 0 |
 | Text | 13 | 3 | 8 | 0 |
 | Shapes, pictures and buttons | 14 | 5 | 10 | 0 |
 | Media | 10 | 3 | 5 | 1 |
@@ -25,7 +25,7 @@
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **110** | **38** | **60** | **12** |
+| **Total** | **110** | **38** | **59** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -51,7 +51,7 @@ Counted from the tables below; recount when a row changes.
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
 | Scenes; new scene; rename | `scene.*` | ✅ | — |
-| Starting scene (red flag) | — | ⛔ needs model field + runtime rule | M41 |
+| Start section (start flag) | — | ⛔ needs model field + runtime rule | M41 |
 | Course Map: cards, zoom, fit | `course_map.rs` | ✅ | — |
 | Course Map: collapse scene cards, branch lines between scenes | — | ⛔ | M42 |
 | New slide from layout, Basic Layouts gallery | `slide.add_from_layout` | ✅ | — |
@@ -61,11 +61,10 @@ Counted from the tables below; recount when a row changes.
 | Slide masters and layouts (insert, rename, delete) | `master.*` | ✅ | — |
 | Master: Preserve, Title checkbox, Insert Placeholder | — | ⛔ | M41 |
 | Hide background graphics | — | ⛔ | M41 |
-| Feedback master | — | ⛔ | M41 |
+| Feedback layouts | — | ⛔ | M41 |
 | Slide layers (new, duplicate, delete, dim, properties) | `layer.*` | ✅ | — |
 | Slide properties: advance, revisit, prev/next/submit | `slide.update`, `slide.set_player_overrides` | ✅ | — |
 | Swipe gestures (prev/next) | — | ⛔ | M41 |
-| Scene index menu | — | ⛔ behaviour to confirm | M41 |
 | Focus order | audit only | 🟡 dialog missing | M39 |
 | Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes | 🟡 theme-font dialog | M39 |
 
@@ -119,7 +118,7 @@ Counted from the tables below; recount when a row changes.
 | Reset picture | | 🟡 | M40 |
 | Picture effects | | 🟡 as shape effects | M40 |
 | Button styles, fill, border, effects | | 🟡 | M40 |
-| When Clicked Action on a button | trigger editor | 🟡 not pre-filled | M40 |
+| On Click on a button | trigger editor | 🟡 not pre-filled | M40 |
 | Reflection, soft edges | — | ⛔ | M40 |
 | Change shape (keep format) | — | ⛔ | M40 |
 | Size and Position dialog | the Size and Position panel (`size_panel.rs`): width and height with an aspect lock, rotation, flips, position from the top left or the centre, lock | ✅ | — |
@@ -128,7 +127,7 @@ Counted from the tables below; recount when a row changes.
 | Crop to shape | — | ⛔ | M40 |
 | Zoom picture (learner enlarges) | — | ⛔ | M40 |
 | Button icons (gallery, align, colour, remove) | — | ⛔ | M40 |
-| Button sets | — | ⛔ | M40 |
+| Selection groups | — | ⛔ | M40 |
 | Caption / callout shapes | — | ⛔ check gallery | M40 |
 | Export picture | — | ⛔ | M40 |
 
@@ -201,7 +200,7 @@ Counted from the tables below; recount when a row changes.
 | Transition: apply to all | `slide.set_transition_all`, Transitions › Apply To All | ✅ | — |
 | Timeline: fit to longest, reset, align to playhead/cue | — | ⛔ | M42 |
 | Timing dialog | — | ⛔ | M42 |
-| Zoom region (camera zoom) | — | ⛔ | M42 |
+| Camera zoom | — | ⛔ | M42 |
 | C key adds a cue point while playing | | ⛔ verify | M42 |
 | Timeline row context menu complete | | ⛔ | M42 |
 
@@ -222,7 +221,7 @@ Counted from the tables below; recount when a row changes.
 | Scoring by choice | | 🟡 | M41 |
 | Insert Question dialog with filters and preview | new-slide popup | 🟡 | M38 |
 | Question form view (grid editor) | inspector | ⛔ | M41 |
-| Feedback master | — | ⛔ | M41 |
+| Feedback layouts | — | ⛔ | M41 |
 | Media in question form (per choice / feedback) | — | ⛔ | M41 |
 
 ## Player, preview, publish

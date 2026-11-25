@@ -84,7 +84,7 @@ pub enum TabWhen { Always, SlideOpen, MasterMode, Contextual(Ctx) }
 - Parameters that depend on the selection (align edge, reorder delta) go through the existing
   adapters in `menu.rs` (`adapter`, `align_params`, `distribute_params`, `match_size_params`);
   move them to `ribbon/adapters.rs` when the menu bar goes.
-- `NotYet` / `NotPlanned` reasons are short nouns ("zoom regions"); the tooltip text is built in
+- `NotYet` / `NotPlanned` reasons are short nouns ("camera zoom"); the tooltip text is built in
   one place.
 - Every `label`, group caption, tooltip and reason is **English source text**, looked up through
   `tl!` when drawn, never stored translated. `Command` items look their label up with

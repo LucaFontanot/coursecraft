@@ -114,8 +114,7 @@ Shown when the Course Map view tab is active.
 | | Cut | S | `ui:edit.cut` | ✅ | |
 | | Copy | S | `ui:edit.copy` | ✅ | |
 | Scenes | New Scene | L | `scene.add` | ✅ | `toolbar::add_new_scene` |
-| | Starting Scene | T | `course.update` `{start_scene}` (new field) | ⛔ | the course model has no start-scene field yet; the course starts at the first slide. Needs the field, a flag in the map and a runtime rule in `triggers.md` |
-| | Index | LS | — | ⛔ | placeholder; behaviour to confirm |
+| | Start Section | T | `course.update` `{start_scene}` (new field) | ⛔ | the course model has no start-section field yet; the course starts at the first slide. Needs the field, a flag in the map and a runtime rule in `triggers.md` |
 | | Question Banks | LS | `bank.create`, `ui:banks.manage` | ✅ | ▾ New Question Bank, Manage Banks…, Import Questions from CSV… |
 | Slide | New Slide | LS | `slide.add`, `slide.add_from_layout`, `template.add_slide` | 🟡 | ▾ menu below |
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
@@ -191,7 +190,7 @@ Shown when the Course Map view tab is active.
 |---|---|---|---|---|---|
 | Slide | Slide Layer | L | `layer.add` | ✅ | `toolbar::add_new_layer`. **Insert is built in `spec.rs`**; the menu bar's Insert menu is hidden while the ribbon is on |
 | | Convert to Custom Question | L | `question.set_kind` | ⛔ | turn the slide's objects into a custom question |
-| | Zoom Region | L | — | ⛔ | camera zoom on part of the slide |
+| | Camera Zoom | L | — | ⛔ | camera zoom on part of the slide |
 | AI | Insert Text, Edit Text, Insert Image, Insert Audio, Quiz, Question, Summary | | on the AI tab | | |
 | Library | Characters | L | — | 🚫 | Not planned: characters |
 | | Photos | L | — | 🚫 | Not planned: stock asset library |
@@ -237,7 +236,7 @@ Shown when the Course Map view tab is active.
 | | Results Slide | L | `results.insert` | ✅ |
 | | Certificate | L | `certificate.insert` | ✅ (CourseCraft extra) |
 | Masters | Slide Master | L | `ui:view.master` | ✅ |
-| | Feedback Master | L | — | ⛔ |
+| | Feedback Layouts | L | — | ⛔ |
 | Publish | Preview | LS | | ✅ |
 
 ## Design
@@ -287,7 +286,7 @@ Shown when the Course Map view tab is active.
 | Views | Course Map | L | `ui:view.map` | ✅ (built in `spec.rs`, as is the rest of this tab) |
 | | Slide | L | `ui:view.slide` | ✅ |
 | | Slide Master | L | `ui:view.master` | ✅ |
-| | Feedback Master | L | — | ⛔ |
+| | Feedback Layouts | L | — | ⛔ |
 | Zoom | Zoom | L | `ui:zoom.dialog` | 🟡 (Zoom In, Zoom Out, 100% for now) |
 | | Fit in Window | L | `ui:zoom.fit` | ✅ |
 | Show | Rulers | K | `view.set` `{rulers}` | ✅ |

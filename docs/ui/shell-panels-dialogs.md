@@ -45,7 +45,7 @@ Top to bottom:
 
 ### Course Map
 
-✅ exists (`course_map.rs`). Parity items: scene cards with a header menu ▾ ⛔, start-scene flag ⛔,
+✅ exists (`course_map.rs`). Parity items: scene cards with a header menu ▾ ⛔, start-section flag ⛔,
 Ctrl+wheel zoom 🟡, double-click to rename scene and slide titles 🟡, double-click a slide opens a
 slide tab ⛔ (needs view tabs). In the Course Map the right panel shows **Slide Properties**:
 
@@ -99,7 +99,7 @@ States tab: Edit States button, Initial state combo, one thumbnail per state, bu
 | Paste Options (3), Paste Special… | `object.paste` | 🟡 |
 | Group ▸ Group / Ungroup | `object.group`, `object.ungroup` | ✅ |
 | Bring to Front ▸ / Send to Back ▸ | `object.reorder` | ✅ |
-| Button Set ▸ | — | ⛔ |
+| Selection Group ▸ | — | ⛔ |
 | Drag and Drop ▸ | `object.set_drag` | ✅ |
 | Add new horizontal / vertical guide line | `view.guides.add` | ✅ |
 | Replace Picture ▸ / Export Picture ▸ | `object.update` / `ui:media.export` | 🟡 |

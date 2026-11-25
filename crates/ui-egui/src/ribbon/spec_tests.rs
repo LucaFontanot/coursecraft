@@ -483,3 +483,39 @@ fn ai_controls_live_on_their_own_tab() {
         }
     }
 }
+
+#[test]
+fn renamed_coursecraft_labels_replace_coined_terms() {
+    let labels: HashSet<&str> = spec::all_items().map(|i| i.label).collect();
+    for expected in [
+        "On Click",
+        "Feedback Layouts",
+        "Camera Zoom",
+        "Start Section",
+        "Focus Order",
+        "Scrolling Panel",
+        "Preserve",
+    ] {
+        assert!(
+            labels.contains(expected),
+            "missing expected label {expected:?}"
+        );
+    }
+    for removed in [
+        "When Clicked Action",
+        "Feedback Master",
+        "Zoom Region",
+        "Button Set",
+        "Starting Scene",
+        "Index",
+    ] {
+        assert!(
+            !labels.contains(removed),
+            "coined/removed label {removed:?} still in spec"
+        );
+    }
+    assert!(
+        spec::all_items().all(|i| i.id != "map.index"),
+        "removed placeholder map.index still in spec"
+    );
+}
