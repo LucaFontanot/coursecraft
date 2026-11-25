@@ -648,3 +648,69 @@ fn not_planned_controls_stay_in_spec_but_are_never_rendered_or_focusable() {
         }
     }
 }
+
+#[test]
+fn insert_caption_spec_item_is_enabled() {
+    let item = spec::all_items()
+        .find(|i| i.id == "insert.caption")
+        .expect("insert.caption exists in ribbon spec");
+    assert_eq!(item.action, Action::Ui(spec::UiAction::Caption));
+    assert!(matches!(item.menu, Menu::Ui(spec::UiMenu::Callouts)));
+}
+
+#[test]
+fn insert_caption_opens_callout_shapes_and_arms_placement() {
+    let course = Course::from_json(HELLO_COURSE).expect("hello course parses");
+    let mut h = TestHarness::new_with_size(course, (2600.0, 900.0));
+    h.editor.ui.ribbon.visible = true;
+    h.editor.ui.ribbon.tab = "insert";
+    h.idle_frame();
+
+    let pos = h
+        .find_text_in("Caption", h.editor.ui.ribbon.rect)
+        .expect("Insert › Media › Caption");
+    h.click_at(pos);
+    h.idle_frame();
+
+    assert!(
+        h.find_text("Callouts").is_some(),
+        "Callouts category heading should be visible"
+    );
+    assert!(
+        h.editor.ui.shape_gallery_draw_rects.is_empty(),
+        "Draw tools should be hidden when filtered to Callouts"
+    );
+    assert!(
+        !h.editor.ui.shape_gallery_rects.is_empty(),
+        "Callout shapes should be populated in the gallery"
+    );
+    for (kind, _) in &h.editor.ui.shape_gallery_rects {
+        let info = coursecraft_course::SHAPE_CATALOG
+            .iter()
+            .find(|info| info.kind == *kind)
+            .expect("shape kind exists in SHAPE_CATALOG");
+        assert_eq!(
+            info.category,
+            coursecraft_course::ShapeCategory::Callouts,
+            "{kind:?} is not a Callouts shape"
+        );
+    }
+
+    let callout_rect = h
+        .editor
+        .ui
+        .shape_gallery_rects
+        .iter()
+        .find(|(kind, _)| *kind == coursecraft_course::ShapeKind::CalloutRectangle)
+        .map(|(_, rect)| *rect)
+        .expect("CalloutRectangle should be in Callouts gallery");
+    h.click_at(callout_rect.center());
+    h.idle_frame();
+
+    assert_eq!(
+        h.editor.ui.placement_tool,
+        Some(crate::PlacementTool::Shape(
+            coursecraft_course::ShapeKind::CalloutRectangle
+        ))
+    );
+}

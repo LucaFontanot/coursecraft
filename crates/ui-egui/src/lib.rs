@@ -376,7 +376,7 @@ pub use question::{QuestionState, next_choice_id, show_question_tab};
 pub use selection::Selection;
 pub use shape_gallery::{
     GALLERY_MAX_HEIGHT, GALLERY_WIDTH, ShapeGalleryOutput, shape_picker_button, show_shape_gallery,
-    show_shape_gallery_selected, show_shape_gallery_window,
+    show_shape_gallery_category, show_shape_gallery_selected, show_shape_gallery_window,
 };
 pub use shortcuts::show_shortcuts_dialog;
 pub use slides::{
@@ -931,6 +931,8 @@ pub struct UiState {
     pub shape_gallery_search_rect: Option<egui::Rect>,
     /// The Insert menu's floating shape gallery.
     pub show_shape_gallery_window: bool,
+    /// Optional category filter for the floating shape gallery.
+    pub shape_gallery_category: Option<coursecraft_course::ShapeCategory>,
     /// The Insert ▸ Interaction gallery window.
     pub show_interaction_gallery: bool,
     /// Card rects painted by the last open interaction gallery (test hook).
@@ -1607,6 +1609,7 @@ impl Editor {
                 shape_gallery_draw_rects: Vec::new(),
                 shape_gallery_search_rect: None,
                 show_shape_gallery_window: false,
+                shape_gallery_category: None,
                 show_interaction_gallery: false,
                 interaction_gallery_rects: Vec::new(),
                 show_web_window: false,
@@ -2056,6 +2059,7 @@ impl Editor {
         self.ui.shape_gallery_rects.clear();
         self.ui.shape_gallery_search_rect = None;
         self.ui.show_shape_gallery_window = false;
+        self.ui.shape_gallery_category = None;
         self.ui.show_interaction_gallery = false;
         self.ui.interaction_gallery_rects.clear();
         self.ui.show_web_window = false;

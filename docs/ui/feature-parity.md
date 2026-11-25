@@ -16,7 +16,7 @@
 | Project and file | 7 | 2 | 1 | 2 |
 | Structure: scenes, slides, masters | 8 | 3 | 6 | 0 |
 | Text | 13 | 3 | 8 | 0 |
-| Shapes, pictures and buttons | 15 | 4 | 10 | 0 |
+| Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
 | Animation, transitions, timeline | 12 | 2 | 8 | 0 |
@@ -25,7 +25,7 @@
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **111** | **37** | **59** | **12** |
+| **Total** | **112** | **37** | **58** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -128,7 +128,7 @@ Counted from the tables below; recount when a row changes.
 | Zoom picture (learner enlarges) | — | ⛔ | M40 |
 | Button icons (gallery, align, colour, remove) | — | ⛔ | M40 |
 | Selection groups | — | ⛔ | M40 |
-| Caption / callout shapes | — | ⛔ check gallery | M40 |
+| Caption / callout shapes | Insert › Media › Caption (Callouts category in `shape_gallery.rs`) | ✅ | — |
 | Export picture | — | ⛔ | M40 |
 
 ## Media

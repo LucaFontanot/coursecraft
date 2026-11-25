@@ -205,6 +205,7 @@ pub enum UiAction {
     Picture,
     MediaLibrary,
     Shape,
+    Caption,
     Video,
     Audio,
     RecordNarration,
@@ -397,6 +398,8 @@ pub enum UiMenu {
     Arrange,
     /// Shape ▾ (the shape gallery).
     Shapes,
+    /// Caption ▾ (callout shapes in the shape gallery).
+    Callouts,
     /// Question ▾ (the question kinds).
     Questions,
 }
@@ -1244,12 +1247,16 @@ const INSERT: &[Group] = &[
                 ),
                 "Pick a shape, then drag on the slide.",
             ),
-            item(
-                "insert.caption",
-                "Caption",
-                Icon::Subtitles,
-                LargeSplit,
-                NotYet("callout shapes"),
+            helped(
+                split(
+                    "insert.caption",
+                    "Caption",
+                    Icon::Subtitles,
+                    LargeSplit,
+                    Ui(UiAction::Caption),
+                    Menu::Ui(UiMenu::Callouts),
+                ),
+                "Pick a callout shape, then drag on the slide.",
             ),
             split(
                 "insert.video",

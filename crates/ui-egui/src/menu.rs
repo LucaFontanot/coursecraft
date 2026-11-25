@@ -2367,6 +2367,7 @@ fn render_extra_category_items(
             ui.close();
         }
         if ui.button("Shape").clicked() {
+            editor.ui.shape_gallery_category = None;
             editor.ui.show_shape_gallery_window = true;
             ui.close();
         }

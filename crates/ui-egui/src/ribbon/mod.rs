@@ -247,6 +247,7 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         }
         UiAction::Picture
         | UiAction::Shape
+        | UiAction::Caption
         | UiAction::TextBox
         | UiAction::MediaLibrary
         | UiAction::RecordNarration
@@ -381,7 +382,14 @@ fn run_ui(
         UiAction::SlideLayer => crate::toolbar::add_new_layer(editor),
         UiAction::Picture => crate::toolbar::insert_image(editor, requests),
         UiAction::MediaLibrary => editor.ui.show_media_library = true,
-        UiAction::Shape => editor.ui.show_shape_gallery_window = true,
+        UiAction::Shape => {
+            editor.ui.shape_gallery_category = None;
+            editor.ui.show_shape_gallery_window = true;
+        }
+        UiAction::Caption => {
+            editor.ui.shape_gallery_category = Some(coursecraft_course::ShapeCategory::Callouts);
+            editor.ui.show_shape_gallery_window = true;
+        }
         UiAction::Video => crate::toolbar::insert_video(editor, requests),
         UiAction::Audio => crate::toolbar::insert_audio(editor, requests),
         UiAction::RecordNarration => editor.open_record_narration(),
@@ -524,6 +532,13 @@ fn ui_selected(editor: &Editor, action: UiAction) -> bool {
         UiAction::Shape => matches!(
             editor.ui.placement_tool,
             Some(crate::PlacementTool::Shape(_) | crate::PlacementTool::Draw(_))
+        ),
+        UiAction::Caption => matches!(
+            editor.ui.placement_tool,
+            Some(crate::PlacementTool::Shape(kind))
+                if coursecraft_course::SHAPE_CATALOG
+                    .iter()
+                    .any(|info| info.kind == kind && info.category == coursecraft_course::ShapeCategory::Callouts)
         ),
         UiAction::CourseMap => editor.ui.story_view,
         UiAction::SlideView => !editor.ui.story_view && !editor.ui.master_view,
@@ -1158,6 +1173,7 @@ fn control(
         Action::Ui(
             UiAction::Arrange
                 | UiAction::Shape
+                | UiAction::Caption
                 | UiAction::Question
                 | UiAction::Effect(spec::EffectOp::Options(_))
         )
@@ -1436,7 +1452,12 @@ fn menu(
         }
         Menu::Ui(UiMenu::NewSlide) => crate::slides::show_new_slide_popup(ui, editor),
         Menu::Ui(UiMenu::Preview) => crate::menu::show_preview_menu_items(editor, ui, requests),
-        Menu::Ui(UiMenu::Shapes) => shapes_menu(editor, ui),
+        Menu::Ui(UiMenu::Shapes) => shapes_menu_category(editor, ui, None),
+        Menu::Ui(UiMenu::Callouts) => shapes_menu_category(
+            editor,
+            ui,
+            Some(coursecraft_course::ShapeCategory::Callouts),
+        ),
         Menu::Ui(UiMenu::Questions) => {
             for kind in crate::question::ALL_QUESTION_KINDS {
                 if ui
@@ -1458,14 +1479,26 @@ fn menu(
     }
 }
 
-/// Shape ▾: the shape gallery, as the old toolbar showed it.
-fn shapes_menu(editor: &mut Editor, ui: &mut Ui) {
+/// Shape ▾ / Caption ▾: the shape gallery, optionally filtered to one category.
+fn shapes_menu_category(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    category: Option<coursecraft_course::ShapeCategory>,
+) {
     let mut picked = None;
-    let output = crate::shape_gallery::show_shape_gallery(
-        ui,
-        &mut editor.ui.shape_gallery_query,
-        &mut |pick| picked = Some(pick),
-    );
+    let output = match category {
+        Some(cat) => crate::shape_gallery::show_shape_gallery_category(
+            ui,
+            &mut editor.ui.shape_gallery_query,
+            cat,
+            &mut |pick| picked = Some(pick),
+        ),
+        None => crate::shape_gallery::show_shape_gallery(
+            ui,
+            &mut editor.ui.shape_gallery_query,
+            &mut |pick| picked = Some(pick),
+        ),
+    };
     editor.ui.shape_gallery_rects = output.icons;
     editor.ui.shape_gallery_draw_rects = output.draw_icons;
     editor.ui.shape_gallery_search_rect = output.search_rect;

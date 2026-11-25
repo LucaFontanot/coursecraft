@@ -200,7 +200,7 @@ Shown when the Course Map view tab is active.
 | Media | Picture | LS | `object.add` `{image}` | ✅ | ▾ Picture from File… ✅, Media Library… ✅ (`media_library.rs`), Screenshot ⛔ |
 | | 360° Image | LS | — | 🚫 | Not planned: 360° images |
 | | Shape | LS | `object.add` `{shape}` | ✅ | `shape_gallery.rs` |
-| | Caption | LS | `object.add` `{shape: callout}` | ⛔ | callout shapes; check the shape gallery |
+| | Caption | LS | `object.add` `{shape: callout}` | ✅ | opens the shape gallery filtered to Callouts (`shape_gallery.rs`) |
 | | Video | LS | `object.add` `{video}` | 🟡 | ▾ Video from File… ✅, From Website (embed) ✅ (`web_insert.rs`), Record Webcam ⛔, Media Library… ✅ |
 | | Audio | LS | `object.add` `{audio}` | 🟡 | ▾ Audio from File… ✅, Media Library… ✅, Record Mic… ✅ (`record_narration.rs`), Text-to-Speech… ✅ (`audio_ai.rs`), AI Audio ▸ ⛔, Background Audio ▸ ✅ (`course.set_background_audio`), Options… ⛔ |
 | | Web Object | L | `object.add` `{web}` | ✅ | `web_insert.rs` |

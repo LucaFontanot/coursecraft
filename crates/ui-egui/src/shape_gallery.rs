@@ -48,7 +48,17 @@ pub fn show_shape_gallery_selected(
     selected: Option<ShapeKind>,
     on_pick: &mut dyn FnMut(GalleryPick),
 ) -> ShapeGalleryOutput {
-    show_shape_gallery_inner(ui, query, selected, true, on_pick)
+    show_shape_gallery_inner(ui, query, selected, true, None, on_pick)
+}
+
+/// Show the gallery filtered to a single shape category.
+pub fn show_shape_gallery_category(
+    ui: &mut Ui,
+    query: &mut String,
+    category: ShapeCategory,
+    on_pick: &mut dyn FnMut(GalleryPick),
+) -> ShapeGalleryOutput {
+    show_shape_gallery_inner(ui, query, None, true, Some(category), on_pick)
 }
 
 fn show_shape_gallery_inner(
@@ -56,6 +66,7 @@ fn show_shape_gallery_inner(
     query: &mut String,
     selected: Option<ShapeKind>,
     close_on_pick: bool,
+    only_category: Option<ShapeCategory>,
     on_pick: &mut dyn FnMut(GalleryPick),
 ) -> ShapeGalleryOutput {
     let mut output = ShapeGalleryOutput::default();
@@ -90,47 +101,54 @@ fn show_shape_gallery_inner(
                 false,
             );
             let mut any = false;
-            let draw_matches: Vec<DrawTool> = DrawTool::ALL
-                .iter()
-                .copied()
-                .filter(|tool| needle.is_empty() || tool.label().to_lowercase().contains(&needle))
-                .collect();
-            if !draw_matches.is_empty() {
-                any = true;
-                ui.label(caption("Draw"));
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(ICON_GAP, ICON_GAP);
-                    for tool in draw_matches {
-                        let (rect, response) =
-                            ui.allocate_exact_size(vec2(ICON_SIZE, ICON_SIZE), Sense::click());
-                        response.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Button, true, tool.label())
-                        });
-                        let p = palette(ui.ctx());
-                        if response.hovered() {
-                            ui.painter().rect_filled(
-                                rect,
-                                CornerRadius::same(RADIUS_SM as u8),
-                                p.hover,
-                            );
-                        }
-                        paint_draw_tool(ui.painter(), rect.shrink(5.0), tool, p.text_secondary);
-                        output.draw_icons.push((tool, rect));
-                        let response = response.on_hover_text(tool.label());
-                        if response.clicked() {
-                            on_pick(GalleryPick::Draw(tool));
-                            if close_on_pick {
-                                ui.close();
+            if only_category.is_none() {
+                let draw_matches: Vec<DrawTool> = DrawTool::ALL
+                    .iter()
+                    .copied()
+                    .filter(|tool| {
+                        needle.is_empty() || tool.label().to_lowercase().contains(&needle)
+                    })
+                    .collect();
+                if !draw_matches.is_empty() {
+                    any = true;
+                    ui.label(caption("Draw"));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(ICON_GAP, ICON_GAP);
+                        for tool in draw_matches {
+                            let (rect, response) =
+                                ui.allocate_exact_size(vec2(ICON_SIZE, ICON_SIZE), Sense::click());
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::Button, true, tool.label())
+                            });
+                            let p = palette(ui.ctx());
+                            if response.hovered() {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    CornerRadius::same(RADIUS_SM as u8),
+                                    p.hover,
+                                );
+                            }
+                            paint_draw_tool(ui.painter(), rect.shrink(5.0), tool, p.text_secondary);
+                            output.draw_icons.push((tool, rect));
+                            let response = response.on_hover_text(tool.label());
+                            if response.clicked() {
+                                on_pick(GalleryPick::Draw(tool));
+                                if close_on_pick {
+                                    ui.close();
+                                }
                             }
                         }
-                    }
-                });
-                ui.add_space(4.0);
+                    });
+                    ui.add_space(4.0);
+                }
             }
             for category in ShapeCategory::ALL {
                 // The fixed-direction line kinds stay loadable and render, but
                 // the draw tools replace them in the gallery.
                 if *category == ShapeCategory::Lines {
+                    continue;
+                }
+                if only_category.is_some_and(|target| *category != target) {
                     continue;
                 }
                 let matches: Vec<&ShapeInfo> = SHAPE_CATALOG
@@ -329,6 +347,7 @@ pub fn show_shape_gallery_window(editor: &mut crate::Editor, ctx: &egui::Context
                     &mut editor.ui.shape_gallery_query,
                     None,
                     false,
+                    editor.ui.shape_gallery_category,
                     &mut |pick| picked = Some(pick),
                 );
                 editor.ui.shape_gallery_rects = output.icons;
@@ -342,9 +361,11 @@ pub fn show_shape_gallery_window(editor: &mut crate::Editor, ctx: &egui::Context
             GalleryPick::Draw(tool) => crate::toolbar::insert_draw(editor, tool),
         }
         editor.ui.show_shape_gallery_window = false;
+        editor.ui.shape_gallery_category = None;
         editor.ui.shape_gallery_query.clear();
     } else if !open {
         editor.ui.show_shape_gallery_window = false;
+        editor.ui.shape_gallery_category = None;
         editor.ui.shape_gallery_query.clear();
     }
 }
