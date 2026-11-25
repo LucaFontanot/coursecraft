@@ -807,14 +807,20 @@ The LMS bridge maps `score` to `cmi.core.score.raw` (set to `percent`), `cmi.cor
 | `lms_status` | `Passed` | `Completed` | `Failed` | `Incomplete` |
 |---|---|---|---|---|
 | `auto` (default) | `passed` | `completed` | `failed` | `incomplete` |
+| `auto_keep_completed` | `passed` | `completed` | `failed` | `incomplete` |
 | `passed_incomplete` | `passed` | `passed` | `incomplete` | `incomplete` |
 | `passed_failed` | `passed` | `passed` | `failed` | `incomplete` |
 | `completed_incomplete` | `completed` | `completed` | `incomplete` | `incomplete` |
 | `completed_failed` | `completed` | `completed` | `failed` | `incomplete` |
 
-All five standards enforce a monotonic non-downgrading status lattice (`incomplete < failed < completed < passed`): once a learner achieves `completed` (or `passed`), neither a later failure, an `incomplete` status, a lower score, nor a relaunch/resume may downgrade it.
+Reported status never goes down. SCORM 2004, cmi5, xAPI and LTI 1.3 use the order `incomplete < failed < completed < passed`: once a learner achieves `completed` (or `passed`), neither a later failure, an `incomplete` status, a lower score, nor a relaunch/resume may downgrade it.
 
-In SCORM 1.2, where `cmi.core.lesson_status` is a single field, `ever_completed` is seeded on `start` when `cmi.core.lesson_status` is `"completed"` or `"passed"`. Once `passed` has been reported (including via `Completed` under `passed_incomplete` or `passed_failed`), or `completed` has been reported under `completed_incomplete` or `completed_failed`, a later fail, incomplete, or lower score never downgrades it—either within the same session or after resume—while a passing score update (when no score was recorded yet, or with a higher score) still updates `cmi.core.score.raw`. Under `auto`, `passed` is protected in the same way (and a later `completed` does not overwrite `passed`), while `completed` (`ever_completed`) is never downgraded to `failed` or `incomplete` (a later `Score(p, Failed)` still writes `cmi.core.score.raw = p` while leaving `cmi.core.lesson_status` as `"completed"`), and `completed` may still upgrade to `passed`. In the same input batch (for example `[Score(40, Failed), Completion(Failed), Completion(Completed)]`), `score.raw` is written and `lesson_status` upgrades to `"completed"` (under `auto` / `completed_*`) or `"passed"` (under `passed_*`).
+In SCORM 1.2, where `cmi.core.lesson_status` is a single field, the bridge keeps the rank of the highest status it has reported (seeded on `start` from the LMS's `cmi.core.lesson_status`, so it survives a relaunch) and skips any status write of a lower rank. The order depends on `lms_status`:
+
+- `auto` (default): a quiz result outranks a plain completion, `incomplete < completed < failed < passed`. A fail after `completed` writes `failed`; a later `completed` (for example from Slides viewed) never hides a `failed`; a pass still upgrades to `passed`.
+- `auto_keep_completed` and the four fixed mappings: `incomplete < failed < completed < passed`, applied to the mapped value. Once `completed` (or `passed`) is reported, a later fail or incomplete never downgrades it, and a fail after `completed` still writes `cmi.core.score.raw`.
+
+Either way the result does not depend on the order of events: in one input `[Score(40, Failed), Completion(Failed), Completion(Completed)]` writes `score.raw = 40` and leaves `lesson_status` `"failed"` under `auto`, `"completed"` under `auto_keep_completed` / `completed_*`, and `"passed"` under `passed_*`. Once `passed` is reported (including via `Completed` under `passed_*`, or `completed` under `completed_*`), a later lower score is not written, while a passing score update (when no score was recorded yet, or with a higher score) still updates `cmi.core.score.raw`.
 
 In SCORM 2004, `ever_completed` is seeded on `start` when `cmi.completion_status` is `"completed"` or `cmi.success_status` is `"passed"`; `cmi.completion_status` never downgrades from `"completed"` to `"incomplete"`, and `cmi.success_status` never downgrades from `"passed"` to `"failed"`.
 

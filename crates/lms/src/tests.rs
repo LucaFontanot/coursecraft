@@ -2373,16 +2373,50 @@ fn course_with_lms_status(lms_status: coursecraft_course::LmsStatus) -> Course {
 }
 
 #[test]
-fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
+fn tr_08_scorm12_monotonic_all_lms_status_modes() {
     use coursecraft_course::LmsStatus;
     let state = PlayerState::default();
 
+    // (mode, after slides, slides then fail, after pass, fail+slides batch, relaunch then fail)
     let modes = [
-        (LmsStatus::Auto, "completed", "completed", "passed"),
-        (LmsStatus::PassedIncomplete, "passed", "passed", "passed"),
-        (LmsStatus::PassedFailed, "passed", "passed", "passed"),
+        // Quiz result wins: a fail outranks a plain completion.
+        (
+            LmsStatus::Auto,
+            "completed",
+            "failed",
+            "passed",
+            "failed",
+            "failed",
+        ),
+        // Completion stays.
+        (
+            LmsStatus::AutoKeepCompleted,
+            "completed",
+            "completed",
+            "passed",
+            "completed",
+            "completed",
+        ),
+        (
+            LmsStatus::PassedIncomplete,
+            "passed",
+            "passed",
+            "passed",
+            "passed",
+            "passed",
+        ),
+        (
+            LmsStatus::PassedFailed,
+            "passed",
+            "passed",
+            "passed",
+            "passed",
+            "passed",
+        ),
         (
             LmsStatus::CompletedIncomplete,
+            "completed",
+            "completed",
             "completed",
             "completed",
             "completed",
@@ -2392,10 +2426,14 @@ fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
             "completed",
             "completed",
             "completed",
+            "completed",
+            "completed",
         ),
     ];
 
-    for (mode, after_slides, after_slides_then_fail, after_pass) in modes {
+    for (mode, after_slides, after_slides_then_fail, after_pass, after_batch, after_relaunch) in
+        modes
+    {
         let course = course_with_lms_status(mode);
 
         // 1. Slides viewed -> then quiz fail (40%) -> never downgrades -> then quiz pass (90%).
@@ -2443,7 +2481,7 @@ fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
             after_slides_then_fail,
             "{mode:?} slides-then-fail"
         );
-        if mode == LmsStatus::Auto {
+        if matches!(mode, LmsStatus::Auto | LmsStatus::AutoKeepCompleted) {
             assert_eq!(api.get_value("cmi.core.score.raw"), "40");
         }
 
@@ -2526,7 +2564,7 @@ fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
         );
         assert_eq!(
             api2.get_value("cmi.core.lesson_status"),
-            after_slides,
+            after_batch,
             "{mode:?} fail+slides batch"
         );
         assert_eq!(api2.get_value("cmi.core.score.raw"), "40");
@@ -2563,7 +2601,7 @@ fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
         );
         assert_eq!(
             relaunch.get_value("cmi.core.lesson_status"),
-            after_slides,
+            after_relaunch,
             "{mode:?} relaunch no downgrade"
         );
         let _ = bridge3.finish_session(&mut relaunch, 200);
@@ -2720,7 +2758,10 @@ fn tr_08_scorm12_cross_batch_fail_then_slides_viewed() {
     use coursecraft_course::LmsStatus;
     let state = PlayerState::default();
     let modes = [
-        (LmsStatus::Auto, "failed", "completed"),
+        // Quiz result wins: viewing the remaining slides never hides the fail.
+        (LmsStatus::Auto, "failed", "failed"),
+        // Completion stays: viewing the remaining slides upgrades to completed.
+        (LmsStatus::AutoKeepCompleted, "failed", "completed"),
         (LmsStatus::PassedIncomplete, "incomplete", "passed"),
         (LmsStatus::PassedFailed, "failed", "passed"),
         (LmsStatus::CompletedIncomplete, "incomplete", "completed"),

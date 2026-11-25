@@ -704,7 +704,7 @@ Any breaking change bumps `SCHEMA_VERSION` and ships a migration in `coursecraft
 `editor.last_publish` is optional and omitted when unset. It stores `{standard, lms_status?}`:
 
 - `standard`: last chosen publish target (`"scorm12"`, `"scorm2004"`, `"cmi5"`, `"xapi"`, `"lti"`, `"web"`).
-- `lms_status` (optional, default `"auto"`, omitted when default): how SCORM 1.2 maps runtime completion (`Passed`, `Failed`, `Completed`, `Incomplete`) to `cmi.core.lesson_status` (`"auto"`, `"passed_incomplete"`, `"passed_failed"`, `"completed_incomplete"`, `"completed_failed"`). Ignored by SCORM 2004, cmi5, xAPI, LTI, and Web.
+- `lms_status` (optional, default `"auto"`, omitted when default): how SCORM 1.2 maps runtime completion (`Passed`, `Failed`, `Completed`, `Incomplete`) to `cmi.core.lesson_status` (`"auto"`, `"auto_keep_completed"`, `"passed_incomplete"`, `"passed_failed"`, `"completed_incomplete"`, `"completed_failed"`). `"auto"` lets a failed quiz show as `failed` even after `completed`; `"auto_keep_completed"` reports the same values but keeps a reported `completed` (see `docs/spec/triggers.md`). Ignored by SCORM 2004, cmi5, xAPI, LTI, and Web.
 
 ## Slide size
 

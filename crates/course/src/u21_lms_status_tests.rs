@@ -21,6 +21,7 @@ fn publish_settings_defaults_lms_status_to_auto_and_omits_from_json() {
 fn publish_settings_round_trips_every_lms_status_variant() {
     let cases = [
         (LmsStatus::Auto, "auto"),
+        (LmsStatus::AutoKeepCompleted, "auto_keep_completed"),
         (LmsStatus::PassedIncomplete, "passed_incomplete"),
         (LmsStatus::PassedFailed, "passed_failed"),
         (LmsStatus::CompletedIncomplete, "completed_incomplete"),

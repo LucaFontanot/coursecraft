@@ -439,9 +439,13 @@ impl TrackingSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LmsStatus {
-    /// Report the status the runtime computed (default).
+    /// Report the status the runtime computed (default). A quiz result outranks a plain
+    /// completion: `incomplete < completed < failed < passed`.
     #[default]
     Auto,
+    /// Report the status the runtime computed, but a reported completion stays:
+    /// `incomplete < failed < completed < passed`.
+    AutoKeepCompleted,
     /// Passed or Completed -> `passed`; Failed or Incomplete -> `incomplete`.
     PassedIncomplete,
     /// Passed or Completed -> `passed`; Failed -> `failed`; Incomplete -> `incomplete`.

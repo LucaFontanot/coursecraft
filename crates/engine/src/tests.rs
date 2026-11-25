@@ -12616,10 +12616,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 24_514, "registry golden table byte length");
+    assert_eq!(table.len(), 24_558, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        13_282_540_994_548_445_767,
+        18_394_526_237_424_819_467,
         "registry golden table FNV-1a hash"
     );
 }
