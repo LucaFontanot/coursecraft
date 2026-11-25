@@ -157,6 +157,17 @@ static REGISTRY: &[Command] = &[
         run: course::course_set_publish_settings,
     },
     Command {
+        id: "course.set_tracking",
+        label: "Tracking",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slides_viewed"?: {"mode": "all"} | {"mode": "at_least", "count": 1..} | null, "quiz"?: {"slide"?: id | null} | null}"#,
+        mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
+        run: course::course_set_tracking,
+    },
+    Command {
         id: "course.set_background_audio",
         label: "Set background audio",
         menu: "",

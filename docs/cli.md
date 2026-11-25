@@ -245,6 +245,7 @@ course.set_title     -                        -          {"title": string}
 course.set_player    Project/Player settings… -          {"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}, "seekbar"?: "free"|"locked"|"until_timeline_ends"}
 course.set_quiz      Project/Quiz settings…   -          {"passing_percent": 0..=100|null}
 course.set_publish_settings -                 -          {"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}
+course.set_tracking  -                        -          {"slides_viewed"?: {"mode": "all"} | {"mode": "at_least", "count": 1..} | null, "quiz"?: {"slide"?: id | null} | null}
 course.set_background_audio -                        -          {"src"?: string | null, "volume"?: number, "loop"?: bool}
 course.add_finish_button -                        -          {}
 course.recolor       -                        -          {"from": "#RRGGBB", "to": "#RRGGBB"}  (every use of a colour, course-wide; keeps each use's alpha; returns {changed})

@@ -4,8 +4,9 @@ use std::collections::HashSet;
 
 use coursecraft_course::{
     Action, BackgroundAudio, Color, Condition, Event, FontFace, FontStyle, Guide, Location,
-    MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, QuizSettings, Trigger, Value, VariableDef,
-    course_string_locations, find_in_course, replace_in_target, string_mut,
+    MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, QuizSettings, QuizTracking, SlidesViewedTracking,
+    Trigger, Value, VariableDef, course_string_locations, find_in_course, replace_in_target,
+    string_mut,
 };
 use serde_json::{Value as Json, json};
 
@@ -247,6 +248,48 @@ pub(super) fn course_set_publish_settings(s: &mut Session, p: &Json) -> Result<J
     s.course.editor.last_publish = Some(settings.clone());
     keep_valid(s, was_valid)?;
     Ok(json!({ "last_publish": settings }))
+}
+
+pub(super) fn course_set_tracking(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "course.set_tracking";
+    let was_valid = s.is_playable();
+    let map = obj(C, p)?;
+    for key in map.keys() {
+        if key != "slides_viewed" && key != "quiz" {
+            return Err(bad(C, format!("unknown parameter `{key}`")));
+        }
+    }
+    let has_slides = map.contains_key("slides_viewed");
+    let has_quiz = map.contains_key("quiz");
+    if !has_slides && !has_quiz {
+        return Err(bad(C, "provide `slides_viewed` and/or `quiz`"));
+    }
+    if let Some(val) = map.get("slides_viewed") {
+        if val.is_null() {
+            s.course.tracking.slides_viewed = None;
+        } else {
+            let sv: SlidesViewedTracking = serde_json::from_value(val.clone())
+                .map_err(|e| bad(C, format!("`slides_viewed`: {e}")))?;
+            if matches!(sv, SlidesViewedTracking::AtLeast { count: 0 }) {
+                return Err(bad(C, "`slides_viewed.count` must be at least 1"));
+            }
+            s.course.tracking.slides_viewed = Some(sv);
+        }
+    }
+    if let Some(val) = map.get("quiz") {
+        if val.is_null() {
+            s.course.tracking.quiz = None;
+        } else {
+            let qz: QuizTracking =
+                serde_json::from_value(val.clone()).map_err(|e| bad(C, format!("`quiz`: {e}")))?;
+            if let Some(ref id) = qz.slide {
+                validate_id(C, id)?;
+            }
+            s.course.tracking.quiz = Some(qz);
+        }
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "tracking": s.course.tracking }))
 }
 
 pub(super) fn course_set_background_audio(s: &mut Session, p: &Json) -> Result<Json> {
