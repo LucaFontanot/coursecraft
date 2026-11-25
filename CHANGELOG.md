@@ -5,6 +5,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 ## 0.5.1 (unreleased)
 
 - Question choices no longer squeeze into a narrow column when the question editor is in a narrow panel.
+- Text boxes now resize while you type (one-line boxes grow sideways, wrapping boxes grow downward).
 
 ## 0.5.0
 
