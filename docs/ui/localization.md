@@ -3,7 +3,7 @@
 > Part of [the ribbon plan](README.md). **Decision (2026-11-23, owner):** the editor's own
 > interface is localized with **`craft-i18n`** (runtime in `storytold/craft-libs`, catalogs in
 > the `craft-i18n` data repository), as the other Craft apps are. Built together with the UI
-> rewrite (M37 step 0) so every new string goes through it from the start.
+> rewrite (M38 step 0) so every new string goes through it from the start.
 
 ## What this covers, and what it doesn't
 

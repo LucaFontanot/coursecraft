@@ -93,7 +93,7 @@ Project commands (below the start actions once a course is open):
 
 Shown when the Course Map view tab is active.
 
-> **In the code (M37 steps 1–2):** every main tab (Home in both variants, Insert, Slides, Design,
+> **In the code (M38 steps 1–2):** every main tab (Home in both variants, Insert, Slides, Design,
 > Transitions, Animations, View, Help) is drawn from
 > `crates/ui-egui/src/ribbon/spec.rs`; the ribbon is on by default (Preferences › Interface) and
 > replaces the flat toolbar, with Save, Undo and Redo in a quick access toolbar left of the tab

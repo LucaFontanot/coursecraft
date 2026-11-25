@@ -3,7 +3,7 @@
 > Part of [the ribbon plan](README.md). Kinds, actions and status marks as in [ribbon.md](ribbon.md).
 > Reference: [storyline-observed.md](storyline-observed.md) §3.
 
-> **In the code (M37 step 3, 2026-11-24):** every contextual tab below is drawn from
+> **In the code (M38 step 3, 2026-11-24):** every contextual tab below is drawn from
 > `CONTEXT_TABS` in `crates/ui-egui/src/ribbon/spec.rs`; `ribbon/contextual.rs` decides which ones
 > the selection shows and runs the controls that act on the selected object. The coloured caption
 > sits in the tab strip, left of its tabs. Built features that the ribbon doesn't reach yet are

@@ -34,13 +34,13 @@ Counted from the tables below; recount when a row changes.
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
 | New, Open, Save, Save As | File menu | ✅ | — |
-| Recent projects | File › Open Recent (names) | 🟡 thumbnails missing | M37 |
-| Start screen / File page with start actions and Recent | File page from the File tab and on launch (`file_page.rs`, its Start section is the welcome screen), Recent with first-slide thumbnails; news to come | 🟡 news | M37 |
+| Recent projects | File › Open Recent (names) | 🟡 thumbnails missing | M38 |
+| Start screen / File page with start actions and Recent | File page from the File tab and on launch (`file_page.rs`, its Start section is the welcome screen), Recent with first-slide thumbnails; news to come | 🟡 news | M38 |
 | Import PowerPoint | File › Import | ✅ | — |
 | Import questions (CSV / spreadsheet) | File › Import | ✅ | — |
 | Translation export / import (XLIFF) | File › Translation | ✅ | — |
 | Version history, autosave and recovery | `version_history.rs` | ✅ | — |
-| Close project (without quitting) | — | ⛔ | M37 |
+| Close project (without quitting) | — | ⛔ | M38 |
 | Slide size and default size | Slide Size dialog | ✅ | — |
 | Project info (title, author, description) | Course settings | ✅ | — |
 | Team Slides (shared cloud library) | — | — | — |
@@ -51,23 +51,23 @@ Counted from the tables below; recount when a row changes.
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
 | Scenes; new scene; rename | `scene.*` | ✅ | — |
-| Starting scene (red flag) | — | ⛔ needs model field + runtime rule | M40 |
+| Starting scene (red flag) | — | ⛔ needs model field + runtime rule | M41 |
 | Story view (Course Map): cards, zoom, fit | `course_map.rs` | ✅ | — |
-| Course Map: collapse scene cards, branch lines between scenes | — | ⛔ | M41 |
+| Course Map: collapse scene cards, branch lines between scenes | — | ⛔ | M42 |
 | New slide from layout, Basic Layouts gallery | `slide.add_from_layout` | ✅ | — |
 | My Templates | `template.*` | ✅ | — |
 | Duplicate, delete, move slides | `slide.*` | ✅ | — |
-| Apply layout; reset slide to layout | `slide.set_master` | 🟡 reset ⛔ | M40 |
+| Apply layout; reset slide to layout | `slide.set_master` | 🟡 reset ⛔ | M41 |
 | Slide masters and layouts (insert, rename, delete) | `master.*` | ✅ | — |
-| Master: Preserve, Title checkbox, Insert Placeholder | — | ⛔ | M40 |
-| Hide background graphics | — | ⛔ | M40 |
-| Feedback master | — | ⛔ | M40 |
+| Master: Preserve, Title checkbox, Insert Placeholder | — | ⛔ | M41 |
+| Hide background graphics | — | ⛔ | M41 |
+| Feedback master | — | ⛔ | M41 |
 | Slide layers (new, duplicate, delete, dim, properties) | `layer.*` | ✅ | — |
 | Slide properties: advance, revisit, prev/next/submit | `slide.update`, `slide.set_player_overrides` | ✅ | — |
-| Swipe gestures (prev/next) | — | ⛔ | M40 |
-| Scene index menu | — | ⛔ behaviour to confirm | M40 |
-| Focus order | audit only | 🟡 dialog missing | M38 |
-| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes | 🟡 theme-font dialog | M38 |
+| Swipe gestures (prev/next) | — | ⛔ | M41 |
+| Scene index menu | — | ⛔ behaviour to confirm | M41 |
+| Focus order | audit only | 🟡 dialog missing | M39 |
+| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes | 🟡 theme-font dialog | M39 |
 
 ## Text
 
@@ -80,23 +80,23 @@ Counted from the tables below; recount when a row changes.
 | Character spacing | `letter_spacing` | ✅ | — |
 | Font colour with theme colours and eyedropper | `eyedropper.rs` | ✅ | — |
 | Text styles | `text_style.*` | ✅ | — |
-| Bullets, numbering, indent, line spacing, alignment | `text.set_paragraph(s)`; Home › Paragraph through `text_format.rs` | 🟡 numbering styles | M38 |
+| Bullets, numbering, indent, line spacing, alignment | `text.set_paragraph(s)`; Home › Paragraph through `text_format.rs` | 🟡 numbering styles | M39 |
 | Find and replace | `course.find`, `course.replace` | ✅ | — |
 | Spelling | `spell_check.rs` | ✅ | — |
 | Hyperlinks | `text.set_link` | ✅ | — |
 | Format painter | `format_painter.rs` | ✅ | — |
 | Theme fonts (heading + body) | Theme dialog | ✅ | — |
-| Paste options (destination theme, keep source, text only) | `object.paste` | 🟡 one mode | M38 |
+| Paste options (destination theme, keep source, text only) | `object.paste` | 🟡 one mode | M39 |
 | Vertical text alignment | `text.set_paragraph` `{valign}`: Home › Paragraph › Align Text, inspector | ✅ | — |
-| Clear formatting | — | ⛔ | M38 |
-| Text shadow | — | ⛔ | M38 |
-| Change case | — | ⛔ | M38 |
-| Highlight colour | — | ⛔ needs model field | M38 |
-| Text direction (rotate, stacked) | — | ⛔ | M38 |
-| Font and Paragraph settings (Storyline's dialogs) | Text settings panel (`panels.rs`, from Font ↘ and Paragraph ↘): every text control, space before and after; caps, highlight, underline styles, tab stops and columns drawn disabled | 🟡 | M38 |
-| Slide number field | — | ⛔ | M38 |
-| Symbol picker | — | ⛔ | M38 |
-| Insert variable reference | — | ⛔ variables exist | M38 |
+| Clear formatting | — | ⛔ | M39 |
+| Text shadow | — | ⛔ | M39 |
+| Change case | — | ⛔ | M39 |
+| Highlight colour | — | ⛔ needs model field | M39 |
+| Text direction (rotate, stacked) | — | ⛔ | M39 |
+| Font and Paragraph settings (Storyline's dialogs) | Text settings panel (`panels.rs`, from Font ↘ and Paragraph ↘): every text control, space before and after; caps, highlight, underline styles, tab stops and columns drawn disabled | 🟡 | M39 |
+| Slide number field | — | ⛔ | M39 |
+| Symbol picker | — | ⛔ | M39 |
+| Insert variable reference | — | ⛔ variables exist | M39 |
 
 ## Shapes, pictures and buttons
 
@@ -115,22 +115,22 @@ Counted from the tables below; recount when a row changes.
 | Pictures: insert, replace, crop | `object.set_crop`, `crop.rs` | ✅ | — |
 | Picture border | `object.update` | ✅ | — |
 | States (built-in and custom, items inside states) | M29 | ✅ | — |
-| Recolor | `course.recolor` | 🟡 SVG only | M39 |
-| Reset picture | | 🟡 | M39 |
-| Picture effects | | 🟡 as shape effects | M39 |
-| Button styles, fill, border, effects | | 🟡 | M39 |
-| When Clicked Action on a button | trigger editor | 🟡 not pre-filled | M39 |
-| Reflection, soft edges | — | ⛔ | M39 |
-| Change shape (keep format) | — | ⛔ | M39 |
+| Recolor | `course.recolor` | 🟡 SVG only | M40 |
+| Reset picture | | 🟡 | M40 |
+| Picture effects | | 🟡 as shape effects | M40 |
+| Button styles, fill, border, effects | | 🟡 | M40 |
+| When Clicked Action on a button | trigger editor | 🟡 not pre-filled | M40 |
+| Reflection, soft edges | — | ⛔ | M40 |
+| Change shape (keep format) | — | ⛔ | M40 |
 | Size and Position dialog | the Size and Position panel (`size_panel.rs`): width and height with an aspect lock, rotation, flips, position from the top left or the centre, lock | ✅ | — |
-| Brightness, contrast | — | ⛔ | M39 |
-| Picture styles (frames, bevels) | — | ⛔ | M39 |
-| Crop to shape | — | ⛔ | M39 |
-| Zoom picture (learner enlarges) | — | ⛔ | M39 |
-| Button icons (gallery, align, colour, remove) | — | ⛔ | M39 |
-| Button sets | — | ⛔ | M39 |
-| Caption / callout shapes | — | ⛔ check gallery | M39 |
-| Export picture | — | ⛔ | M39 |
+| Brightness, contrast | — | ⛔ | M40 |
+| Picture styles (frames, bevels) | — | ⛔ | M40 |
+| Crop to shape | — | ⛔ | M40 |
+| Zoom picture (learner enlarges) | — | ⛔ | M40 |
+| Button icons (gallery, align, colour, remove) | — | ⛔ | M40 |
+| Button sets | — | ⛔ | M40 |
+| Caption / callout shapes | — | ⛔ check gallery | M40 |
+| Export picture | — | ⛔ | M40 |
 
 ## Media
 
@@ -146,14 +146,14 @@ Counted from the tables below; recount when a row changes.
 | Web object | `object.add` | ✅ | — |
 | Media library (list, replace, unused) | `media_library.rs` | ✅ | — |
 | Lottie animation | `object.set_lottie` | ✅ (CourseCraft extra) | — |
-| Audio / video editor | trim only | 🟡 | M39 |
-| Closed captions (add, import, export, delete) | `object.set_captions` | 🟡 | M39 |
-| AI audio (sound effects, music) | — | ⛔ | M42 |
-| Audio options dialog | — | 🟡 | M39 |
-| Export audio / video | — | ⛔ | M39 |
-| Compression setting | — | ⛔ | M39 |
-| Show video in a new window | — | ⛔ | M39 |
-| Record webcam | — | ⛔ | M39 |
+| Audio / video editor | trim only | 🟡 | M40 |
+| Closed captions (add, import, export, delete) | `object.set_captions` | 🟡 | M40 |
+| AI audio (sound effects, music) | — | ⛔ | M43 |
+| Audio options dialog | — | 🟡 | M40 |
+| Export audio / video | — | ⛔ | M40 |
+| Compression setting | — | ⛔ | M40 |
+| Show video in a new window | — | ⛔ | M40 |
+| Record webcam | — | ⛔ | M40 |
 | 360° images | — | 🚫 | — |
 
 ## Interactivity
@@ -163,7 +163,7 @@ Counted from the tables below; recount when a row changes.
 | Triggers: actions, events, conditions | `trigger.*` | ✅ | — |
 | Object / slide / layer / player trigger sections | `triggers.rs` | ✅ | — |
 | Variables | `variable.*` | ✅ | — |
-| Buttons, hotspots, markers | `object.add`, `object.set_marker`; no hotspot object yet (hotspot questions and the Hotspot reveal interaction only) | 🟡 | M37 |
+| Buttons, hotspots, markers | `object.add`, `object.set_marker`; no hotspot object yet (hotspot questions and the Hotspot reveal interaction only) | 🟡 | M38 |
 | Sliders, dials | `Slider`, `Dial` | ✅ | — |
 | Text entry, checkbox, radio buttons | `object.set_input` | ✅ | — |
 | Drag and drop | `object.set_drag` | ✅ | — |
@@ -173,10 +173,10 @@ Counted from the tables below; recount when a row changes.
 | Timer, meter, motion path | `object.set_timer`, `object.set_meter`, `object.add_motion_path` | ✅ | — |
 | Glossary, resources | `glossary.*`, `resource.*` | ✅ | — |
 | Copy and paste triggers | `triggers.rs` | ✅ | — |
-| Trigger dialog (Action / When / Conditions form) | inline editor | 🟡 | M37 |
-| Built-in states for every input | M29 | 🟡 check the 5 button states | M39 |
-| Custom mouse cursor | — | ⛔ | M40 |
-| Convert slide to custom question | — | ⛔ | M40 |
+| Trigger dialog (Action / When / Conditions form) | inline editor | 🟡 | M38 |
+| Built-in states for every input | M29 | 🟡 check the 5 button states | M40 |
+| Custom mouse cursor | — | ⛔ | M41 |
+| Convert slide to custom question | — | ⛔ | M41 |
 
 ## Animation, transitions, timeline
 
@@ -192,18 +192,18 @@ Counted from the tables below; recount when a row changes.
 | Slide duration | `slide.set_duration` | ✅ | — |
 | Play / stop / zoom in timeline | `timeline_playback.rs` | ✅ | — |
 | Timeline shows current layer; group rows expand | `timeline.rs` | ✅ | — |
-| Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`) with the six effects the runtime has | 🟡 subset | M41 |
+| Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`) with the six effects the runtime has | 🟡 subset | M42 |
 | Transition effect options | Transitions › Effect Options ▾ (from left, right, top, bottom) | ✅ | — |
-| Path options | | 🟡 | M41 |
-| Emphasis animations | — | ⛔ | M41 |
-| Animation painter | — | ⛔ | M41 |
-| Sequence by paragraph (build steps) | — | ⛔ | M41 |
+| Path options | | 🟡 | M42 |
+| Emphasis animations | — | ⛔ | M42 |
+| Animation painter | — | ⛔ | M42 |
+| Sequence by paragraph (build steps) | — | ⛔ | M42 |
 | Transition: apply to all | `slide.set_transition_all`, Transitions › Apply To All | ✅ | — |
-| Timeline: fit to longest, reset, align to playhead/cue | — | ⛔ | M41 |
-| Timing dialog | — | ⛔ | M41 |
-| Zoom region (camera zoom) | — | ⛔ | M41 |
-| C key adds a cue point while playing | | ⛔ verify | M41 |
-| Timeline row context menu complete | | ⛔ | M41 |
+| Timeline: fit to longest, reset, align to playhead/cue | — | ⛔ | M42 |
+| Timing dialog | — | ⛔ | M42 |
+| Zoom region (camera zoom) | — | ⛔ | M42 |
+| C key adds a cue point while playing | | ⛔ verify | M42 |
+| Timeline row context menu complete | | ⛔ | M42 |
 
 ## Questions and quizzes
 
@@ -218,12 +218,12 @@ Counted from the tables below; recount when a row changes.
 | Question banks, draw from bank | `bank.*` | ✅ | — |
 | Results slide | `results.insert` | ✅ | — |
 | Certificate slide | `certificate.insert` | ✅ (CourseCraft extra) | — |
-| Feedback by choice | | 🟡 verify | M40 |
-| Scoring by choice | | 🟡 | M40 |
-| Insert Question dialog with filters and preview | new-slide popup | 🟡 | M37 |
-| Question form view (grid editor) | inspector | ⛔ | M40 |
-| Feedback master | — | ⛔ | M40 |
-| Media in question form (per choice / feedback) | — | ⛔ | M40 |
+| Feedback by choice | | 🟡 verify | M41 |
+| Scoring by choice | | 🟡 | M41 |
+| Insert Question dialog with filters and preview | new-slide popup | 🟡 | M38 |
+| Question form view (grid editor) | inspector | ⛔ | M41 |
+| Feedback master | — | ⛔ | M41 |
+| Media in question form (per choice / feedback) | — | ⛔ | M41 |
 
 ## Player, preview, publish
 
@@ -239,17 +239,17 @@ Counted from the tables below; recount when a row changes.
 | Tracking by slides viewed / quiz | `course.set_publish_settings` | ✅ | — |
 | Publish video (MP4), Word, PDF | Export | ✅ | — |
 | Notes as learner transcript | player | ✅ | — |
-| Text labels (edit the player's own strings) | — | ⛔ verify | M42 |
-| Player Properties dialog with its own ribbon and live preview | Course settings | 🟡 | M37 |
-| Publish dialog: list on the left, property links | `publish.rs` | 🟡 | M37 |
-| Preview: Replay slide / scene / course | | 🟡 | M42 |
-| Save player / import player | | 🟡 verify | M42 |
-| Preview device sizes (desktop, tablet, phone; both orientations) | — | ⛔ | M42 |
-| Preview: Edit Slide | — | ⛔ | M42 |
-| Preview: Inspect (variables, trigger log) | — | ⛔ | M42 |
-| Swipe in player | — | ⛔ | M40 |
-| Publish quality setting | — | ⛔ | M42 |
-| Report to external LRS alongside LMS | | ⛔ verify | M42 |
+| Text labels (edit the player's own strings) | — | ⛔ verify | M43 |
+| Player Properties dialog with its own ribbon and live preview | Course settings | 🟡 | M38 |
+| Publish dialog: list on the left, property links | `publish.rs` | 🟡 | M38 |
+| Preview: Replay slide / scene / course | | 🟡 | M43 |
+| Save player / import player | | 🟡 verify | M43 |
+| Preview device sizes (desktop, tablet, phone; both orientations) | — | ⛔ | M43 |
+| Preview: Edit Slide | — | ⛔ | M43 |
+| Preview: Inspect (variables, trigger log) | — | ⛔ | M43 |
+| Swipe in player | — | ⛔ | M41 |
+| Publish quality setting | — | ⛔ | M43 |
+| Report to external LRS alongside LMS | | ⛔ verify | M43 |
 | Share for review with comments | — | 🚫 | — |
 | Hosted delivery (Reach 360) | — | — | — |
 
@@ -265,20 +265,20 @@ Counted from the tables below; recount when a row changes.
 | Slide layers panel | `layers.rs`; docked, a panel of its own to the right of the Timeline's group | ✅ | — |
 | Timeline, States, Notes tabs | `timeline.rs`, `states.rs`; docked, Timeline, States, Triggers, Variables, Question and Notes are dock panels of their own, tabbed together by default (`dock.rs`); with the Notes panel open the Slide inspector leaves the notes to it | ✅ | — |
 | Canvas zoom and fit | | ✅ | — |
-| Tooltips with name, shortcut and help | | 🟡 | M37 |
-| Status bar: slide n of m, size, theme, zoom | `status.rs` | 🟡 | M37 |
-| Scene combo: mouse wheel switches scenes | | 🟡 | M37 |
-| Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M37 |
-| Collapse panels | | 🟡 | M37 |
-| Slide Properties in the Course Map | | 🟡 | M37 |
-| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar, and the contextual tabs (Drawing, Button, Picture, Video, Audio, Table, Question Tools; `ribbon/contextual.rs`) and the theme, transition and animation galleries (`ribbon/gallery.rs`), and the Slide Master tab in Master View; the other modes' tab strips to come | 🟡 | M37 |
-| Settings panels from the ↘ launchers, opening by themselves for the work in hand | `panels.rs` (`docs/ui/panels.md`): Text; the other categories to come | 🟡 | M37–M42 |
-| Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M37 |
+| Tooltips with name, shortcut and help | | 🟡 | M38 |
+| Status bar: slide n of m, size, theme, zoom | `status.rs` | 🟡 | M38 |
+| Scene combo: mouse wheel switches scenes | | 🟡 | M38 |
+| Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M38 |
+| Collapse panels | | 🟡 | M38 |
+| Slide Properties in the Course Map | | 🟡 | M38 |
+| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar, and the contextual tabs (Drawing, Button, Picture, Video, Audio, Table, Question Tools; `ribbon/contextual.rs`) and the theme, transition and animation galleries (`ribbon/gallery.rs`), and the Slide Master tab in Master View; the other modes' tab strips to come | 🟡 | M38 |
+| Settings panels from the ↘ launchers, opening by themselves for the work in hand | `panels.rs` (`docs/ui/panels.md`): Text; the other categories to come | 🟡 | M38–M43 |
+| Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M38 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
 | View tabs for open slides | `doc_tabs.rs`: a Course Map tab, then a tab per opened slide (× closes it), under the ribbon | ✅ | — |
 | Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels), the four inspectors included; a floating panel can leave the app window as its own OS window (desktop, not Wayland); a panel dropped on the window's outer edge takes the whole width (bottom, top) or height (left, right); the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
 | Reset panel layout | View › Panels › Reset Panel Layout | ✅ | — |
-| Slide-flow arrows in the Scenes panel | — | ⛔ | M37 |
+| Slide-flow arrows in the Scenes panel | — | ⛔ | M38 |
 | Comments tab | — | ⛔ needs review workflow | — |
 
 ## AI
@@ -288,19 +288,19 @@ Counted from the tables below; recount when a row changes.
 | Narration from text | `audio_ai.rs` | ✅ | — |
 | Alt text suggestions | `alt_text.rs` | ✅ | — |
 | Translate course | `translate_ai.rs` | ✅ | — |
-| Course from document | File › Import | 🟡 outline, not a quiz | M42 |
-| Generate quiz from content | — | ⛔ | M42 |
-| Generate one question | — | ⛔ | M42 |
-| Summary slide | — | ⛔ | M42 |
-| Insert / edit text with AI | — | ⛔ | M42 |
-| Generate image | — | ⛔ | M42 |
-| AI panel (chat with the connected agent) | — | ⛔ | M42 |
+| Course from document | File › Import | 🟡 outline, not a quiz | M43 |
+| Generate quiz from content | — | ⛔ | M43 |
+| Generate one question | — | ⛔ | M43 |
+| Summary slide | — | ⛔ | M43 |
+| Insert / edit text with AI | — | ⛔ | M43 |
+| Generate image | — | ⛔ | M43 |
+| AI panel (chat with the connected agent) | — | ⛔ | M43 |
 
 ## Assets and services
 
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
-| Icon set | — | ⛔ an open-licence bundled set | M39 |
+| Icon set | — | ⛔ an open-licence bundled set | M40 |
 | Characters | — | 🚫 | — |
 | Stock photos, illustrations, videos | — | 🚫 | — |
 | Content library slide templates | — | 🚫 | — |

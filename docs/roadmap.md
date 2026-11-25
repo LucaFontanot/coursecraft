@@ -374,7 +374,7 @@ Plan by Gemini 4 Neon: `docs/testing/m37-plan.md`; report: `docs/testing/m37-rep
 - Interactive groups: a group can act as one button with one shared state, one click trigger, one Tab stop, one focus ring and one screen-reader button.
 - Released as 0.4.6.
 
-## M37 Ribbon UI parity (planned)
+## M38 Ribbon UI parity (planned)
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:
 `docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Feature-level
@@ -426,17 +426,17 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
 6. Dialog front-ends over existing commands: Trigger, Insert Slide / Insert Question, Player
    Properties, Publish.
 7. Settings panels (`docs/ui/panels.md`): every ↘ launcher opens a closable dock panel with all
-   the settings of its category, in place of Storyline's dialogs. M37 builds the registry, the
-   launcher wiring and Grid and Guides; the category panels follow in M38–M42, then
+   the settings of its category, in place of Storyline's dialogs. M38 builds the registry, the
+   launcher wiring and Grid and Guides; the category panels follow in M39–M43, then
    customization (sections, pinning, workspaces). **Built (2026-11-23):** the registry, every
    launcher opening a panel, saved layouts that survive new panels, and the Text panel (Font ↘,
    Paragraph ↘), which also opens by itself when text editing starts on the canvas.
 
-The milestones after M37 switch the disabled buttons on, one area at a time. Each one moves rows
+The milestones after M38 switch the disabled buttons on, one area at a time. Each one moves rows
 in `docs/ui/feature-parity.md` to ✅ and flips the matching `NotYet` actions in the ribbon spec.
 Order follows what testers ask for; this is the default.
 
-## M38 Text and formatting gaps (planned)
+## M39 Text and formatting gaps (planned)
 
 Clear formatting, text shadow, change case, highlight colour (new run field), text direction,
 numbering styles, vertical alignment in the ribbon, paste options (keep source, text only, Paste
@@ -444,7 +444,7 @@ Special), the Text and Size and Position settings panels that the Font, Paragrap
 Position ↘ launchers open (`docs/ui/panels.md`), Create New Theme Fonts dialog, slide
 number field, symbol picker, insert variable reference, focus order dialog.
 
-## M39 Pictures, buttons and media polish (planned)
+## M40 Pictures, buttons and media polish (planned)
 
 Brightness and contrast, picture styles, crop to shape, zoom picture, recolor photos, reset
 picture, reflection and soft edges, change shape, button icons (gallery, align, colour, remove),
@@ -452,21 +452,21 @@ button sets, When Clicked Action pre-filled, callout shapes, export picture/audi
 video editor beyond trim, captions add/export/delete, compression, video in a new window, webcam
 recording, a bundled open-licence icon set.
 
-## M40 Structure, masters and questions (planned)
+## M41 Structure, masters and questions (planned)
 
 Starting scene (model field and runtime rule in `docs/spec/triggers.md`), scene index, reset slide
 to layout, master Preserve / Title / Insert Placeholder, hide background graphics, feedback master,
 swipe gestures (editor and player), custom mouse cursor, convert slide to custom question, question
 form view, feedback and scoring by choice, media per choice and feedback.
 
-## M41 Animation and timeline depth (planned)
+## M42 Animation and timeline depth (planned)
 
 Full entrance/exit gallery, emphasis animations, animation painter, sequence by paragraph with
 build steps on the timeline, transition effect options and Apply to All, path options, zoom
 regions, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
 C adds a cue point while playing, Course Map scene collapse and branch lines.
 
-## M42 Preview and AI ribbon (planned)
+## M43 Preview and AI ribbon (planned)
 
 Preview device sizes and orientations, Replay scopes, Edit Slide and Inspect (variables and
 trigger log from the simulator), publish quality, LRS beside an LMS, editable player text labels,
@@ -475,7 +475,7 @@ summary from course content, insert and edit text, image, sound effects and musi
 
 ## After the first release
 
-- Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M37 (`docs/ui/localization.md`).
+- Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M38 (`docs/ui/localization.md`).
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Right-to-left interface languages wait for a mirrored layout. Until then, testing uses English and the other scripts the bundled font supports.
 - Phone-friendly, scrolling lessons, once CourseCraft can compete with Storyline 360. This is where it starts to stand apart from the competition.
 
