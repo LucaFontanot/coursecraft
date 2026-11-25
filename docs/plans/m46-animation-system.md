@@ -221,6 +221,18 @@ Each phase updates `docs/spec/triggers.md`, `docs/ui/ribbon.md` and `docs/ui/fea
   flips, clips to the mask and tints each tessellated mesh. It is our own code; nothing came from
   DeckCraft's `mesh.rs`.
 
+## Phase 4 as built
+
+- `ribbon/effect_art.rs` draws an effect icon on a 120×90 stage with a 48×36 card. The still
+  icon is a faint ghost at 25 % (only when the effect moves, scales or turns) and the card at
+  60 %, drawn through its mask and clip. On hover it plays from 0 to 1 over a second, then holds.
+  Opaque mask pieces get a hairline edge in their own colour to hide seams.
+- Option icons use the bundled Phosphor subset. Diagonal arrows, the diamond and vertical bars
+  are the same glyphs turned (`TextShape::with_angle`), so the font did not need re-subsetting.
+  Spokes are a drawn wheel.
+- The Effect Options menu (`UiMenu::EffectOptions`) and `gallery::set_option` set a value only on
+  selected objects whose effect takes it, checked with `EffectDef::option_problems`.
+
 ## On stock icons from Magnific / Freepik
 
 Searching the stock library for animation icons returned a mixed, mostly premium set ("Sputnik",

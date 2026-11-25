@@ -18,6 +18,9 @@ pub struct Tile {
     pub icon: Icon,
     /// A theme's background, accent and text colours, drawn instead of the icon.
     pub swatch: Option<[Color32; 3]>,
+    /// An entrance/exit effect, drawn by its own sample function instead of the icon
+    /// (`effect_art`); `true` for an exit.
+    pub effect: Option<(AnimEffect, bool)>,
     pub selected: bool,
 }
 
@@ -89,18 +92,6 @@ const TRANSITIONS: &[(&str, Icon)] = &[
     ("Cover", Icon::Stack),
 ];
 
-/// The gallery icon of an entrance/exit effect (registry id).
-fn effect_icon(id: &str) -> Icon {
-    match id {
-        "fade" => Icon::Drop,
-        "fly_in" => Icon::ArrowRight,
-        "zoom" => Icon::MagnifyingGlassPlus,
-        "wipe" => Icon::TextAlignLeft,
-        "float" => Icon::ArrowUp,
-        _ => Icon::Sparkle,
-    }
-}
-
 fn hex(color: &str) -> Color32 {
     coursecraft_render::parse_color(&coursecraft_course::Color(color.to_owned()))
         .unwrap_or(Color32::GRAY)
@@ -168,6 +159,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                     label: t.name,
                     icon: Icon::Palette,
                     swatch: Some([hex(t.background), hex(t.accent), hex(t.text)]),
+                    effect: None,
                     selected: same_color(&theme.accent.0, t.accent)
                         && same_color(&theme.background.0, t.background)
                         && same_color(&theme.text.0, t.text),
@@ -183,28 +175,40 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                     label,
                     icon: *icon,
                     swatch: None,
+                    effect: None,
                     selected: current == Some(i),
                 })
                 .collect()
         }
         Gallery::Entrance | Gallery::Exit => {
             let motion = motion_of(gallery);
-            let current = objects(editor)
+            let first = objects(editor)
                 .first()
-                .and_then(|o| effect_index(animation(o, motion)));
+                .and_then(|o| animation(o, motion))
+                .cloned();
+            let current = effect_index(first.as_ref());
             let exit = motion == Motion::Exit;
             let none = Tile {
                 label: "None",
                 icon: Icon::XCircle,
                 swatch: None,
+                effect: None,
                 selected: current == Some(0),
             };
             std::iter::once(none)
-                .chain(EFFECTS.iter().enumerate().map(|(i, d)| Tile {
-                    label: d.label(exit),
-                    icon: effect_icon(d.id),
-                    swatch: None,
-                    selected: current == Some(i + 1),
+                .chain(EFFECTS.iter().enumerate().map(|(i, d)| {
+                    // The current effect's tile shows its chosen options.
+                    let effect = match &first {
+                        Some(a) if a.effect.id == d.id => a.effect.clone(),
+                        _ => AnimEffect::new(d.id),
+                    };
+                    Tile {
+                        label: d.label(exit),
+                        icon: Icon::Sparkle,
+                        swatch: None,
+                        effect: Some((effect, exit)),
+                        selected: current == Some(i + 1),
+                    }
                 }))
                 .collect()
         }
@@ -369,6 +373,14 @@ fn current_from(editor: &Editor, motion: Motion) -> Option<Direction> {
     }
 }
 
+/// The first selected object's effect of `motion` (entrance or exit).
+fn current_effect(editor: &Editor, motion: Motion) -> Option<AnimEffect> {
+    objects(editor)
+        .first()
+        .and_then(|o| animation(o, motion))
+        .map(|a| a.effect.clone())
+}
+
 /// Whether `motion`'s current effect can come from `dir` (transitions take every side).
 fn allows_from(editor: &Editor, motion: Motion, dir: Direction) -> bool {
     match motion {
@@ -402,12 +414,22 @@ pub fn effect_available(editor: &Editor, op: EffectOp) -> Result<(), &'static st
         Motion::Entrance | Motion::Exit => animation_available(editor),
     };
     match op {
-        EffectOp::Options(motion) => {
-            base(motion)?;
-            if current_from(editor, motion).is_some() {
+        EffectOp::Options(Motion::Transition) => {
+            base(Motion::Transition)?;
+            if current_from(editor, Motion::Transition).is_some() {
                 Ok(())
             } else {
                 Err("Pick an effect that comes from a side first")
+            }
+        }
+        EffectOp::Options(motion) => {
+            base(motion)?;
+            if current_effect(editor, motion)
+                .is_some_and(|e| e.def().is_some_and(|d| !d.options.is_empty()))
+            {
+                Ok(())
+            } else {
+                Err("Pick an effect that has options first")
             }
         }
         EffectOp::From(motion, dir) => {
@@ -613,15 +635,40 @@ fn tile(ui: &mut Ui, t: &Tile, enabled: bool) -> Response {
                 text,
             );
         }
-        None => {
-            ui.painter().text(
-                art.center(),
-                Align2::CENTER_CENTER,
-                t.icon.codepoint(),
-                FontId::new(22.0, FontFamily::Name("phosphor".into())),
-                ink,
-            );
-        }
+        None => match &t.effect {
+            Some((effect, exit)) => {
+                let kind = if !enabled {
+                    p.text_disabled
+                } else if *exit {
+                    p.danger
+                } else {
+                    p.success
+                };
+                // On hover the icon plays its effect in a loop.
+                let at = (enabled && resp.hovered()).then(|| {
+                    ui.ctx().request_repaint();
+                    super::effect_art::hover_shown(ui.input(|i| i.time))
+                });
+                super::effect_art::paint_effect(
+                    ui.painter(),
+                    art,
+                    effect,
+                    *exit,
+                    kind,
+                    p.border_strong,
+                    at,
+                );
+            }
+            None => {
+                ui.painter().text(
+                    art.center(),
+                    Align2::CENTER_CENTER,
+                    t.icon.codepoint(),
+                    FontId::new(22.0, FontFamily::Name("phosphor".into())),
+                    ink,
+                );
+            }
+        },
     }
     ui.painter().text(
         egui::pos2(rect.center().x, rect.max.y - 9.0),
@@ -695,4 +742,134 @@ pub fn show(
         apply(editor, gallery, index);
     }
     inner.response
+}
+
+/// Effect Options ▾ of the Entrance or Exit gallery: one section per option of the current
+/// effect, from the registry. Direction is a compass; the rest are rows. A pick sets that
+/// option on every selected object whose effect takes it.
+pub fn effect_options_menu(editor: &mut Editor, ui: &mut Ui, motion: Motion) {
+    use super::effect_art::{OptionValue, paint_glyph};
+    let Some(effect) = current_effect(editor, motion) else {
+        return;
+    };
+    let Some(def) = effect.def() else {
+        return;
+    };
+    let exit = motion == Motion::Exit;
+    let p = coursecraft_render::palette(ui.ctx());
+    let mut picked = None;
+    ui.set_min_width(150.0);
+    for (n, option) in def.options.iter().enumerate() {
+        if n > 0 {
+            ui.separator();
+        }
+        ui.label(
+            egui::RichText::new(tl!(option.label()))
+                .size(11.0)
+                .color(p.text_secondary),
+        );
+        let values = OptionValue::all(option);
+        let label = |v: OptionValue| match v {
+            OptionValue::Spokes(n) if n != 1 => {
+                craft_i18n::fmt(tl!(v.label()), &[("n", n.to_string().as_str())])
+            }
+            _ => tl!(v.label()).to_owned(),
+        };
+        let mut button = |ui: &mut Ui, v: OptionValue, size: egui::Vec2, text: bool| {
+            let on = v.is_set(&effect);
+            let name = label(v);
+            let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, &name));
+            let radius = CornerRadius::same(coursecraft_render::RADIUS_SM as u8);
+            if on {
+                ui.painter().rect_filled(rect, radius, p.accent_subtle);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(rect, radius, p.hover);
+            }
+            let ink = if on { p.accent_text } else { p.text };
+            let glyph_at = if text {
+                egui::pos2(rect.min.x + 13.0, rect.center().y)
+            } else {
+                rect.center()
+            };
+            paint_glyph(ui.painter(), glyph_at, 16.0, ink, v.glyph(exit));
+            if text {
+                ui.painter().text(
+                    egui::pos2(rect.min.x + 28.0, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    &name,
+                    FontId::proportional(12.0),
+                    ink,
+                );
+            }
+            let resp = if text {
+                resp
+            } else {
+                resp.on_hover_text(&name)
+            };
+            if resp.clicked() {
+                picked = Some(v);
+            }
+        };
+        if let coursecraft_course::EffectOptionDef::Direction { .. } = option {
+            // A 3×3 compass: each cell is the side or corner the object comes from.
+            const GRID: [[Option<Direction>; 3]; 3] = [
+                [
+                    Some(Direction::TopLeft),
+                    Some(Direction::Top),
+                    Some(Direction::TopRight),
+                ],
+                [Some(Direction::Left), None, Some(Direction::Right)],
+                [
+                    Some(Direction::BottomLeft),
+                    Some(Direction::Bottom),
+                    Some(Direction::BottomRight),
+                ],
+            ];
+            egui::Grid::new(("effect_compass", exit))
+                .spacing(egui::vec2(2.0, 2.0))
+                .show(ui, |ui| {
+                    for row in GRID {
+                        for cell in row {
+                            match cell.map(OptionValue::From).filter(|v| values.contains(v)) {
+                                Some(v) => button(ui, v, egui::vec2(26.0, 26.0), false),
+                                None => {
+                                    ui.allocate_exact_size(egui::vec2(26.0, 26.0), Sense::hover());
+                                }
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
+        } else {
+            for v in values {
+                button(
+                    ui,
+                    v,
+                    egui::vec2(ui.available_width().max(140.0), 24.0),
+                    true,
+                );
+            }
+        }
+    }
+    if let Some(v) = picked {
+        set_option(editor, motion, v);
+        ui.close();
+    }
+}
+
+/// Set option `value` on every selected object's effect of `motion` that takes it.
+pub fn set_option(editor: &mut Editor, motion: Motion, value: super::effect_art::OptionValue) {
+    update(
+        editor,
+        motion,
+        |_| {},
+        |a| {
+            let mut fx = a.effect.clone();
+            value.set(&mut fx);
+            if fx.def().is_some_and(|d| d.option_problems(&fx).is_empty()) {
+                a.effect = fx;
+            }
+        },
+    );
 }

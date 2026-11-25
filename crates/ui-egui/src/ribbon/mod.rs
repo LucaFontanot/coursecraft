@@ -5,6 +5,7 @@
 //! one whose feature is missing is drawn disabled with its reason in the tooltip.
 
 pub mod contextual;
+pub mod effect_art;
 pub mod gallery;
 pub mod spec;
 pub mod widgets;
@@ -1468,6 +1469,9 @@ fn menu(
                     ui.close();
                 }
             }
+        }
+        Menu::Ui(UiMenu::EffectOptions(motion)) => {
+            gallery::effect_options_menu(editor, ui, motion);
         }
         Menu::Ui(UiMenu::Arrange) => {
             let mut action = None;

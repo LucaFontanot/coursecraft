@@ -402,6 +402,9 @@ pub enum UiMenu {
     Callouts,
     /// Question ▾ (the question kinds).
     Questions,
+    /// Effect Options ▾ of the Entrance or Exit gallery, built from the effect registry
+    /// (`gallery::effect_options_menu`).
+    EffectOptions(Motion),
 }
 
 /// Why a control whose feature exists is not wired to the ribbon yet (M37 step 2).
@@ -1931,24 +1934,6 @@ const TRANSITION_FROM: [Item; 4] = from_menu(
     ],
     Motion::Transition,
 );
-const ENTRANCE_FROM: [Item; 4] = from_menu(
-    [
-        "animations.entrance_left",
-        "animations.entrance_right",
-        "animations.entrance_top",
-        "animations.entrance_bottom",
-    ],
-    Motion::Entrance,
-);
-const EXIT_FROM: [Item; 4] = from_menu(
-    [
-        "animations.exit_left",
-        "animations.exit_right",
-        "animations.exit_top",
-        "animations.exit_bottom",
-    ],
-    Motion::Exit,
-);
 
 const TRANSITIONS: &[Group] = &[
     Group {
@@ -2044,7 +2029,7 @@ const ANIMATIONS: &[Group] = &[
                 Icon::SlidersHorizontal,
                 SmallSplit,
                 Ui(UiAction::Effect(EffectOp::Options(Motion::Entrance))),
-                Menu::Items(&ENTRANCE_FROM),
+                Menu::Ui(UiMenu::EffectOptions(Motion::Entrance)),
             ),
             item(
                 "animations.entrance_duration",
@@ -2076,7 +2061,7 @@ const ANIMATIONS: &[Group] = &[
                 Icon::SlidersHorizontal,
                 SmallSplit,
                 Ui(UiAction::Effect(EffectOp::Options(Motion::Exit))),
-                Menu::Items(&EXIT_FROM),
+                Menu::Ui(UiMenu::EffectOptions(Motion::Exit)),
             ),
             item(
                 "animations.exit_duration",

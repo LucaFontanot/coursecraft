@@ -517,8 +517,12 @@ rebuilt Animations panel; live preview on the canvas.
   Directions gain the four corners. New options: shape, in/out, spokes, orientation. The Animate
   inspector shows every option the effect takes, and PowerPoint import maps the matching presets
   instead of falling back to Fade.
-- Next: icons (per-effect and option icons, sectioned Effect Options menu), Animations panel and
-  canvas preview, emphasis, build by paragraph, transitions.
+- Phase 4 (icons) **built (2026-11-26)**: every gallery tile draws its effect by running the
+  effect's own sample function on a small card (a ghost trail for movement, the mask for
+  reveals), green for entrances and red for exits, playing in a loop on hover. Effect Options ▾
+  of the Entrance and Exit galleries is built from the registry: a compass of arrows for
+  directions and rows with Phosphor icons for shape, in/out, spokes and orientation.
+- Next: Animations panel and canvas preview, emphasis, build by paragraph, transitions.
 
 ## After the first release
 

@@ -266,9 +266,9 @@ Shown when the Course Map view tab is active.
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
 | Advanced | Animation Painter | L | `ui:animationPainter` | ⛔ | Format Painter for animations |
-| Entrance Animations ↘ | effect gallery | G | `object.set_animation` `{entrance}` | ✅ | `ribbon/gallery.rs`: None plus every effect in the registry (25: Appear, Fade, Grow, Fly, Float, Split, Wipe, Shape, Wheel, Random bars, Zoom, Dissolve, Blinds, Peek, Expand, Rise up, Spin, Spin & grow, Grow & turn, Checkerboard, Strips, Flip, Swivel, Bounce, Pop), on every selected object; per-effect icons arrive in M46 phase 4; ↘ opens the Animate inspector; Add Motion Path runs `object.add_motion_path` |
+| Entrance Animations ↘ | effect gallery | G | `object.set_animation` `{entrance}` | ✅ | `ribbon/gallery.rs`: None plus every effect in the registry (25: Appear, Fade, Grow, Fly, Float, Split, Wipe, Shape, Wheel, Random bars, Zoom, Dissolve, Blinds, Peek, Expand, Rise up, Spin, Spin & grow, Grow & turn, Checkerboard, Strips, Flip, Swivel, Bounce, Pop), on every selected object; each tile's icon is the effect drawn by its own sample function on a small card (entrance green, exit red; it plays in a loop on hover; `ribbon/effect_art.rs`); ↘ opens the Animate inspector; Add Motion Path runs `object.add_motion_path` |
 | | Duration | N | `object.set_animation` `{duration_ms}` | ✅ | seconds |
-| | Effect Options | SS | `object.set_animation` `{from, sequence}` | 🟡 | ▾ From Left / Right / Top / Bottom ✅ (a side the effect doesn't take is disabled); corners, shape, in/out, spokes and orientation are in the Animate inspector until the sectioned menu with icons (M46 phase 4); Sequence By Paragraph ⛔ |
+| | Effect Options | SS | `object.set_animation` `{from, shape, inout, spokes, orientation, sequence}` | 🟡 | ▾ built from the registry, one section per option the current effect takes: Direction as a 3×3 compass of arrows (only the sides and corners the effect takes), Shape, In or out, Spokes and Orientation as rows with icons ✅; off for an effect with no options; Sequence By Paragraph ⛔ |
 | Exit Animations | (same three) | | `object.set_animation` `{exit}` | ✅ | |
 | Emphasis Animations | Add Emphasis Animation | LS | — | ⛔ | pulse, spin, teeter… at a time |
 | | emphasis list | G | — | ⛔ | |

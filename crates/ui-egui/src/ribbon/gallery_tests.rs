@@ -130,3 +130,83 @@ fn galleries_say_why_they_are_off() {
         "no transition yet"
     );
 }
+
+/// Give the shape `sh1` an entrance of `effect` (registry defaults).
+fn with_entrance(h: &mut TestHarness, effect: &str) {
+    h.editor.selection.object = Some("sh1".into());
+    h.editor.run(
+        "object.set_animation",
+        serde_json::json!({
+            "slide": "sl1", "object": "sh1", "which": "entrance",
+            "animation": {
+                "effect": coursecraft_course::AnimEffect::new(effect),
+                "duration_ms": 500
+            }
+        }),
+    );
+    frames(h, 2);
+}
+
+fn entrance_effect(h: &TestHarness) -> coursecraft_course::AnimEffect {
+    h.editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("sh1"))
+        .and_then(|(o, _)| o.entrance.clone())
+        .map(|a| a.effect)
+        .expect("an entrance")
+}
+
+#[test]
+fn effect_options_follow_the_registry() {
+    use super::effect_art::OptionValue;
+    use super::spec::{EffectOp, Motion};
+    let mut h = harness();
+    with_entrance(&mut h, "fade");
+    assert!(
+        super::gallery::effect_available(&h.editor, EffectOp::Options(Motion::Entrance)).is_err(),
+        "Fade has no options"
+    );
+    with_entrance(&mut h, "shape");
+    assert!(
+        super::gallery::effect_available(&h.editor, EffectOp::Options(Motion::Entrance)).is_ok()
+    );
+    super::gallery::set_option(
+        &mut h.editor,
+        Motion::Entrance,
+        OptionValue::Shape(coursecraft_course::RevealShape::Diamond),
+    );
+    assert_eq!(
+        entrance_effect(&h).shape(),
+        Some(coursecraft_course::RevealShape::Diamond)
+    );
+    // An option the effect doesn't take changes nothing.
+    let before = entrance_effect(&h);
+    super::gallery::set_option(&mut h.editor, Motion::Entrance, OptionValue::Spokes(3));
+    assert_eq!(entrance_effect(&h), before);
+}
+
+#[test]
+fn the_effect_options_menu_sets_an_option() {
+    let mut h = harness();
+    with_entrance(&mut h, "shape");
+    open_tab(&mut h, "animations");
+    let before = h.find_texts("Shape").len();
+    let options = h.find_texts("Effect Options");
+    let first = options.first().copied().expect("Effect Options");
+    h.click_at(first);
+    frames(&mut h, 3);
+    assert!(
+        h.find_texts("Shape").len() > before,
+        "the menu opens with its Shape section"
+    );
+    let diamond = h.find_text_last("Diamond").expect("Diamond row");
+    h.click_at(diamond);
+    frames(&mut h, 2);
+    assert_eq!(
+        entrance_effect(&h).shape(),
+        Some(coursecraft_course::RevealShape::Diamond)
+    );
+    assert!(h.find_text("Diamond").is_none(), "the menu closes");
+}
