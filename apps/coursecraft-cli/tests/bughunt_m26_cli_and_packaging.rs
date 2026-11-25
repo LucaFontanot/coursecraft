@@ -500,3 +500,31 @@ fn ccraft_file_association_configured_for_windows_and_linux() {
     assert!(yml.contains(r#"$root/share/mime/packages/coursecraft.xml"#));
     assert!(yml.contains(r#"$appdir/usr/share/mime/packages/coursecraft.xml"#));
 }
+
+#[test]
+fn release_workflow_builds_intel_macos_dmg_and_sizes_image() {
+    let root = repo_root();
+    let yml =
+        std::fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release.yml");
+    let mac =
+        std::fs::read_to_string(root.join("scripts/package-macos.sh")).expect("package-macos.sh");
+    let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
+
+    assert!(yml.contains("wasm32-unknown-unknown, x86_64-apple-darwin"));
+    assert!(yml.contains("cargo build --release -p coursecraft --target x86_64-apple-darwin"));
+    assert!(yml.contains("MACOSX_DEPLOYMENT_TARGET"));
+    assert!(yml.contains("11.0"));
+    assert!(yml.contains(
+        r#"scripts/package-macos.sh "${GITHUB_REF_NAME#v}" target/x86_64-apple-darwin/release/coursecraft dist x86_64"#
+    ));
+
+    assert!(mac.contains("${4:-$(uname -m)}"));
+    assert!(mac.contains("-size 200m"));
+
+    let download_line = readme
+        .lines()
+        .find(|line| line.contains("Download the latest version"))
+        .expect("README download notes");
+    assert!(download_line.contains("Apple Silicon"));
+    assert!(download_line.contains("Intel"));
+}

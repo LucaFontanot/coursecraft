@@ -38,16 +38,23 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev libasound2-dev desktop-file-utils
       - uses: dtolnay/rust-toolchain@1.99
         with:
-          targets: wasm32-unknown-unknown
+          targets: ${{ matrix.name == 'macos' && 'wasm32-unknown-unknown, x86_64-apple-darwin' || 'wasm32-unknown-unknown' }}
       - uses: Swatinem/rust-cache@v2
       - name: Install trunk
         run: cargo install trunk --locked
       # The player has to exist before the desktop app builds, so it ends up inside it.
       - run: cargo xtask build-player
       - run: cargo build --release -p coursecraft
+      - name: Build for macOS (Intel)
+        if: matrix.name == 'macos'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: cargo build --release -p coursecraft --target x86_64-apple-darwin
       - name: Package for macOS
         if: matrix.name == 'macos'
-        run: scripts/package-macos.sh "${GITHUB_REF_NAME#v}" target/release/coursecraft dist
+        run: |
+          scripts/package-macos.sh "${GITHUB_REF_NAME#v}" target/release/coursecraft dist
+          scripts/package-macos.sh "${GITHUB_REF_NAME#v}" target/x86_64-apple-darwin/release/coursecraft dist x86_64
       - name: Build Windows installer
         if: matrix.name == 'windows'
         shell: pwsh

@@ -55,7 +55,7 @@ _not set yet (set it when the first `coursecraft.tsv` lands)_.
    git tag v0.1.0
    git push origin v0.1.0
    ```
-4. The **Release** workflow builds the macOS `.dmg`, the Windows `-setup.exe` installer, and the Linux `.AppImage` and `.tar.gz` (each with the player inside), generates `SHA256SUMS.txt`, and attaches them to a **draft** release. Nothing is public yet.
+4. The **Release** workflow builds the macOS `.dmg` files (Apple Silicon and Intel), the Windows `-setup.exe` installer, and the Linux `.AppImage` and `.tar.gz` (each with the player inside), generates `SHA256SUMS.txt`, and attaches them to a **draft** release. Nothing is public yet.
 5. Download them and try the macOS and Windows ones (Linux is built but not tried by the maintainer; say so in the notes), paste the changelog section into the release notes, and press **Publish release**.
 
 The app checks GitHub Releases for updates at start (optional in Preferences) and via Help → Check for Updates; downloads are verified against `SHA256SUMS.txt` and nothing installs or restarts without the user's confirmation.

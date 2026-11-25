@@ -9,6 +9,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 - Published web courses now show a loading indicator until the player starts, or a short message if it fails to start.
 - Spell check now skips non-English courses and explains this in the Check Spelling window.
 - The Windows installer and Linux packages now register `.ccraft` files to open in CourseCraft.
+- macOS releases now include an Intel Mac download alongside Apple Silicon.
 
 ## 0.5.1
 

@@ -30,7 +30,7 @@ The sample course "Healthy Habits at Work" was built entirely with `coursecraft-
 
 ## Get CourseCraft
 
-Download the latest version from the **Releases** page of this repository: a `.dmg` for macOS on Apple Silicon, a Windows installer (`-setup.exe`), or an `.AppImage` or `.tar.gz` for Linux (x86-64; built automatically but less tested, so reports are welcome). It's free, with no account and no subscription.
+Download the latest version from the **Releases** page of this repository: a `.dmg` for macOS (Apple Silicon and Intel), a Windows installer (`-setup.exe`), or an `.AppImage` or `.tar.gz` for Linux (x86-64; built automatically but less tested, so reports are welcome). It's free, with no account and no subscription.
 
 The first time you open it:
 - **macOS** says it can't check the app, because it isn't signed with a paid Apple developer account. Right-click the app and choose Open, or go to System Settings → Privacy & Security → Open Anyway.
