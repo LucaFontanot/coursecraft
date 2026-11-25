@@ -101,6 +101,14 @@ pub struct CueEdit {
     pub pause: bool,
 }
 
+/// Last non-transparent fill (and optional fill style) remembered when the
+/// Fill checkbox is unticked so re-ticking restores it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RememberedFill {
+    pub color: String,
+    pub fill_style: Option<coursecraft_course::FillStyle>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertiesState {
     pub last_synced_revision: u64,
@@ -135,6 +143,9 @@ pub struct PropertiesState {
     pub opacity_rect: Option<Rect>,
     /// Buffered fill style for a shape or button. `None` is a solid fill.
     pub fill_style: Option<coursecraft_course::FillStyle>,
+    /// Keyed by `(slide_id, object_id, optional_state_name)`.
+    pub remembered_fills:
+        std::collections::HashMap<(String, String, Option<String>), RememberedFill>,
     pub fill_add_stop_rect: Option<Rect>,
     /// Set for one frame when the author asks to choose a picture file for the fill.
     pub pick_picture_fill: bool,
@@ -629,11 +640,60 @@ impl Default for PropertiesState {
             slide_transition_effect: "none".into(),
             slide_transition_direction: Direction::Bottom,
             slide_transition_duration_ms: 500,
+            remembered_fills: std::collections::HashMap::new(),
         }
     }
 }
 
 impl PropertiesState {
+    pub fn remember_fill(
+        &mut self,
+        slide_id: &str,
+        object_id: &str,
+        state_name: Option<&str>,
+        color: &str,
+        fill_style: Option<coursecraft_course::FillStyle>,
+    ) {
+        let trimmed = color.trim();
+        if !trimmed.is_empty() && trimmed != "#00000000" {
+            self.remembered_fills.insert(
+                (
+                    slide_id.to_owned(),
+                    object_id.to_owned(),
+                    state_name.map(str::to_owned),
+                ),
+                RememberedFill {
+                    color: trimmed.to_owned(),
+                    fill_style,
+                },
+            );
+        }
+    }
+
+    pub fn restore_fill(
+        &self,
+        slide_id: &str,
+        object_id: &str,
+        state_name: Option<&str>,
+        candidate: &str,
+        default_color: &str,
+    ) -> (String, Option<coursecraft_course::FillStyle>) {
+        if let Some(rem) = self.remembered_fills.get(&(
+            slide_id.to_owned(),
+            object_id.to_owned(),
+            state_name.map(str::to_owned),
+        )) && !rem.color.is_empty()
+            && rem.color != "#00000000"
+        {
+            return (rem.color.clone(), rem.fill_style.clone());
+        }
+        let trimmed = candidate.trim();
+        if !trimmed.is_empty() && trimmed != "#00000000" {
+            return (trimmed.to_owned(), None);
+        }
+        (default_color.to_owned(), None)
+    }
+
     /// Re-sync edit buffers with current course data if selection or revision changed.
     fn sync_object_visual_fields(
         &mut self,
@@ -4333,34 +4393,56 @@ fn show_multi_properties(
                     .indeterminate(props.multi_fill_enabled.is_none()),
             );
             if r.changed() {
-                let next_fill = if checked {
-                    let candidate = props.multi_fill.trim();
-                    if candidate.is_empty() || candidate == "#00000000" {
-                        "#D0D7DE".to_owned()
-                    } else {
-                        candidate.to_owned()
+                props.multi_fill_enabled = Some(checked);
+                if !checked {
+                    for object in &objects {
+                        let (mut kind, fill_color, fill_style) = match &object.kind {
+                            ObjectKind::Shape {
+                                fill, fill_style, ..
+                            }
+                            | ObjectKind::Button {
+                                fill, fill_style, ..
+                            } if fill.0 != "#00000000" => (
+                                serde_json::to_value(&object.kind).unwrap_or(Json::Null),
+                                fill.0.as_str(),
+                                fill_style.clone(),
+                            ),
+                            _ => continue,
+                        };
+                        props.remember_fill(&slide.id, &object.id, None, fill_color, fill_style);
+                        kind["fill"] = serde_json::json!("#00000000");
+                        kind["fill_style"] = Json::Null;
+                        actions_to_run.push((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": object.id,
+                                "kind": kind,
+                            }),
+                        ));
                     }
                 } else {
-                    "#00000000".to_owned()
-                };
-                props.multi_fill_enabled = Some(checked);
-                for object in &objects {
-                    let (mut kind, needs) = match &object.kind {
-                        ObjectKind::Shape { fill, .. } | ObjectKind::Button { fill, .. } => (
-                            serde_json::to_value(&object.kind).unwrap_or(Json::Null),
-                            if checked {
-                                fill.0 == "#00000000"
-                            } else {
-                                fill.0 != "#00000000"
-                            },
-                        ),
-                        _ => continue,
-                    };
-                    if needs {
-                        kind["fill"] = serde_json::json!(next_fill);
-                        if !checked {
-                            kind["fill_style"] = Json::Null;
-                        }
+                    for object in &objects {
+                        let (mut kind, default_color) = match &object.kind {
+                            ObjectKind::Shape { fill, .. } if fill.0 == "#00000000" => (
+                                serde_json::to_value(&object.kind).unwrap_or(Json::Null),
+                                "#D0D7DE",
+                            ),
+                            ObjectKind::Button { fill, .. } if fill.0 == "#00000000" => (
+                                serde_json::to_value(&object.kind).unwrap_or(Json::Null),
+                                "#2F6FEB",
+                            ),
+                            _ => continue,
+                        };
+                        let (next_color, next_style) = props.restore_fill(
+                            &slide.id,
+                            &object.id,
+                            None,
+                            &props.multi_fill,
+                            default_color,
+                        );
+                        kind["fill"] = serde_json::json!(next_color);
+                        kind["fill_style"] = fill_style_json(&next_style);
                         actions_to_run.push((
                             "object.update",
                             serde_json::json!({
@@ -8652,33 +8734,80 @@ fn show_object_properties(
                 |ui| {
                     let mut checked = has_fill;
                     if ui.checkbox(&mut checked, "").changed() {
-                        let next = if !checked {
-                            "#00000000".to_owned()
-                        } else if props.button_fill.trim().is_empty()
-                            || props.button_fill.trim() == "#00000000"
-                        {
-                            "#2F6FEB".to_owned()
+                        let state_name = state_ctx_ref.map(|ctx| ctx.state_name);
+                        if !checked {
+                            let current_fill_style = if state_ctx_ref.is_some() {
+                                props.fill_style.clone()
+                            } else {
+                                fill_style.clone()
+                            };
+                            props.remember_fill(
+                                &slide.id,
+                                &obj.id,
+                                state_name,
+                                &eff_fill.0,
+                                current_fill_style,
+                            );
+                            props.button_fill = "#00000000".to_owned();
+                            props.fill_style = None;
+                            if let Some(ctx) = state_ctx_ref {
+                                action_to_run = Some(patch_state_action(
+                                    ctx,
+                                    serde_json::json!({
+                                        "fill": "#00000000",
+                                        "fill_style": null,
+                                        "clear_fill_style": false,
+                                    }),
+                                ));
+                            } else {
+                                action_to_run = Some((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "kind": {
+                                            "type": "button",
+                                            "label": props.button_label,
+                                            "fill": "#00000000",
+                                            "fill_style": Json::Null,
+                                        },
+                                    }),
+                                ));
+                            }
                         } else {
-                            props.button_fill.trim().to_owned()
-                        };
-                        props.button_fill = next.clone();
-                        if let Some(ctx) = state_ctx_ref {
-                            action_to_run =
-                                Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
-                        } else {
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": {
-                                        "type": "button",
-                                        "label": props.button_label,
-                                        "fill": next,
-                                        "fill_style": if checked { fill_style_json.clone() } else { Json::Null },
-                                    },
-                                }),
-                            ));
+                            let (next_color, next_style) = props.restore_fill(
+                                &slide.id,
+                                &obj.id,
+                                state_name,
+                                &props.button_fill,
+                                "#2F6FEB",
+                            );
+                            props.button_fill = next_color.clone();
+                            props.fill_style = next_style.clone();
+                            if let Some(ctx) = state_ctx_ref {
+                                action_to_run = Some(patch_state_action(
+                                    ctx,
+                                    serde_json::json!({
+                                        "fill": next_color,
+                                        "fill_style": crate::properties::fill_style_json(&next_style),
+                                        "clear_fill_style": false,
+                                    }),
+                                ));
+                            } else {
+                                action_to_run = Some((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "kind": {
+                                            "type": "button",
+                                            "label": props.button_label,
+                                            "fill": next_color,
+                                            "fill_style": crate::properties::fill_style_json(&next_style),
+                                        },
+                                    }),
+                                ));
+                            }
                         }
                     }
                     if has_fill {
@@ -10246,32 +10375,78 @@ fn shape_fill_rows(
         |ui| {
             let mut checked = has_fill;
             if ui.checkbox(&mut checked, "").changed() {
-                let next = if !checked {
-                    "#00000000".to_owned()
-                } else if props.shape_fill.trim().is_empty()
-                    || props.shape_fill.trim() == "#00000000"
-                {
-                    "#D0D7DE".to_owned()
-                } else {
-                    props.shape_fill.trim().to_owned()
+                let base_fill_style = match &obj.kind {
+                    ObjectKind::Shape { fill_style, .. } => fill_style.clone(),
+                    _ => None,
                 };
-                props.shape_fill = next.clone();
-                if let Some(ctx) = state_ctx_ref {
-                    *action_to_run =
-                        Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
-                } else {
-                    let mut kind = kind_with(*shape, &next);
-                    if !checked {
+                let state_name = state_ctx_ref.map(|ctx| ctx.state_name);
+                if !checked {
+                    let current_fill_style = if state_ctx_ref.is_some() {
+                        props.fill_style.clone()
+                    } else {
+                        base_fill_style
+                    };
+                    props.remember_fill(
+                        &slide.id,
+                        &obj.id,
+                        state_name,
+                        &eff_fill.0,
+                        current_fill_style,
+                    );
+                    props.shape_fill = "#00000000".to_owned();
+                    props.fill_style = None;
+                    if let Some(ctx) = state_ctx_ref {
+                        *action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({
+                                "fill": "#00000000",
+                                "fill_style": null,
+                                "clear_fill_style": false,
+                            }),
+                        ));
+                    } else {
+                        let mut kind = kind_with(*shape, "#00000000");
                         kind["fill_style"] = Json::Null;
+                        *action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": kind,
+                            }),
+                        ));
                     }
-                    *action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
+                } else {
+                    let (next_color, next_style) = props.restore_fill(
+                        &slide.id,
+                        &obj.id,
+                        state_name,
+                        &props.shape_fill,
+                        "#D0D7DE",
+                    );
+                    props.shape_fill = next_color.clone();
+                    props.fill_style = next_style.clone();
+                    if let Some(ctx) = state_ctx_ref {
+                        *action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({
+                                "fill": next_color,
+                                "fill_style": fill_style_json(&next_style),
+                                "clear_fill_style": false,
+                            }),
+                        ));
+                    } else {
+                        let mut kind = kind_with(*shape, &next_color);
+                        kind["fill_style"] = fill_style_json(&next_style);
+                        *action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": kind,
+                            }),
+                        ));
+                    }
                 }
             }
             if has_fill {

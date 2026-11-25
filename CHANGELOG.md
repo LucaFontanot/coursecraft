@@ -10,6 +10,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 - Spell check now skips non-English courses and explains this in the Check Spelling window.
 - The Windows installer and Linux packages now register `.ccraft` files to open in CourseCraft.
 - macOS releases now include an Intel Mac download alongside Apple Silicon.
+- Unticking and re-ticking Fill on a shape or button now restores its previous colour instead of resetting to the default.
 
 ## 0.5.1
 

@@ -223,3 +223,233 @@ fn dash_panel_edits_dash_length_gap_and_custom_option() {
     let (_, outline) = shape_state(&harness, "shape-dash");
     assert_eq!(outline.expect("outline").dash, DashStyle::Custom);
 }
+
+fn shape_fill_and_style(
+    harness: &TestHarness,
+    id: &str,
+) -> (String, Option<coursecraft_course::FillStyle>) {
+    let (obj, _) = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .and_then(|s| s.object(id))
+        .expect("shape");
+    match &obj.kind {
+        ObjectKind::Shape {
+            fill, fill_style, ..
+        } => (fill.0.clone(), fill_style.clone()),
+        _ => panic!("expected shape"),
+    }
+}
+
+fn button_fill(harness: &TestHarness, id: &str) -> String {
+    let (obj, _) = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .and_then(|s| s.object(id))
+        .expect("button");
+    match &obj.kind {
+        ObjectKind::Button { fill, .. } => fill.0.clone(),
+        _ => panic!("expected button"),
+    }
+}
+
+#[test]
+fn shape_fill_toggle_restores_previous_colour_and_gradient() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 1200.0));
+    add_shape(&mut harness, "shape-orange", "#F97316", None);
+    select_object(&mut harness, "shape-orange");
+    let panel = harness.right_panel_rect();
+    let control_x = panel.min.x + 144.0;
+    let fill_label = harness.find_text_in("Fill", panel).expect("Fill label");
+
+    // Untick Fill -> becomes transparent.
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(
+        shape_fill_and_style(&harness, "shape-orange").0,
+        "#00000000"
+    );
+
+    // Re-tick Fill -> restores previous orange colour.
+    let fill_label = harness.find_text_in("Fill", panel).expect("Fill label");
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(shape_fill_and_style(&harness, "shape-orange").0, "#F97316");
+
+    // Undo / redo still transitions cleanly between transparent and orange.
+    harness.editor.session.undo().expect("undo re-tick");
+    harness.idle_frame();
+    assert_eq!(
+        shape_fill_and_style(&harness, "shape-orange").0,
+        "#00000000"
+    );
+    harness.editor.session.redo().expect("redo re-tick");
+    harness.idle_frame();
+    assert_eq!(shape_fill_and_style(&harness, "shape-orange").0, "#F97316");
+
+    // With a Linear gradient set on the orange shape: untick clears both, re-tick restores both.
+    harness
+        .editor
+        .run(
+            "object.set_fill_style",
+            serde_json::json!({
+                "slide": "s-intro",
+                "object": "shape-orange",
+                "fill_style": {
+                    "type": "linear",
+                    "angle": 90.0,
+                    "stops": [
+                        { "color": "#F97316", "position": 0.0 },
+                        { "color": "#FFFFFF", "position": 1.0 }
+                    ]
+                }
+            }),
+        )
+        .expect("set linear fill_style");
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let fill_label = harness.find_text_in("Fill", panel).expect("Fill label");
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    let (fill_off, style_off) = shape_fill_and_style(&harness, "shape-orange");
+    assert_eq!(fill_off, "#00000000");
+    assert!(style_off.is_none());
+
+    let fill_label = harness.find_text_in("Fill", panel).expect("Fill label");
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    let (fill_on, style_on) = shape_fill_and_style(&harness, "shape-orange");
+    assert_eq!(fill_on, "#F97316");
+    assert!(matches!(
+        style_on,
+        Some(coursecraft_course::FillStyle::Linear { .. })
+    ));
+}
+
+#[test]
+fn button_fill_toggle_restores_previous_colour() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 1200.0));
+    harness
+        .editor
+        .run(
+            "object.update",
+            serde_json::json!({
+                "slide": "s-intro",
+                "object": "btn-start",
+                "kind": {
+                    "type": "button",
+                    "label": "Start",
+                    "fill": "#F97316"
+                }
+            }),
+        )
+        .expect("set button orange");
+    select_object(&mut harness, "btn-start");
+    let panel = harness.right_panel_rect();
+    let control_x = panel.min.x + 144.0;
+    let fill_label = harness.find_text_in("Fill", panel).expect("Button Fill");
+
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(button_fill(&harness, "btn-start"), "#00000000");
+
+    let fill_label = harness.find_text_in("Fill", panel).expect("Button Fill");
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(button_fill(&harness, "btn-start"), "#F97316");
+}
+
+#[test]
+fn multi_select_fill_toggle_restores_each_objects_previous_colour() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 1200.0));
+    add_shape(&mut harness, "s-orange", "#F97316", None);
+    add_shape(&mut harness, "s-green", "#10B981", None);
+    harness.editor.selection.slide = "s-intro".into();
+    harness.editor.selection.set_many(["s-orange", "s-green"]);
+    harness.editor.ui.inspector_tab = InspectorTab::Format;
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let panel = harness.right_panel_rect();
+    let control_x = panel.min.x + 144.0;
+    let fill_label = harness.find_text_in("Fill", panel).expect("Multi Fill");
+
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(shape_fill_and_style(&harness, "s-orange").0, "#00000000");
+    assert_eq!(shape_fill_and_style(&harness, "s-green").0, "#00000000");
+
+    let fill_label = harness.find_text_in("Fill", panel).expect("Multi Fill");
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(shape_fill_and_style(&harness, "s-orange").0, "#F97316");
+    assert_eq!(shape_fill_and_style(&harness, "s-green").0, "#10B981");
+}
+
+#[test]
+fn state_override_fill_toggle_restores_previous_colour() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 1200.0));
+    add_shape(&mut harness, "s-state", "#2F6FEB", None);
+    harness
+        .editor
+        .run(
+            "object.add_state",
+            serde_json::json!({
+                "slide": "s-intro",
+                "object": "s-state",
+                "state": { "name": "hover", "fill": "#F97316" }
+            }),
+        )
+        .expect("add hover state");
+    select_object(&mut harness, "s-state");
+    harness.editor.ui.bottom_tab = crate::BottomTab::States;
+    harness.idle_frame();
+    let hover_pos = harness.find_text("hover").expect("hover state card");
+    harness.click_at(hover_pos);
+    harness.idle_frame();
+    let edit_btn = harness.find_text("Edit state").expect("Edit state button");
+    harness.click_at(edit_btn);
+    harness.idle_frame();
+    assert!(harness.editor.ui.editing_state.is_some());
+
+    let panel = harness.right_panel_rect();
+    let control_x = panel.min.x + 144.0;
+    let fill_label = harness.find_text_in("Fill", panel).expect("State Fill");
+
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    let state_fill = |h: &TestHarness| {
+        h.editor
+            .session
+            .course
+            .slide("s-intro")
+            .and_then(|s| s.object("s-state"))
+            .and_then(|(o, _)| o.states.iter().find(|st| st.name == "hover"))
+            .and_then(|st| st.fill.as_ref().map(|c| c.0.clone()))
+    };
+    assert_eq!(state_fill(&harness).as_deref(), Some("#00000000"));
+
+    let fill_label = harness.find_text_in("Fill", panel).expect("State Fill");
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(state_fill(&harness).as_deref(), Some("#F97316"));
+}
+
+#[test]
+fn shape_without_prior_fill_uses_default_when_ticked() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 1200.0));
+    add_shape(&mut harness, "s-empty", "#00000000", None);
+    select_object(&mut harness, "s-empty");
+    let panel = harness.right_panel_rect();
+    let control_x = panel.min.x + 144.0;
+    let fill_label = harness.find_text_in("Fill", panel).expect("Fill label");
+
+    harness.click_at(pos2(control_x, fill_label.y));
+    harness.idle_frame();
+    assert_eq!(shape_fill_and_style(&harness, "s-empty").0, "#D0D7DE");
+}
