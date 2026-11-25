@@ -31,21 +31,33 @@ pub(super) fn object_add(s: &mut Session, p: &Json) -> Result<Json> {
         runs,
         paragraphs,
         autofit,
-        point_text: true,
+        point_text,
         ..
     } = &mut kind
     {
-        style.wrap = false;
-        *autofit = Autofit::None;
-        super::text::fit_point_text_frame(
-            &mut frame,
-            text,
-            runs,
-            style,
-            paragraphs,
-            super::text::parse_measured_size(p),
-            true,
-        );
+        if *point_text {
+            style.wrap = false;
+            *autofit = Autofit::None;
+            super::text::fit_point_text_frame(
+                &mut frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                super::text::parse_measured_size(p),
+                true,
+            );
+        } else if *autofit == Autofit::Grow {
+            super::text::fit_grow_text_frame(
+                &mut frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                super::text::parse_measured_size(p),
+                true,
+            );
+        }
     }
     let name: Option<String> = opt(C, p, "name")?;
     let timing: Option<Timing> = opt(C, p, "timing")?;
@@ -186,23 +198,30 @@ pub(super) fn object_update(s: &mut Session, p: &Json) -> Result<Json> {
     }
     if let Some(mut k) = kind {
         keep_text_style_link(&obj.kind, &mut k, kind_omits_text_style(p));
-        let mut should_refit = false;
+        let mut refit_point = false;
+        let mut refit_grow = false;
         if let ObjectKind::Text {
             style,
             autofit,
             point_text,
             ..
         } = &mut k
-            && *point_text
         {
-            if style.wrap || *autofit == Autofit::Shrink {
-                *point_text = false;
-            } else {
-                should_refit = true;
+            if *point_text {
+                if style.wrap || *autofit != Autofit::None {
+                    *point_text = false;
+                    if *autofit == Autofit::Grow {
+                        refit_grow = true;
+                    }
+                } else {
+                    refit_point = true;
+                }
+            } else if *autofit == Autofit::Grow {
+                refit_grow = true;
             }
         }
         obj.kind = k;
-        if should_refit
+        if (refit_point || refit_grow)
             && let ObjectKind::Text {
                 text,
                 style,
@@ -211,15 +230,27 @@ pub(super) fn object_update(s: &mut Session, p: &Json) -> Result<Json> {
                 ..
             } = &obj.kind
         {
-            super::text::fit_point_text_frame(
-                &mut obj.frame,
-                text,
-                runs,
-                style,
-                paragraphs,
-                None,
-                false,
-            );
+            if refit_point {
+                super::text::fit_point_text_frame(
+                    &mut obj.frame,
+                    text,
+                    runs,
+                    style,
+                    paragraphs,
+                    None,
+                    false,
+                );
+            } else {
+                super::text::fit_grow_text_frame(
+                    &mut obj.frame,
+                    text,
+                    runs,
+                    style,
+                    paragraphs,
+                    None,
+                    false,
+                );
+            }
         }
     }
     if let Some(t) = timing {
@@ -1590,15 +1621,33 @@ pub(super) fn object_set_frame(s: &mut Session, p: &Json) -> Result<Json> {
     let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
     let width_changed =
         frame.w.is_finite() && obj.frame.w.is_finite() && (frame.w - obj.frame.w).abs() > 0.5;
+    let height_changed =
+        frame.h.is_finite() && obj.frame.h.is_finite() && (frame.h - obj.frame.h).abs() > 0.5;
     obj.frame = frame;
-    if width_changed
-        && let ObjectKind::Text {
-            point_text, style, ..
-        } = &mut obj.kind
-        && *point_text
+    if let ObjectKind::Text {
+        text,
+        runs,
+        paragraphs,
+        autofit,
+        point_text,
+        style,
+        ..
+    } = &mut obj.kind
     {
-        *point_text = false;
-        style.wrap = true;
+        if width_changed && *point_text {
+            *point_text = false;
+            style.wrap = true;
+        } else if width_changed && !height_changed && !*point_text && *autofit == Autofit::Grow {
+            super::text::fit_grow_text_frame(
+                &mut obj.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                None,
+                false,
+            );
+        }
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
@@ -1876,20 +1925,32 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             style,
             runs,
             paragraphs,
-            point_text: true,
+            autofit,
+            point_text,
             ..
         } = &object.kind
-        && !style.wrap
     {
-        super::text::fit_point_text_frame(
-            &mut object.frame,
-            text,
-            runs,
-            style,
-            paragraphs,
-            None,
-            false,
-        );
+        if *point_text && !style.wrap {
+            super::text::fit_point_text_frame(
+                &mut object.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                None,
+                false,
+            );
+        } else if !*point_text && *autofit == Autofit::Grow {
+            super::text::fit_grow_text_frame(
+                &mut object.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                None,
+                false,
+            );
+        }
     }
     *object != before
 }

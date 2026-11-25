@@ -557,21 +557,33 @@ pub(super) fn object_state_add_extra(s: &mut Session, p: &Json) -> Result<Json> 
         runs,
         paragraphs,
         autofit,
-        point_text: true,
+        point_text,
         ..
     } = &mut extra.kind
     {
-        style.wrap = false;
-        *autofit = coursecraft_course::Autofit::None;
-        super::text::fit_point_text_frame(
-            &mut extra.frame,
-            text,
-            runs,
-            style,
-            paragraphs,
-            super::text::parse_measured_size(p),
-            true,
-        );
+        if *point_text {
+            style.wrap = false;
+            *autofit = coursecraft_course::Autofit::None;
+            super::text::fit_point_text_frame(
+                &mut extra.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                super::text::parse_measured_size(p),
+                true,
+            );
+        } else if *autofit == coursecraft_course::Autofit::Grow {
+            super::text::fit_grow_text_frame(
+                &mut extra.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                super::text::parse_measured_size(p),
+                true,
+            );
+        }
     }
     let id = extra.id.clone();
     st.extras.push(extra);
@@ -653,27 +665,34 @@ pub(super) fn object_state_update_extra(s: &mut Session, p: &Json) -> Result<Jso
         && target.frame.w.is_finite()
         && old_w.is_finite()
         && (target.frame.w - old_w).abs() > 0.5;
-    let mut refit_extra = false;
+    let mut refit_point = false;
+    let mut refit_grow = false;
     if let coursecraft_course::StateExtraKind::Text {
         style,
         autofit,
         point_text,
         ..
     } = &mut target.kind
-        && *point_text
     {
-        if style.wrap || width_changed || *autofit == coursecraft_course::Autofit::Shrink {
-            *point_text = false;
-            if width_changed {
-                style.wrap = true;
+        if *point_text {
+            if style.wrap || width_changed || *autofit != coursecraft_course::Autofit::None {
+                *point_text = false;
+                if width_changed {
+                    style.wrap = true;
+                }
+                if *autofit == coursecraft_course::Autofit::Grow {
+                    refit_grow = kind_supplied || measured.is_some();
+                }
+            } else {
+                style.wrap = false;
+                *autofit = coursecraft_course::Autofit::None;
+                refit_point = kind_supplied || measured.is_some();
             }
-        } else {
-            style.wrap = false;
-            *autofit = coursecraft_course::Autofit::None;
-            refit_extra = kind_supplied || measured.is_some();
+        } else if *autofit == coursecraft_course::Autofit::Grow {
+            refit_grow = kind_supplied || measured.is_some();
         }
     }
-    if refit_extra
+    if (refit_point || refit_grow)
         && let coursecraft_course::StateExtraKind::Text {
             text,
             style,
@@ -682,15 +701,27 @@ pub(super) fn object_state_update_extra(s: &mut Session, p: &Json) -> Result<Jso
             ..
         } = &target.kind
     {
-        super::text::fit_point_text_frame(
-            &mut target.frame,
-            text,
-            runs,
-            style,
-            paragraphs,
-            measured,
-            false,
-        );
+        if refit_point {
+            super::text::fit_point_text_frame(
+                &mut target.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                measured,
+                false,
+            );
+        } else {
+            super::text::fit_grow_text_frame(
+                &mut target.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                measured,
+                false,
+            );
+        }
     }
 
     keep_valid(s, was_valid)?;

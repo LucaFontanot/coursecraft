@@ -298,13 +298,24 @@ fn sync_point_text_after_named_style(object: &mut Object) {
     else {
         return;
     };
-    if !*point_text {
-        return;
+    if *point_text {
+        if style.wrap || *autofit != Autofit::None {
+            *point_text = false;
+        } else {
+            super::text::fit_point_text_frame(
+                &mut object.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                None,
+                false,
+            );
+            return;
+        }
     }
-    if style.wrap || *autofit == Autofit::Shrink {
-        *point_text = false;
-    } else {
-        super::text::fit_point_text_frame(
+    if *autofit == Autofit::Grow {
+        super::text::fit_grow_text_frame(
             &mut object.frame,
             text,
             runs,
