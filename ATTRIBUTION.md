@@ -10,4 +10,15 @@ Third-party assets shipped with CourseCraft. Every asset added must get a row he
 
 The images, sound and video under `examples/showcase/media/` were made for this project and carry the project's license.
 
-Rust crates are listed in `Cargo.lock`, under their own licenses.
+## ArtCraft Crafting Apps libraries and forks
+
+CourseCraft reuses open-source libraries, forks and widget code from the ArtCraft Crafting Apps family (`storytold`):
+
+| Component | Author | Source | License |
+|---|---|---|---|
+| `craft-ui`, `craft-i18n`, `craft-update` | ArtCraft Team and the `craft-libs` contributors | https://github.com/storytold/craft-libs | MIT OR Apache-2.0 |
+| Craft `egui` fork (`egui`, `eframe`, `epaint`, `emath`, `ecolor`, `egui-winit`, `egui-wgpu`, `epaint_default_fonts`) | Emil Ernerfeldt and the ArtCraft / `egui` contributors | https://github.com/storytold/egui | MIT OR Apache-2.0 |
+| Craft `winit` fork (`winit`) | The `winit` contributors and the ArtCraft contributors | https://github.com/storytold/winit | Apache-2.0 |
+| Ribbon widget patterns (`crates/ui-egui/src/ribbon/widgets.rs`) | ArtCraft Team (DeckCraft, commit `7fbdc085`) | https://github.com/storytold/deckcraft | MIT OR Apache-2.0 |
+
+Other Rust crates are listed in `Cargo.lock`, under their own licenses.

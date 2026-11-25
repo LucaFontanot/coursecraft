@@ -4,6 +4,9 @@ What changed in each release, newest first. Versions follow [semantic versioning
 
 ## 0.5.0 (unreleased)
 
+**Ribbon editor, dockable panels and localization:**
+- Built on shared open-source UI, localization and update libraries (`craft-ui`, `craft-i18n`, `craft-update`, and the Craft `egui`/`winit` fork) and ribbon widget patterns from **DeckCraft** and the **ArtCraft Crafting Apps** (`MIT OR Apache-2.0` / `Apache-2.0`).
+
 **Release packaging:**
 - **Windows:** releases now ship the Inno Setup installer (`-setup.exe`) only; portable Windows `.zip` builds are no longer published. Existing portable copies are offered the `-setup.exe` installer on update checks with a short notice.
 - **Linux:** releases now include an x86-64 `.AppImage` alongside the `.tar.gz` archive (both covered by `SHA256SUMS.txt`). In-app updates pick `.AppImage` when running from an AppImage and `.tar.gz` otherwise.
