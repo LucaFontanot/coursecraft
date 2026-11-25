@@ -788,7 +788,7 @@ Course-level LMS completion tracking (`course.tracking`) lets authors choose how
    - Evaluates **on submit** using `Player::results` (`score_points_and_max()`, `course.quiz.passing_percent`, incrementing `quiz_attempts`, emitting `Effect::Score` and `Effect::Completion`).
    - If `Action::SubmitResults` already ran during the same input (`quiz_attempts` increased), it is never duplicated.
    - When `quiz.slide` is `Some(id)`: if that slide already has an enabled `submit_results` trigger, that trigger owns submission; if it is a question slide without such a trigger, it submits when `Effect::QuestionAnswered` locks that question; otherwise (a custom summary slide) it submits when the slide is entered (`SlideEntered` or `LightboxOpened`).
-   - When `quiz.slide` is `None` (course quiz): submits when an `Effect::QuestionAnswered` occurs in the input and every graded question (`max_points() > 0`) in play order is locked (`question_locked_on_slide`). If `course.quiz` is `None` (e.g., survey-only), `results` safely reports `Completed` without panicking.
+   - When `quiz.slide` is `None` (course quiz): submits when an `Effect::QuestionAnswered` for a graded question occurs in the input and every graded question (`max_points() > 0`) in play order is locked (`question_locked_on_slide`). If `course.quiz` is `None` (e.g., survey-only), `results` safely reports `Completed` without panicking.
    - `retry_quiz` clears `answers` (unlocking questions), so a subsequent submit or results-slide entry re-evaluates and emits updated `Score` and `Completion` effects.
 3. **Completion triggers (always active):** explicit `complete_course` and `submit_results` triggers always work both alone and alongside `slides_viewed` / `quiz`.
 

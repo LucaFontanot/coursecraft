@@ -13476,6 +13476,150 @@ fn tr_06_quiz_result_runtime_rules() {
             status: CompletionStatus::Completed
         }
     ));
+
+    // (f) Ungraded survey question submitted after all graded questions lock does NOT re-emit Score.
+    let mut c_mixed = Course::from_json(
+        r#"{
+            "schema_version": 1,
+            "id": "tr-mixed",
+            "title": "TR Mixed",
+            "slide_size": { "w": 1280, "h": 720 },
+            "quiz": { "passing_percent": 80 },
+            "scenes": [{
+                "id": "sc1",
+                "title": "Scene 1",
+                "slides": [
+                    {
+                        "id": "q1",
+                        "title": "Graded",
+                        "duration_ms": 5000,
+                        "question": {
+                            "kind": "multiple_choice",
+                            "prompt": "Pick a",
+                            "choices": [
+                                { "id": "a", "text": "A", "correct": true },
+                                { "id": "b", "text": "B" }
+                            ],
+                            "points": 10,
+                            "attempts": 1
+                        },
+                        "objects": [{
+                            "id": "submit-q1",
+                            "kind": { "type": "button", "label": "Submit" },
+                            "frame": { "x": 100, "y": 100, "w": 120, "h": 40 }
+                        }],
+                        "triggers": [{
+                            "when": { "event": "click", "object": "submit-q1" },
+                            "action": { "action": "submit_question" }
+                        }]
+                    },
+                    {
+                        "id": "survey",
+                        "title": "Survey",
+                        "duration_ms": 5000,
+                        "question": {
+                            "kind": "likert",
+                            "prompt": "Rate",
+                            "choices": [
+                                { "id": "s1", "text": "Good" },
+                                { "id": "s2", "text": "Great" }
+                            ],
+                            "points": 0,
+                            "attempts": 1
+                        },
+                        "objects": [{
+                            "id": "submit-survey",
+                            "kind": { "type": "button", "label": "Submit" },
+                            "frame": { "x": 100, "y": 100, "w": 120, "h": 40 }
+                        }],
+                        "triggers": [{
+                            "when": { "event": "click", "object": "submit-survey" },
+                            "action": { "action": "submit_question" }
+                        }]
+                    }
+                ]
+            }]
+        }"#,
+    )
+    .expect("mixed course");
+    c_mixed.tracking.quiz = Some(QuizTracking { slide: None });
+    let mut p_f = Player::new(&c_mixed).expect("player");
+    p_f.handle(&Input::Start);
+    p_f.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_f_graded = p_f.handle(&click("submit-q1"));
+    assert!(
+        fx_f_graded
+            .iter()
+            .any(|e| matches!(e, Effect::Score { .. }))
+    );
+    assert_eq!(p_f.state().quiz_attempts, 1);
+    p_f.handle(&Input::Next);
+    p_f.handle(&Input::SelectChoice {
+        choice: "s1".into(),
+    });
+    let fx_f_survey = p_f.handle(&click("submit-survey"));
+    assert!(
+        !fx_f_survey
+            .iter()
+            .any(|e| matches!(e, Effect::Score { .. })),
+        "answering an ungraded survey question must not re-report quiz results"
+    );
+    assert_eq!(p_f.state().quiz_attempts, 1);
+
+    // (g) QuizTracking targeting a question slide without SubmitResults reports when locked;
+    //     saturated quiz_attempts == u32::MAX still prevents duplicate SubmitResults in same input.
+    let mut c_qslide = tr_quiz_course(80, 1, false);
+    c_qslide.tracking.quiz = Some(QuizTracking {
+        slide: Some("q2".into()),
+    });
+    let mut p_g = Player::new(&c_qslide).expect("player");
+    p_g.handle(&Input::Start);
+    p_g.handle(&Input::SelectChoice { choice: "a".into() });
+    assert!(
+        !p_g.handle(&click("submit-q1"))
+            .iter()
+            .any(|e| matches!(e, Effect::Score { .. }))
+    );
+    p_g.handle(&Input::Next);
+    p_g.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_g = p_g.handle(&click("submit-q2"));
+    assert!(has(
+        &fx_g,
+        &Effect::Score {
+            raw: 20,
+            max: 20,
+            percent: 100,
+            status: CompletionStatus::Passed,
+        }
+    ));
+
+    let mut c_sat = tr_quiz_course(80, 1, false);
+    c_sat.tracking.quiz = Some(QuizTracking { slide: None });
+    c_sat.scenes[0].slides[1].triggers.push(Trigger {
+        when: Event::Click {
+            object: "submit-q2".into(),
+        },
+        action: Action::SubmitResults,
+        condition: None,
+        disabled: false,
+    });
+    let mut st_sat = Player::new(&c_sat).expect("player").into_state();
+    st_sat.quiz_attempts = u32::MAX;
+    let mut p_sat = Player::resume(&c_sat, st_sat).expect("resume saturated");
+    p_sat.handle(&Input::Start);
+    p_sat.handle(&Input::SelectChoice { choice: "a".into() });
+    p_sat.handle(&click("submit-q1"));
+    p_sat.handle(&Input::Next);
+    p_sat.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_sat = p_sat.handle(&click("submit-q2"));
+    assert_eq!(
+        fx_sat
+            .iter()
+            .filter(|e| matches!(e, Effect::Score { .. }))
+            .count(),
+        1,
+        "SubmitResults with saturated quiz_attempts must not duplicate Score"
+    );
 }
 
 #[test]

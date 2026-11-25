@@ -515,8 +515,14 @@ impl<'c> Player<'c> {
         }
 
         // Option 2 — Quiz result (on submit, never duplicating SubmitResults).
+        let already_submitted = self.st.quiz_attempts != attempts_before
+            || out
+                .get(out_start..)
+                .unwrap_or(&[])
+                .iter()
+                .any(|e| matches!(e, Effect::Score { .. }));
         if let Some(qt) = self.course.tracking.quiz.clone()
-            && self.st.quiz_attempts == attempts_before
+            && !already_submitted
         {
             let slice = out.get(out_start..).unwrap_or(&[]);
             if let Some(target_id) = qt.slide.as_deref() {
@@ -544,10 +550,17 @@ impl<'c> Player<'c> {
                     }
                 }
             } else {
-                let any_answered = slice
-                    .iter()
-                    .any(|e| matches!(e, Effect::QuestionAnswered { .. }));
-                if any_answered {
+                let graded_answered = slice.iter().any(|e| {
+                    matches!(
+                        e,
+                        Effect::QuestionAnswered { slide, .. }
+                            if self.slides.iter().any(|s| {
+                                s.id == *slide
+                                    && s.question.as_ref().is_some_and(|q| q.max_points() > 0)
+                            })
+                    )
+                });
+                if graded_answered {
                     let mut has_graded = false;
                     let mut all_locked = true;
                     for s in &self.slides {
