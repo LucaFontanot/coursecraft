@@ -44,12 +44,14 @@ CourseCraft checks for a newer version when it starts (turn that off in Preferen
 - **Installer (`coursecraft-<version>-windows-x64-setup.exe`):** Installs per user into `%LOCALAPPDATA%\Programs\CourseCraft` without administrator rights, adds a Start menu shortcut (and an optional desktop shortcut), and registers an uninstaller in Windows **Settings → Apps**.
 - **Settings and logs:** Preferences, saved project version history, and crash notes (`last-crash.txt`) are stored in `%APPDATA%\CourseCraft`.
 
-Built to the conventions of the [ArtCraft](https://github.com/storytold) Crafting Apps: native egui/wgpu, the same code on the web via WebAssembly, every action a command, and no crashes.
+Built to the conventions of the [ArtCraft](https://github.com/storytold) Crafting Apps, and on their open-source `craft-ui`, `craft-i18n` and `craft-update` libraries (the same ones DeckCraft uses): native egui/wgpu, the same code on the web via WebAssembly, every action a command, and no crashes.
 
 ## What it does
 
+- **A ribbon editor with panels you arrange:** commands grouped in ribbon tabs, with extra tabs for what you select, and Slides, Timeline, Triggers, States, the inspectors and more as panels you can move, tab, split, float or close. Your layout is saved, and every label is ready for translation.
 - **A visual editor** on the desktop and in the browser: multi-select, align and distribute, smart guides, grouping, copy and paste, slide masters, layouts and templates, find and replace, image crop, a timeline, and PowerPoint import.
 - **Interactive courses:** layers, triggers, variables, animation, and twelve question types with feedback, question banks and results slides.
+- **Text and buttons that behave:** click to place a label that fits its text and grows as you type, or drag a box that wraps. Group a shape, icon and text and make the group act as one button, with one hover look, one click, one Tab stop and one screen-reader name.
 - **Rich object states:** hover, pressed, selected, visited and your own states, each a full second look for an object (picture, text, fill, outline, shadow, glow, rotation and items of its own), all side by side in the States tab and edited right on the canvas.
 - **Any slide size:** Full HD, HD, 4:3, square or portrait, or your own; resize a whole course with a live preview of how content fits.
 - **A calm, consistent editor** in dark and light, checked screen by screen against the same UI rules, and a learner player with a seekbar you can lock and a Play button before a web course starts.
@@ -114,7 +116,7 @@ Choose Help > Report a Problem to tell us what went wrong, or Help > Suggest a F
 - **What is shared.** Your two answers, plus (if you leave "Include technical details" on) the CourseCraft version, your OS and CPU, whether this is the desktop or web app, the last 20 status messages from this session, and a note about the last crash if there was one. All of it is shown in the window before you send anything.
 - **What is never shared.** Course content, file names, file paths, user names, AI keys and settings. Paths and file names in messages are replaced with `<path>` and `<file>`.
 - **After a crash.** The desktop app writes a short `last-crash.txt` (time, version, OS, panic message and location, paths removed) to its settings folder. On the next start it asks whether to report it, and deletes the file once you report or dismiss it.
-- **Updates.** The desktop app checks GitHub Releases for a newer version at start (which you can turn off in Preferences) or when you choose Help > Check for Updates. Downloads are verified against the release's `SHA256SUMS.txt`, and nothing installs or restarts without your confirmation.
+- **Updates.** The desktop app checks GitHub Releases for a newer version at start (which you can turn off in Preferences) or when you choose Help > Check for Updates. Downloads are verified against the release's `SHA256SUMS.txt`. On macOS and Linux it can install the update with Update and Restart, only when you click it and never with unsaved work; on Windows it gives you the installer to run.
 
 ## Workspace
 
@@ -137,8 +139,8 @@ Choose Help > Report a Problem to tell us what went wrong, or Help > Suggest a F
 | `coursecraft-cli`, `coursecraft-mcp` | Headless tool and MCP server; agents start at [docs/cli.md](docs/cli.md) |
 
 See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md). The editor's
-layout (a tabbed ribbon grouping commands by task, with every planned button already in
-place) is specified in [docs/ui/](docs/ui/README.md); what CourseCraft can and cannot do yet,
+layout (a tabbed ribbon grouping commands by task, with planned buttons shown greyed out until
+they work) is specified in [docs/ui/](docs/ui/README.md); what CourseCraft can and cannot do yet,
 feature by feature, is in [docs/ui/feature-parity.md](docs/ui/feature-parity.md).
 
 ## Help and contributing
