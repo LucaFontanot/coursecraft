@@ -2,9 +2,9 @@
 
 use crate::Editor;
 use coursecraft_course::{
-    Align, Autofit, Color, Course, Direction, Easing, Glow, ListKind, ObjectKind, Paragraph,
-    RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing, TransitionEffect,
-    Trim, VAlign, paragraphs_for,
+    Align, AnimEffect, Autofit, Color, Course, Direction, Easing, Glow, ListKind, ObjectKind,
+    Paragraph, RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing,
+    TransitionEffect, Trim, VAlign, paragraphs_for,
 };
 use coursecraft_render::parse_color;
 use egui::{
@@ -390,12 +390,14 @@ pub struct PropertiesState {
 
     // Animation buffers
     pub entrance_effect: String,
-    pub entrance_direction: Direction,
+    /// Options of the entrance effect (direction, shape, …); its id follows `entrance_effect`.
+    pub entrance_fx: AnimEffect,
     pub entrance_duration_ms: u32,
     pub entrance_easing: Easing,
 
     pub exit_effect: String,
-    pub exit_direction: Direction,
+    /// Options of the exit effect; its id follows `exit_effect`.
+    pub exit_fx: AnimEffect,
     pub exit_duration_ms: u32,
     pub exit_easing: Easing,
 
@@ -630,11 +632,11 @@ impl Default for PropertiesState {
             slide_revisit: RevisitMode::Auto,
             draw_count_rect: None,
             entrance_effect: "none".into(),
-            entrance_direction: Direction::Bottom,
+            entrance_fx: AnimEffect::default(),
             entrance_duration_ms: 500,
             entrance_easing: Easing::EaseOut,
             exit_effect: "none".into(),
-            exit_direction: Direction::Bottom,
+            exit_fx: AnimEffect::default(),
             exit_duration_ms: 500,
             exit_easing: Easing::EaseOut,
             slide_transition_effect: "none".into(),
@@ -833,24 +835,24 @@ impl PropertiesState {
 
             if let Some(ref a) = obj.entrance {
                 self.entrance_effect = a.effect.id.clone();
-                self.entrance_direction = a.effect.direction().unwrap_or(Direction::Bottom);
+                self.entrance_fx = a.effect.clone();
                 self.entrance_duration_ms = a.duration_ms;
                 self.entrance_easing = a.easing;
             } else {
                 self.entrance_effect = "none".to_owned();
-                self.entrance_direction = Direction::Bottom;
+                self.entrance_fx = AnimEffect::default();
                 self.entrance_duration_ms = 500;
                 self.entrance_easing = Easing::EaseOut;
             }
 
             if let Some(ref a) = obj.exit {
                 self.exit_effect = a.effect.id.clone();
-                self.exit_direction = a.effect.direction().unwrap_or(Direction::Bottom);
+                self.exit_fx = a.effect.clone();
                 self.exit_duration_ms = a.duration_ms;
                 self.exit_easing = a.easing;
             } else {
                 self.exit_effect = "none".to_owned();
-                self.exit_direction = Direction::Bottom;
+                self.exit_fx = AnimEffect::default();
                 self.exit_duration_ms = 500;
                 self.exit_easing = Easing::EaseOut;
             }
@@ -1200,12 +1202,12 @@ impl PropertiesState {
             .is_some_and(|first| objects.iter().all(|o| o.entrance == first.entrance));
         if same_entrance && let Some(a) = objects.first().and_then(|o| o.entrance.as_ref()) {
             self.entrance_effect = a.effect.id.clone();
-            self.entrance_direction = a.effect.direction().unwrap_or(Direction::Bottom);
+            self.entrance_fx = a.effect.clone();
             self.entrance_duration_ms = a.duration_ms;
             self.entrance_easing = a.easing;
         } else {
             self.entrance_effect = "none".to_owned();
-            self.entrance_direction = Direction::Bottom;
+            self.entrance_fx = AnimEffect::default();
             self.entrance_duration_ms = 500;
             self.entrance_easing = Easing::EaseOut;
         }
@@ -1215,12 +1217,12 @@ impl PropertiesState {
             .is_some_and(|first| objects.iter().all(|o| o.exit == first.exit));
         if same_exit && let Some(a) = objects.first().and_then(|o| o.exit.as_ref()) {
             self.exit_effect = a.effect.id.clone();
-            self.exit_direction = a.effect.direction().unwrap_or(Direction::Bottom);
+            self.exit_fx = a.effect.clone();
             self.exit_duration_ms = a.duration_ms;
             self.exit_easing = a.easing;
         } else {
             self.exit_effect = "none".to_owned();
-            self.exit_direction = Direction::Bottom;
+            self.exit_fx = AnimEffect::default();
             self.exit_duration_ms = 500;
             self.exit_easing = Easing::EaseOut;
         }
@@ -1969,20 +1971,102 @@ fn anim_effect_label(which: &str, effect: &str) -> &'static str {
     coursecraft_course::effect_def(effect).map_or("Unknown effect", |d| d.label(which == "exit"))
 }
 
-/// The direction choices of `effect`, from the registry (empty when it has none).
-fn anim_effect_directions(effect: &str) -> &'static [Direction] {
-    coursecraft_course::effect_def(effect)
-        .and_then(coursecraft_course::EffectDef::direction)
-        .map_or(&[], |(_, allowed)| allowed)
+/// One option combo of the Animations section: `label` row, values with English labels.
+fn anim_option_row<T: PartialEq + Copy>(
+    ui: &mut Ui,
+    id: String,
+    label: &str,
+    current: &mut Option<T>,
+    shown: T,
+    values: &[T],
+    name: impl Fn(T) -> String,
+) -> bool {
+    let mut changed = false;
+    inspector_row(ui, label, |ui| {
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, id, rem_w)
+            .selected_text(name(shown))
+            .show_ui(ui, |ui| {
+                for &v in values {
+                    if ui.selectable_label(shown == v, name(v)).clicked() {
+                        *current = Some(v);
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
 }
 
-fn direction_label(d: Direction) -> &'static str {
-    match d {
-        Direction::Left => "Left",
-        Direction::Right => "Right",
-        Direction::Top => "Top",
-        Direction::Bottom => "Bottom",
+/// The option rows of `fx` (its id already set), one per option its effect takes, in registry
+/// order. Returns whether one changed.
+fn show_anim_options(ui: &mut Ui, which: &str, fx: &mut AnimEffect) -> bool {
+    use coursecraft_course::{EffectOptionDef, InOut, Orientation, RevealShape};
+    let Some(def) = fx.def() else {
+        return false;
+    };
+    let mut changed = false;
+    for option in def.options {
+        let id = format!("anim_{}_{which}", option.field());
+        let label = crate::tl!(option.label());
+        changed |= match *option {
+            EffectOptionDef::Direction { allowed, .. } => {
+                let shown = fx.direction().unwrap_or_default();
+                anim_option_row(
+                    ui,
+                    id,
+                    label,
+                    &mut fx.from,
+                    shown,
+                    allowed,
+                    |d: Direction| crate::tl!(d.label()).to_string(),
+                )
+            }
+            EffectOptionDef::Shape { allowed, .. } => {
+                let shown = fx.shape().unwrap_or_default();
+                anim_option_row(
+                    ui,
+                    id,
+                    label,
+                    &mut fx.shape,
+                    shown,
+                    allowed,
+                    |v: RevealShape| crate::tl!(v.label()).to_string(),
+                )
+            }
+            EffectOptionDef::InOut { .. } => {
+                let shown = fx.inout().unwrap_or_default();
+                anim_option_row(
+                    ui,
+                    id,
+                    label,
+                    &mut fx.inout,
+                    shown,
+                    &InOut::ALL,
+                    |v: InOut| crate::tl!(v.label()).to_string(),
+                )
+            }
+            EffectOptionDef::Spokes { allowed, .. } => {
+                let shown = fx.spokes().unwrap_or(1);
+                anim_option_row(ui, id, label, &mut fx.spokes, shown, allowed, |v: u8| {
+                    v.to_string()
+                })
+            }
+            EffectOptionDef::Orientation { .. } => {
+                let shown = fx.orientation().unwrap_or_default();
+                anim_option_row(
+                    ui,
+                    id,
+                    label,
+                    &mut fx.orientation,
+                    shown,
+                    &Orientation::ALL,
+                    |v: Orientation| crate::tl!(v.label()).to_string(),
+                )
+            }
+        };
     }
+    changed
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1991,7 +2075,7 @@ fn show_anim_row(
     title: &str,
     which: &'static str,
     effect_str: &mut String,
-    direction: &mut Direction,
+    fx: &mut AnimEffect,
     duration_ms: &mut u32,
     easing: &mut Easing,
     slide_id: &str,
@@ -2042,24 +2126,10 @@ fn show_anim_row(
             }
         });
 
-        let directions = anim_effect_directions(effect_str);
-        if !directions.is_empty() {
-            inspector_row(ui, "Direction", |ui| {
-                let rem_w = ui.available_width().max(30.0);
-                crate::widgets::styled_combo(ui, format!("anim_dir_{which}"), rem_w)
-                    .selected_text(crate::tl!(direction_label(*direction)))
-                    .show_ui(ui, |ui| {
-                        for &val in directions {
-                            if ui
-                                .selectable_value(direction, val, crate::tl!(direction_label(val)))
-                                .clicked()
-                            {
-                                changed = true;
-                            }
-                        }
-                    });
-            });
+        if fx.id != *effect_str {
+            *fx = fx.switched_to(effect_str);
         }
+        changed |= show_anim_options(ui, which, fx);
 
         let ease_label = match easing {
             Easing::Linear => "Linear",
@@ -2090,7 +2160,7 @@ fn show_anim_row(
         *action_to_run = Some(animation_command(
             which,
             effect_str,
-            *direction,
+            fx,
             *duration_ms,
             *easing,
             slide_id,
@@ -2102,12 +2172,12 @@ fn show_anim_row(
 /// The `object.set_animation` call for one row of the Animations section.
 ///
 /// The engine stores an [`coursecraft_course::Animation`]: the effect (with
-/// its direction) nested under `effect`, plus duration and easing. `none`
+/// its options) nested under `effect`, plus duration and easing. `none`
 /// clears the animation.
 pub(crate) fn animation_command(
     which: &'static str,
     effect: &str,
-    direction: Direction,
+    options: &AnimEffect,
     duration_ms: u32,
     easing: Easing,
     slide_id: &str,
@@ -2116,12 +2186,9 @@ pub(crate) fn animation_command(
     let animation = if effect == "none" {
         Json::Null
     } else {
-        let mut effect_json = serde_json::json!({ "type": effect });
-        if !anim_effect_directions(effect).is_empty() {
-            effect_json["from"] = serde_json::json!(direction);
-        }
+        // The chosen effect with every option of `options` it also takes.
         serde_json::json!({
-            "effect": effect_json,
+            "effect": options.switched_to(effect),
             "duration_ms": duration_ms.clamp(1, 60_000),
             "easing": easing,
         })
@@ -4755,7 +4822,7 @@ fn show_animate_tab(
                 "Entrance animation",
                 "entrance",
                 &mut props.entrance_effect,
-                &mut props.entrance_direction,
+                &mut props.entrance_fx,
                 &mut props.entrance_duration_ms,
                 &mut props.entrance_easing,
                 &slide_id,
@@ -4768,7 +4835,7 @@ fn show_animate_tab(
                 "Exit animation",
                 "exit",
                 &mut props.exit_effect,
-                &mut props.exit_direction,
+                &mut props.exit_fx,
                 &mut props.exit_duration_ms,
                 &mut props.exit_easing,
                 &slide_id,
@@ -4780,7 +4847,7 @@ fn show_animate_tab(
                     actions_to_run.push(animation_command(
                         "entrance",
                         &props.entrance_effect,
-                        props.entrance_direction,
+                        &props.entrance_fx,
                         props.entrance_duration_ms,
                         props.entrance_easing,
                         &slide_id,
@@ -4793,7 +4860,7 @@ fn show_animate_tab(
                     actions_to_run.push(animation_command(
                         "exit",
                         &props.exit_effect,
-                        props.exit_direction,
+                        &props.exit_fx,
                         props.exit_duration_ms,
                         props.exit_easing,
                         &slide_id,
@@ -10989,12 +11056,7 @@ fn show_transition_section(
         });
 
         if matches!(props.slide_transition_effect.as_str(), "push" | "cover") {
-            let dir_label = match props.slide_transition_direction {
-                Direction::Left => "Left",
-                Direction::Right => "Right",
-                Direction::Top => "Top",
-                Direction::Bottom => "Bottom",
-            };
+            let dir_label = crate::tl!(props.slide_transition_direction.label());
             inspector_row(ui, "Direction", |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 crate::widgets::styled_combo(ui, "slide_transition_dir_combo", rem_w)
@@ -11566,7 +11628,7 @@ pub fn show_animations_section(
         "Entrance animation",
         "entrance",
         &mut props.entrance_effect,
-        &mut props.entrance_direction,
+        &mut props.entrance_fx,
         &mut props.entrance_duration_ms,
         &mut props.entrance_easing,
         &slide.id,
@@ -11579,7 +11641,7 @@ pub fn show_animations_section(
         "Exit animation",
         "exit",
         &mut props.exit_effect,
-        &mut props.exit_direction,
+        &mut props.exit_fx,
         &mut props.exit_duration_ms,
         &mut props.exit_easing,
         &slide.id,

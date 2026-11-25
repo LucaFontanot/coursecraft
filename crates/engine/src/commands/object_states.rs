@@ -981,22 +981,11 @@ fn check_effect(cmd: &str, effect: &coursecraft_course::AnimEffect) -> Result<()
             ),
         ));
     };
-    if let Some(from) = effect.from {
-        match def.direction() {
-            Some((_, allowed)) if allowed.contains(&from) => {}
-            Some(_) => {
-                return Err(bad(
-                    cmd,
-                    format!("effect {:?} cannot come from {from:?}", def.id),
-                ));
-            }
-            None => {
-                return Err(bad(
-                    cmd,
-                    format!("effect {:?} takes no direction (`from`)", def.id),
-                ));
-            }
-        }
+    if let Some((_, message)) = def.option_problems(effect).into_iter().next() {
+        return Err(bad(
+            cmd,
+            format!("{message}; `animation.effects` lists its options"),
+        ));
     }
     Ok(())
 }

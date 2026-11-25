@@ -3336,25 +3336,11 @@ fn check_anim_effect(cx: &mut Ctx<'_>, which: &str, effect: &crate::AnimEffect) 
         );
         return;
     };
-    if let Some(from) = effect.from {
-        match def.direction() {
-            None => cx.warn_at(
-                &format!("{which}/effect/from"),
-                format!("effect `{}` takes no direction; `from` is ignored", def.id),
-            ),
-            Some((_, allowed)) if !allowed.contains(&from) => cx.warn_at(
-                &format!("{which}/effect/from"),
-                format!(
-                    "effect `{}` cannot come from `{}`; it plays from its default",
-                    def.id,
-                    serde_json::to_value(from)
-                        .ok()
-                        .and_then(|v| v.as_str().map(str::to_owned))
-                        .unwrap_or_default()
-                ),
-            ),
-            Some(_) => {}
-        }
+    for (field, message) in def.option_problems(effect) {
+        cx.warn_at(
+            &format!("{which}/effect/{field}"),
+            format!("{message}; it plays with the default"),
+        );
     }
 }
 

@@ -11,7 +11,7 @@
 
 use serde::Serialize;
 
-use crate::model::{AnimEffect, Direction};
+use crate::model::{AnimEffect, Direction, InOut, Orientation, RevealShape};
 
 /// The effect the runtime plays for an id this build does not know (a file from a newer
 /// version). The validator warns about it.
@@ -47,12 +47,26 @@ impl EffectCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(tag = "option", rename_all = "snake_case")]
 pub enum EffectOptionDef {
-    /// `from`: the side the object enters from (or leaves toward, for exits).
+    /// `from`: the side or corner the object enters from (or leaves toward, for exits).
     Direction {
         default: Direction,
         allowed: &'static [Direction],
     },
+    /// `shape`: the outline of the reveal.
+    Shape {
+        default: RevealShape,
+        allowed: &'static [RevealShape],
+    },
+    /// `inout`: open from the centre (`out`) or close from the edges (`in`).
+    InOut { default: InOut },
+    /// `spokes`: how many wedges sweep at once.
+    Spokes { default: u8, allowed: &'static [u8] },
+    /// `orientation`: horizontal or vertical.
+    Orientation { default: Orientation },
 }
+
+/// Every JSON field an effect option can be stored in, in menu order.
+pub const OPTION_FIELDS: [&str; 5] = ["from", "shape", "inout", "spokes", "orientation"];
 
 impl EffectOptionDef {
     /// The JSON field this option is stored in.
@@ -60,6 +74,22 @@ impl EffectOptionDef {
     pub const fn field(&self) -> &'static str {
         match self {
             Self::Direction { .. } => "from",
+            Self::Shape { .. } => "shape",
+            Self::InOut { .. } => "inout",
+            Self::Spokes { .. } => "spokes",
+            Self::Orientation { .. } => "orientation",
+        }
+    }
+
+    /// English section title for the Effect Options menu.
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Direction { .. } => "Direction",
+            Self::Shape { .. } => "Shape",
+            Self::InOut { .. } => "In or out",
+            Self::Spokes { .. } => "Spokes",
+            Self::Orientation { .. } => "Orientation",
         }
     }
 }
@@ -77,7 +107,7 @@ pub struct EffectDef {
     /// Options the effect accepts. Fields not listed here are ignored by the runtime and
     /// reported by the validator.
     pub options: &'static [EffectOptionDef],
-    /// Duration the editor uses when the effect is first applied.
+    /// Duration the editor uses when the effect is first applied (0 for instant effects).
     pub default_duration_ms: u32,
 }
 
@@ -94,10 +124,46 @@ impl EffectDef {
 
     /// The direction option, if the effect has one.
     #[must_use]
-    #[allow(clippy::unnecessary_find_map)] // one option kind today; more arrive with effect pack 1
     pub fn direction(&self) -> Option<(Direction, &'static [Direction])> {
         self.options.iter().find_map(|o| match *o {
             EffectOptionDef::Direction { default, allowed } => Some((default, allowed)),
+            _ => None,
+        })
+    }
+
+    /// The shape option, if the effect has one.
+    #[must_use]
+    pub fn shape(&self) -> Option<(RevealShape, &'static [RevealShape])> {
+        self.options.iter().find_map(|o| match *o {
+            EffectOptionDef::Shape { default, allowed } => Some((default, allowed)),
+            _ => None,
+        })
+    }
+
+    /// The in/out option's default, if the effect has one.
+    #[must_use]
+    pub fn inout(&self) -> Option<InOut> {
+        self.options.iter().find_map(|o| match *o {
+            EffectOptionDef::InOut { default } => Some(default),
+            _ => None,
+        })
+    }
+
+    /// The spokes option, if the effect has one.
+    #[must_use]
+    pub fn spokes(&self) -> Option<(u8, &'static [u8])> {
+        self.options.iter().find_map(|o| match *o {
+            EffectOptionDef::Spokes { default, allowed } => Some((default, allowed)),
+            _ => None,
+        })
+    }
+
+    /// The orientation option's default, if the effect has one.
+    #[must_use]
+    pub fn orientation(&self) -> Option<Orientation> {
+        self.options.iter().find_map(|o| match *o {
+            EffectOptionDef::Orientation { default } => Some(default),
+            _ => None,
         })
     }
 
@@ -105,6 +171,48 @@ impl EffectDef {
     #[must_use]
     pub fn takes(&self, field: &str) -> bool {
         self.options.iter().any(|o| o.field() == field)
+    }
+
+    /// What is wrong with `effect`'s stored options for this effect: `(field, message)` for
+    /// every option it doesn't take or a value it doesn't allow. Empty when all is well.
+    #[must_use]
+    pub fn option_problems(&self, effect: &AnimEffect) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        let id = self.id;
+        let mut check = |field: &'static str, set: bool, allowed: Option<bool>| match (set, allowed)
+        {
+            (false, _) | (true, Some(true)) => {}
+            (true, None) => out.push((field, format!("effect `{id}` takes no `{field}`"))),
+            (true, Some(false)) => out.push((
+                field,
+                format!("effect `{id}` does not allow this `{field}`"),
+            )),
+        };
+        check(
+            "from",
+            effect.from.is_some(),
+            self.direction()
+                .map(|(_, a)| effect.from.is_some_and(|v| a.contains(&v))),
+        );
+        check(
+            "shape",
+            effect.shape.is_some(),
+            self.shape()
+                .map(|(_, a)| effect.shape.is_some_and(|v| a.contains(&v))),
+        );
+        check("inout", effect.inout.is_some(), self.inout().map(|_| true));
+        check(
+            "spokes",
+            effect.spokes.is_some(),
+            self.spokes()
+                .map(|(_, a)| effect.spokes.is_some_and(|v| a.contains(&v))),
+        );
+        check(
+            "orientation",
+            effect.orientation.is_some(),
+            self.orientation().map(|_| true),
+        );
+        out
     }
 }
 
@@ -115,53 +223,148 @@ const SIDES: &[Direction] = &[
     Direction::Bottom,
 ];
 
+const CORNERS: &[Direction] = &[
+    Direction::TopLeft,
+    Direction::TopRight,
+    Direction::BottomLeft,
+    Direction::BottomRight,
+];
+
 const FROM_SIDE: EffectOptionDef = EffectOptionDef::Direction {
     default: Direction::Bottom,
     allowed: SIDES,
 };
 
+const FROM_ANY: EffectOptionDef = EffectOptionDef::Direction {
+    default: Direction::Bottom,
+    allowed: &Direction::ALL,
+};
+
+const FROM_CORNER: EffectOptionDef = EffectOptionDef::Direction {
+    default: Direction::BottomRight,
+    allowed: CORNERS,
+};
+
+const ANY_SHAPE: EffectOptionDef = EffectOptionDef::Shape {
+    default: RevealShape::Circle,
+    allowed: &RevealShape::ALL,
+};
+
+const IN_OUT: EffectOptionDef = EffectOptionDef::InOut {
+    default: InOut::Out,
+};
+
+const SPOKES: EffectOptionDef = EffectOptionDef::Spokes {
+    default: 1,
+    allowed: &[1, 2, 3, 4, 8],
+};
+
+const HORIZONTAL: EffectOptionDef = EffectOptionDef::Orientation {
+    default: Orientation::Horizontal,
+};
+
+const VERTICAL: EffectOptionDef = EffectOptionDef::Orientation {
+    default: Orientation::Vertical,
+};
+
+const fn def(
+    id: &'static str,
+    category: EffectCategory,
+    labels: (&'static str, &'static str),
+    options: &'static [EffectOptionDef],
+    default_duration_ms: u32,
+) -> EffectDef {
+    EffectDef {
+        id,
+        category,
+        entrance_label: labels.0,
+        exit_label: labels.1,
+        options,
+        default_duration_ms,
+    }
+}
+
+use EffectCategory::{Basic, Exciting, Moderate, Subtle};
+
 /// Every effect, in gallery order.
 pub static EFFECTS: &[EffectDef] = &[
-    EffectDef {
-        id: "fade",
-        category: EffectCategory::Basic,
-        entrance_label: "Fade in",
-        exit_label: "Fade out",
-        options: &[],
-        default_duration_ms: 500,
-    },
-    EffectDef {
-        id: "fly_in",
-        category: EffectCategory::Basic,
-        entrance_label: "Fly in",
-        exit_label: "Fly out",
-        options: &[FROM_SIDE],
-        default_duration_ms: 500,
-    },
-    EffectDef {
-        id: "zoom",
-        category: EffectCategory::Basic,
-        entrance_label: "Zoom in",
-        exit_label: "Zoom out",
-        options: &[],
-        default_duration_ms: 500,
-    },
-    EffectDef {
-        id: "wipe",
-        category: EffectCategory::Basic,
-        entrance_label: "Wipe in",
-        exit_label: "Wipe out",
-        options: &[FROM_SIDE],
-        default_duration_ms: 500,
-    },
-    EffectDef {
-        id: "float",
-        category: EffectCategory::Subtle,
-        entrance_label: "Float in",
-        exit_label: "Float out",
-        options: &[FROM_SIDE],
-        default_duration_ms: 500,
-    },
+    // Basic
+    def("appear", Basic, ("Appear", "Disappear"), &[], 0),
+    def("fade", Basic, ("Fade in", "Fade out"), &[], 500),
+    def("grow", Basic, ("Grow", "Shrink"), &[], 500),
+    def("fly_in", Basic, ("Fly in", "Fly out"), &[FROM_ANY], 500),
+    def(
+        "float",
+        Subtle,
+        ("Float in", "Float out"),
+        &[FROM_SIDE],
+        500,
+    ),
+    def("split", Basic, ("Split", "Split"), &[VERTICAL, IN_OUT], 500),
+    def("wipe", Basic, ("Wipe in", "Wipe out"), &[FROM_ANY], 500),
+    def(
+        "shape",
+        Basic,
+        ("Shape", "Shape"),
+        &[ANY_SHAPE, IN_OUT],
+        1000,
+    ),
+    def("wheel", Basic, ("Wheel", "Wheel"), &[SPOKES], 1000),
+    def(
+        "random_bars",
+        Basic,
+        ("Random bars", "Random bars"),
+        &[HORIZONTAL],
+        500,
+    ),
+    def("zoom", Basic, ("Zoom in", "Zoom out"), &[], 500),
+    // Subtle
+    def(
+        "dissolve",
+        Subtle,
+        ("Dissolve in", "Dissolve out"),
+        &[],
+        750,
+    ),
+    def("blinds", Subtle, ("Blinds", "Blinds"), &[HORIZONTAL], 500),
+    def("peek", Subtle, ("Peek in", "Peek out"), &[FROM_SIDE], 500),
+    def("expand", Subtle, ("Expand", "Contract"), &[], 750),
+    def("rise", Subtle, ("Rise up", "Sink down"), &[], 750),
+    // Moderate
+    def("spin", Moderate, ("Spin", "Spin"), &[], 750),
+    def(
+        "spin_grow",
+        Moderate,
+        ("Spin & grow", "Spin & shrink"),
+        &[],
+        1000,
+    ),
+    def(
+        "grow_turn",
+        Moderate,
+        ("Grow & turn", "Shrink & turn"),
+        &[],
+        750,
+    ),
+    def(
+        "checkerboard",
+        Moderate,
+        ("Checkerboard", "Checkerboard"),
+        &[HORIZONTAL],
+        750,
+    ),
+    def(
+        "strips",
+        Moderate,
+        ("Strips", "Strips"),
+        &[FROM_CORNER],
+        750,
+    ),
+    def("flip", Moderate, ("Flip in", "Flip out"), &[VERTICAL], 750),
+    // Exciting
+    def("swivel", Exciting, ("Swivel", "Swivel"), &[VERTICAL], 1000),
+    def("bounce", Exciting, ("Bounce in", "Bounce out"), &[], 1000),
+    def("pop", Exciting, ("Pop in", "Pop out"), &[], 500),
 ];
 
 /// The registry entry for `id`, if this build knows it.
@@ -171,25 +374,27 @@ pub fn effect_def(id: &str) -> Option<&'static EffectDef> {
 }
 
 impl AnimEffect {
-    /// The effect `id` with every option at its default (direction written out, so the stored
-    /// file says what plays).
+    /// The effect `id` with every option at its default (written out, so the stored file says
+    /// what plays).
     #[must_use]
     pub fn new(id: &str) -> Self {
-        let from = effect_def(id)
-            .and_then(EffectDef::direction)
-            .map(|(d, _)| d);
+        let d = effect_def(id);
         Self {
             id: id.to_owned(),
-            from,
+            from: d.and_then(EffectDef::direction).map(|(v, _)| v),
+            shape: d.and_then(EffectDef::shape).map(|(v, _)| v),
+            inout: d.and_then(EffectDef::inout),
+            spokes: d.and_then(EffectDef::spokes).map(|(v, _)| v),
+            orientation: d.and_then(EffectDef::orientation),
         }
     }
 
-    /// The effect `id` coming from (or leaving toward) `from`.
+    /// The effect `id` coming from (or leaving toward) `from`, other options at default.
     #[must_use]
     pub fn with_from(id: &str, from: Direction) -> Self {
         Self {
-            id: id.to_owned(),
             from: Some(from),
+            ..Self::new(id)
         }
     }
 
@@ -207,15 +412,69 @@ impl AnimEffect {
         Some(self.from.filter(|d| allowed.contains(d)).unwrap_or(default))
     }
 
-    /// Change the effect, keeping the direction when the new effect takes one.
+    /// The reveal shape to play (same rules as [`Self::direction`]).
+    #[must_use]
+    pub fn shape(&self) -> Option<RevealShape> {
+        let (default, allowed) = self.def()?.shape()?;
+        Some(
+            self.shape
+                .filter(|v| allowed.contains(v))
+                .unwrap_or(default),
+        )
+    }
+
+    /// In or out (same rules as [`Self::direction`]).
+    #[must_use]
+    pub fn inout(&self) -> Option<InOut> {
+        let default = self.def()?.inout()?;
+        Some(self.inout.unwrap_or(default))
+    }
+
+    /// The spoke count to play (same rules as [`Self::direction`]).
+    #[must_use]
+    pub fn spokes(&self) -> Option<u8> {
+        let (default, allowed) = self.def()?.spokes()?;
+        Some(
+            self.spokes
+                .filter(|v| allowed.contains(v))
+                .unwrap_or(default),
+        )
+    }
+
+    /// The orientation to play (same rules as [`Self::direction`]).
+    #[must_use]
+    pub fn orientation(&self) -> Option<Orientation> {
+        let default = self.def()?.orientation()?;
+        Some(self.orientation.unwrap_or(default))
+    }
+
+    /// Change the effect, keeping every option the new effect also takes with that value.
     #[must_use]
     pub fn switched_to(&self, id: &str) -> Self {
         let mut next = Self::new(id);
-        if let (Some(old), Some((_, allowed))) =
-            (self.from, next.def().and_then(EffectDef::direction))
-            && allowed.contains(&old)
+        let Some(d) = next.def() else {
+            return next;
+        };
+        if let (Some(v), Some((_, a))) = (self.from, d.direction())
+            && a.contains(&v)
         {
-            next.from = Some(old);
+            next.from = Some(v);
+        }
+        if let (Some(v), Some((_, a))) = (self.shape, d.shape())
+            && a.contains(&v)
+        {
+            next.shape = Some(v);
+        }
+        if let (Some(v), Some(_)) = (self.inout, d.inout()) {
+            next.inout = Some(v);
+        }
+        if let (Some(v), Some((_, a))) = (self.spokes, d.spokes())
+            && a.contains(&v)
+        {
+            next.spokes = Some(v);
+        }
+        if let (Some(v), Some(_)) = (self.orientation, d.orientation()) {
+            next.orientation = Some(v);
         }
         next
     }
@@ -275,10 +534,32 @@ mod tests {
                 "duplicate `{}`",
                 d.id
             );
-            assert!((1..=60_000).contains(&d.default_duration_ms));
+            assert!(d.default_duration_ms <= 60_000);
             if let Some((default, allowed)) = d.direction() {
                 assert!(allowed.contains(&default), "`{}` default", d.id);
             }
+            if let Some((default, allowed)) = d.shape() {
+                assert!(allowed.contains(&default), "`{}` default", d.id);
+            }
+            if let Some((default, allowed)) = d.spokes() {
+                assert!(allowed.contains(&default), "`{}` default", d.id);
+            }
+            for (i, o) in d.options.iter().enumerate() {
+                assert!(
+                    d.options[..i].iter().all(|p| p.field() != o.field()),
+                    "`{}` lists `{}` twice",
+                    d.id,
+                    o.field()
+                );
+                assert!(OPTION_FIELDS.contains(&o.field()));
+            }
+            assert!(
+                AnimEffect::new(d.id)
+                    .def()
+                    .is_some_and(|x| x.option_problems(&AnimEffect::new(d.id)).is_empty()),
+                "`{}` defaults are not valid",
+                d.id
+            );
         }
         assert!(effect_def(FALLBACK_EFFECT).is_some());
     }
@@ -298,7 +579,7 @@ mod tests {
         obj.entrance = Some(Animation {
             effect: AnimEffect {
                 id: "from_the_future".to_owned(),
-                from: None,
+                ..AnimEffect::default()
             },
             duration_ms: 500,
             easing: crate::Easing::EaseOut,
@@ -317,7 +598,7 @@ mod tests {
             })
         };
         assert!(warn("unknown animation effect"), "{issues:?}");
-        assert!(warn("takes no direction"), "{issues:?}");
+        assert!(warn("takes no `from`"), "{issues:?}");
         assert!(
             issues.iter().all(|i| i.severity != Severity::Error),
             "{issues:?}"
@@ -334,5 +615,43 @@ mod tests {
             let again = Course::from_json(&c.to_json().expect("writes")).expect("reparses");
             assert_eq!(c, again);
         }
+    }
+
+    #[test]
+    fn options_round_trip_and_switch() {
+        let json = r#"{"type":"shape","shape":"diamond","inout":"in"}"#;
+        let e: AnimEffect = serde_json::from_str(json).expect("parses");
+        assert_eq!(serde_json::to_string(&e).expect("writes"), json);
+        assert_eq!(e.shape(), Some(RevealShape::Diamond));
+        assert_eq!(e.inout(), Some(InOut::In));
+        // Split keeps in/out; Wheel keeps nothing.
+        let split = e.switched_to("split");
+        assert_eq!(split.inout, Some(InOut::In));
+        assert_eq!(split.shape, None);
+        assert_eq!(split.orientation, Some(Orientation::Vertical));
+        assert_eq!(e.switched_to("wheel").spokes, Some(1));
+        // A diagonal survives a switch to an effect that allows it, not to one that doesn't.
+        let fly = AnimEffect::with_from("fly_in", Direction::TopLeft);
+        assert_eq!(fly.switched_to("wipe").from, Some(Direction::TopLeft));
+        assert_eq!(fly.switched_to("peek").from, Some(Direction::Bottom));
+    }
+
+    #[test]
+    fn option_problems_name_the_field() {
+        let wheel = effect_def("wheel").expect("wheel");
+        let bad = AnimEffect {
+            spokes: Some(5),
+            from: Some(Direction::Left),
+            ..AnimEffect::new("wheel")
+        };
+        let p = wheel.option_problems(&bad);
+        assert!(p.iter().any(|(f, _)| *f == "spokes"));
+        assert!(p.iter().any(|(f, _)| *f == "from"));
+        assert_eq!(
+            bad.spokes(),
+            Some(1),
+            "a disallowed count plays the default"
+        );
+        assert!(wheel.option_problems(&AnimEffect::new("wheel")).is_empty());
     }
 }

@@ -1572,17 +1572,30 @@ pub fn d1000() -> u32 {
 /// from a newer version still opens (it plays as [`crate::effects::FALLBACK_EFFECT`]).
 /// Options are typed fields; unknown fields are refused, options the effect does not take are
 /// reported by the validator and ignored by the runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AnimEffect {
     /// Registry id (`"fade"`, `"fly_in"`, …).
     #[serde(rename = "type")]
     pub id: String,
-    /// Side the object enters from, or leaves toward for exits.
+    /// Side or corner the object enters from, or leaves toward for exits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<Direction>,
+    /// Reveal shape (Shape).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<RevealShape>,
+    /// Whether the reveal opens out from the centre or closes in from the edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inout: Option<InOut>,
+    /// Number of spokes (Wheel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spokes: Option<u8>,
+    /// Horizontal or vertical (Split, Random bars, Blinds, Checkerboard, Swivel, Flip).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Orientation>,
 }
 
+/// A side or corner of the slide or object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
@@ -1591,6 +1604,113 @@ pub enum Direction {
     Top,
     #[default]
     Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Direction {
+    /// Every direction, sides first, then corners.
+    pub const ALL: [Self; 8] = [
+        Self::Left,
+        Self::Right,
+        Self::Top,
+        Self::Bottom,
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+
+    /// Unit-ish vector pointing toward this side or corner from the centre (y grows down):
+    /// left is `(-1, 0)`, top-right `(1, -1)`.
+    #[must_use]
+    pub const fn vector(self) -> (f32, f32) {
+        match self {
+            Self::Left => (-1.0, 0.0),
+            Self::Right => (1.0, 0.0),
+            Self::Top => (0.0, -1.0),
+            Self::Bottom => (0.0, 1.0),
+            Self::TopLeft => (-1.0, -1.0),
+            Self::TopRight => (1.0, -1.0),
+            Self::BottomLeft => (-1.0, 1.0),
+            Self::BottomRight => (1.0, 1.0),
+        }
+    }
+
+    /// English label (the editor passes it through `tl!`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Top => "Top",
+            Self::Bottom => "Bottom",
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+        }
+    }
+}
+
+/// The outline a Shape effect reveals through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealShape {
+    #[default]
+    Circle,
+    Box,
+    Diamond,
+    Plus,
+}
+
+impl RevealShape {
+    pub const ALL: [Self; 4] = [Self::Circle, Self::Box, Self::Diamond, Self::Plus];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Circle => "Circle",
+            Self::Box => "Box",
+            Self::Diamond => "Diamond",
+            Self::Plus => "Plus",
+        }
+    }
+}
+
+/// `out`: the reveal opens from the centre outward. `in`: it closes from the edges inward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InOut {
+    In,
+    #[default]
+    Out,
+}
+
+impl InOut {
+    pub const ALL: [Self; 2] = [Self::In, Self::Out];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::In => "In",
+            Self::Out => "Out",
+        }
+    }
+}
+
+impl Orientation {
+    pub const ALL: [Self; 2] = [Self::Horizontal, Self::Vertical];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1793,7 +1913,7 @@ pub const MIN_RADIO_OPTIONS: usize = 2;
 /// A radio group has at most this many options.
 pub const MAX_RADIO_OPTIONS: usize = 20;
 
-/// Direction of a slider's track.
+/// Horizontal or vertical: a slider's track, or an animation effect's orientation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Orientation {

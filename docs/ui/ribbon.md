@@ -266,9 +266,9 @@ Shown when the Course Map view tab is active.
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
 | Advanced | Animation Painter | L | `ui:animationPainter` | ⛔ | Format Painter for animations |
-| Entrance Animations ↘ | effect gallery | G | `object.set_animation` `{entrance}` | ✅ | `ribbon/gallery.rs`: None, Fade, Fly In, Zoom, Wipe, Float (the effects the runtime has), on every selected object; ↘ opens the Animate inspector; Add Motion Path runs `object.add_motion_path` |
+| Entrance Animations ↘ | effect gallery | G | `object.set_animation` `{entrance}` | ✅ | `ribbon/gallery.rs`: None plus every effect in the registry (25: Appear, Fade, Grow, Fly, Float, Split, Wipe, Shape, Wheel, Random bars, Zoom, Dissolve, Blinds, Peek, Expand, Rise up, Spin, Spin & grow, Grow & turn, Checkerboard, Strips, Flip, Swivel, Bounce, Pop), on every selected object; per-effect icons arrive in M46 phase 4; ↘ opens the Animate inspector; Add Motion Path runs `object.add_motion_path` |
 | | Duration | N | `object.set_animation` `{duration_ms}` | ✅ | seconds |
-| | Effect Options | SS | `object.set_animation` `{from, sequence}` | 🟡 | ▾ From Left / Right / Top / Bottom ✅; Sequence By Paragraph ⛔ |
+| | Effect Options | SS | `object.set_animation` `{from, sequence}` | 🟡 | ▾ From Left / Right / Top / Bottom ✅ (a side the effect doesn't take is disabled); corners, shape, in/out, spokes and orientation are in the Animate inspector until the sectioned menu with icons (M46 phase 4); Sequence By Paragraph ⛔ |
 | Exit Animations | (same three) | | `object.set_animation` `{exit}` | ✅ | |
 | Emphasis Animations | Add Emphasis Animation | LS | — | ⛔ | pulse, spin, teeter… at a time |
 | | emphasis list | G | — | ⛔ | |

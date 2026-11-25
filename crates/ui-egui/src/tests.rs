@@ -18459,7 +18459,10 @@ fn animation_panel_settings_are_stored_for_every_effect() {
             let (cmd, params) = crate::properties::animation_command(
                 which,
                 effect,
-                Direction::Top,
+                &coursecraft_course::AnimEffect {
+                    from: Some(Direction::Top),
+                    ..coursecraft_course::AnimEffect::default()
+                },
                 700,
                 Easing::EaseIn,
                 "s1",
@@ -18487,7 +18490,10 @@ fn animation_panel_settings_are_stored_for_every_effect() {
     let (cmd, params) = crate::properties::animation_command(
         "entrance",
         "none",
-        Direction::Bottom,
+        &coursecraft_course::AnimEffect {
+            from: Some(Direction::Bottom),
+            ..coursecraft_course::AnimEffect::default()
+        },
         500,
         Easing::EaseOut,
         "s1",
@@ -18507,7 +18513,10 @@ fn moving_an_object_on_the_timeline_keeps_its_animation() {
     let (cmd, params) = crate::properties::animation_command(
         "entrance",
         "fly_in",
-        Direction::Left,
+        &coursecraft_course::AnimEffect {
+            from: Some(Direction::Left),
+            ..coursecraft_course::AnimEffect::default()
+        },
         800,
         Easing::EaseOut,
         "s1",
@@ -18535,8 +18544,8 @@ fn moving_an_object_on_the_timeline_keeps_its_animation() {
         "the inspector still shows it"
     );
     assert_eq!(
-        harness.editor.ui.properties.entrance_direction,
-        Direction::Left
+        harness.editor.ui.properties.entrance_fx.direction(),
+        Some(Direction::Left)
     );
 }
 
@@ -18694,7 +18703,10 @@ fn reselecting_the_same_animation_adds_no_undo_step() {
         crate::properties::animation_command(
             "entrance",
             effect,
-            Direction::Left,
+            &coursecraft_course::AnimEffect {
+                from: Some(Direction::Left),
+                ..coursecraft_course::AnimEffect::default()
+            },
             ms,
             Easing::EaseOut,
             "s1",
@@ -18848,7 +18860,10 @@ fn exit_animations_play_in_preview_with_slide_transition() {
     let (cmd1, params1) = crate::properties::animation_command(
         "exit",
         "fly_in",
-        coursecraft_course::Direction::Left,
+        &coursecraft_course::AnimEffect {
+            from: Some(coursecraft_course::Direction::Left),
+            ..coursecraft_course::AnimEffect::default()
+        },
         1000,
         coursecraft_course::Easing::Linear,
         "s1",
@@ -18859,7 +18874,10 @@ fn exit_animations_play_in_preview_with_slide_transition() {
     let (cmd2, params2) = crate::properties::animation_command(
         "exit",
         "fade",
-        coursecraft_course::Direction::Bottom,
+        &coursecraft_course::AnimEffect {
+            from: Some(coursecraft_course::Direction::Bottom),
+            ..coursecraft_course::AnimEffect::default()
+        },
         1000,
         coursecraft_course::Easing::Linear,
         "s1",

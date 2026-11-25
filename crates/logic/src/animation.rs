@@ -5,7 +5,7 @@
 //! and headless renderers.
 
 use coursecraft_course::{
-    Animation, Direction, Easing, MotionPath, Point, Rect, Size, Transition, TransitionEffect,
+    Animation, Easing, MotionPath, Point, Rect, Size, Transition, TransitionEffect,
 };
 
 /// Evaluate an easing curve on normalized time `t` in `[0, 1]`.
@@ -329,12 +329,11 @@ pub fn sample_transition(
             next_alpha: p,
         },
         TransitionEffect::Push { from } => {
-            let (next_offset, prev_offset) = match from {
-                Direction::Left => ((-(1.0 - p) * w, 0.0), (p * w, 0.0)),
-                Direction::Right => (((1.0 - p) * w, 0.0), (-p * w, 0.0)),
-                Direction::Top => ((0.0, -(1.0 - p) * h), (0.0, p * h)),
-                Direction::Bottom => ((0.0, (1.0 - p) * h), (0.0, -p * h)),
-            };
+            // The new slide comes in from `from` (a side or corner); the old one leaves the
+            // other way.
+            let (vx, vy) = from.vector();
+            let next_offset = (vx * (1.0 - p) * w, vy * (1.0 - p) * h);
+            let prev_offset = (-vx * p * w, -vy * p * h);
             TransitionSample {
                 prev_offset,
                 prev_alpha: 1.0,
@@ -343,12 +342,8 @@ pub fn sample_transition(
             }
         }
         TransitionEffect::Cover { from } => {
-            let next_offset = match from {
-                Direction::Left => (-(1.0 - p) * w, 0.0),
-                Direction::Right => ((1.0 - p) * w, 0.0),
-                Direction::Top => (0.0, -(1.0 - p) * h),
-                Direction::Bottom => (0.0, (1.0 - p) * h),
-            };
+            let (vx, vy) = from.vector();
+            let next_offset = (vx * (1.0 - p) * w, vy * (1.0 - p) * h);
             TransitionSample {
                 prev_offset: (0.0, 0.0),
                 prev_alpha: 1.0,

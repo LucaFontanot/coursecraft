@@ -369,6 +369,19 @@ fn current_from(editor: &Editor, motion: Motion) -> Option<Direction> {
     }
 }
 
+/// Whether `motion`'s current effect can come from `dir` (transitions take every side).
+fn allows_from(editor: &Editor, motion: Motion, dir: Direction) -> bool {
+    match motion {
+        Motion::Transition => true,
+        Motion::Entrance | Motion::Exit => objects(editor)
+            .first()
+            .and_then(|o| animation(o, motion))
+            .and_then(|a| a.effect.def())
+            .and_then(coursecraft_course::EffectDef::direction)
+            .is_some_and(|(_, allowed)| allowed.contains(&dir)),
+    }
+}
+
 /// The current duration of `motion`'s effect, in ms.
 fn current_duration(editor: &Editor, motion: Motion) -> Option<u32> {
     match motion {
@@ -389,12 +402,23 @@ pub fn effect_available(editor: &Editor, op: EffectOp) -> Result<(), &'static st
         Motion::Entrance | Motion::Exit => animation_available(editor),
     };
     match op {
-        EffectOp::Options(motion) | EffectOp::From(motion, _) => {
+        EffectOp::Options(motion) => {
             base(motion)?;
             if current_from(editor, motion).is_some() {
                 Ok(())
             } else {
                 Err("Pick an effect that comes from a side first")
+            }
+        }
+        EffectOp::From(motion, dir) => {
+            base(motion)?;
+            if current_from(editor, motion).is_none() {
+                return Err("Pick an effect that comes from a side first");
+            }
+            if allows_from(editor, motion, dir) {
+                Ok(())
+            } else {
+                Err("This effect can't come from this side")
             }
         }
         EffectOp::Duration(motion) => {

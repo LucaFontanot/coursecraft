@@ -8,9 +8,11 @@
 //! at that moment as an [`ObjectSample`]. Exits reuse the entrance function: `Exiting` runs the
 //! entrance backwards, so each effect is written once.
 
-use coursecraft_course::{AnimEffect, Direction, FALLBACK_EFFECT, Rect, Size};
+use coursecraft_course::{
+    AnimEffect, Direction, FALLBACK_EFFECT, InOut, Orientation, Rect, RevealShape, Size,
+};
 
-use crate::animation::{AnimationPhase, ClipFrac, ObjectSample};
+use crate::animation::{AnimationPhase, ClipFrac, ConvexPoly, Mask, ObjectSample};
 
 /// What a sample function gets besides the effect's options.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,9 +29,14 @@ impl EffectCtx {
     /// How far the object is "in": 0 hidden/away, 1 at rest. Entering runs 0→1, exiting 1→0.
     #[must_use]
     pub fn shown(&self) -> f32 {
-        match self.phase {
+        let s = match self.phase {
             AnimationPhase::Entering => self.eased,
             AnimationPhase::Exiting => 1.0 - self.eased,
+        };
+        if s.is_finite() {
+            s.clamp(0.0, 1.0)
+        } else {
+            1.0
         }
     }
 }
@@ -43,38 +50,53 @@ pub struct EffectImpl {
     pub sample: SampleFn,
 }
 
-/// Every effect the runtime can play. Must list exactly the ids of
-/// [`coursecraft_course::EFFECTS`].
-pub static IMPLS: &[EffectImpl] = &[
-    EffectImpl {
-        id: "fade",
-        sample: fade,
-    },
-    EffectImpl {
-        id: "fly_in",
-        sample: fly_in,
-    },
-    EffectImpl {
-        id: "zoom",
-        sample: zoom,
-    },
-    EffectImpl {
-        id: "wipe",
-        sample: wipe,
-    },
-    EffectImpl {
-        id: "float",
-        sample: float,
-    },
-];
+macro_rules! impls {
+    ($($id:literal => $f:ident),* $(,)?) => {
+        /// Every effect the runtime can play. Must list exactly the ids of
+        /// [`coursecraft_course::EFFECTS`].
+        pub static IMPLS: &[EffectImpl] = &[$(EffectImpl { id: $id, sample: $f }),*];
+    };
+}
+
+impls! {
+    "appear" => appear,
+    "fade" => fade,
+    "grow" => grow,
+    "fly_in" => fly_in,
+    "float" => float,
+    "split" => split,
+    "wipe" => wipe,
+    "shape" => shape,
+    "wheel" => wheel,
+    "random_bars" => random_bars,
+    "zoom" => zoom,
+    "dissolve" => dissolve,
+    "blinds" => blinds,
+    "peek" => peek,
+    "expand" => expand,
+    "rise" => rise,
+    "spin" => spin,
+    "spin_grow" => spin_grow,
+    "grow_turn" => grow_turn,
+    "checkerboard" => checkerboard,
+    "strips" => strips,
+    "flip" => flip,
+    "swivel" => swivel,
+    "bounce" => bounce,
+    "pop" => pop,
+}
 
 fn sampler(id: &str) -> Option<SampleFn> {
     IMPLS.iter().find(|i| i.id == id).map(|i| i.sample)
 }
 
-/// Sample `effect`; an unknown id plays as [`FALLBACK_EFFECT`].
+/// Sample `effect`; an unknown id plays as [`FALLBACK_EFFECT`]. Every effect rests exactly at
+/// [`ObjectSample::IDENTITY`] once fully shown.
 #[must_use]
 pub fn sample_effect(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    if ctx.shown() >= 1.0 {
+        return ObjectSample::IDENTITY;
+    }
     let sample = sampler(&effect.id)
         .or_else(|| sampler(FALLBACK_EFFECT))
         .unwrap_or(fade);
@@ -87,6 +109,246 @@ fn from(effect: &AnimEffect) -> Direction {
     effect.direction().unwrap_or(Direction::Bottom)
 }
 
+fn orientation(effect: &AnimEffect) -> Orientation {
+    effect.orientation().unwrap_or_default()
+}
+
+/// `1 - k·(1 - s)`: `k` short of 1 at the start, exactly 1 at the end.
+fn toward_one(s: f32, k: f32) -> f32 {
+    1.0 - k * (1.0 - s)
+}
+
+/// Ease-out with overshoot: 0 at 0, a little past 1 on the way, 1 at 1.
+fn back_out(s: f32) -> f32 {
+    const C1: f32 = 1.701_58;
+    const C3: f32 = C1 + 1.0;
+    let t = s - 1.0;
+    1.0 + C3 * t * t * t + C1 * t * t
+}
+
+/// A ball dropped on the floor: 0 at 0, three bounces, 1 at 1.
+fn bounce_out(s: f32) -> f32 {
+    const N: f32 = 7.5625;
+    const D: f32 = 2.75;
+    if s < 1.0 / D {
+        N * s * s
+    } else if s < 2.0 / D {
+        let t = s - 1.5 / D;
+        N * t * t + 0.75
+    } else if s < 2.5 / D {
+        let t = s - 2.25 / D;
+        N * t * t + 0.9375
+    } else {
+        let t = s - 2.625 / D;
+        N * t * t + 0.984_375
+    }
+}
+
+/// A shaped reveal: no mask once fully shown, an empty one (nothing visible) at the start.
+fn reveal(s: f32, polys: impl FnOnce() -> Vec<ConvexPoly>) -> Option<Mask> {
+    if s >= 1.0 {
+        None
+    } else if s <= 0.0 {
+        Some(Mask::new(Vec::new()))
+    } else {
+        Some(Mask::new(
+            polys().into_iter().filter(|p| p.0.len() >= 3).collect(),
+        ))
+    }
+}
+
+fn with_mask(mask: Option<Mask>) -> ObjectSample {
+    ObjectSample {
+        mask,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+// ------------------------------------------------------------------ mask geometry
+
+type Pt = (f32, f32);
+
+/// The object's frame in its own fractions.
+fn frame_poly() -> Vec<Pt> {
+    ConvexPoly::rect(0.0, 0.0, 1.0, 1.0).0
+}
+
+/// Keep the part of convex `poly` where `a·x + b·y <= k`.
+fn clip_half(poly: &[Pt], a: f32, b: f32, k: f32) -> Vec<Pt> {
+    let f = |p: Pt| a * p.0 + b * p.1 - k;
+    let mut out = Vec::with_capacity(poly.len() + 1);
+    let Some(&last) = poly.last() else {
+        return out;
+    };
+    let mut prev = last;
+    let mut fp = f(prev);
+    for &cur in poly {
+        let fc = f(cur);
+        if fc <= 0.0 {
+            if fp > 0.0 {
+                out.push(cross_at(prev, cur, fp, fc));
+            }
+            out.push(cur);
+        } else if fp <= 0.0 {
+            out.push(cross_at(prev, cur, fp, fc));
+        }
+        prev = cur;
+        fp = fc;
+    }
+    out
+}
+
+fn cross_at(p: Pt, q: Pt, fp: f32, fq: f32) -> Pt {
+    let t = fp / (fp - fq);
+    (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t)
+}
+
+/// Rectangle `[x0, x1] × [y0, y1]` cut to the frame; empty when it has no area.
+fn frame_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Option<ConvexPoly> {
+    let (x0, x1) = (x0.max(0.0), x1.min(1.0));
+    let (y0, y1) = (y0.max(0.0), y1.min(1.0));
+    (x1 > x0 && y1 > y0).then(|| ConvexPoly::rect(x0, y0, x1, y1))
+}
+
+/// `rect` in the given orientation: `along` runs across the bars (y for horizontal bars).
+fn bar(o: Orientation, along0: f32, along1: f32, across0: f32, across1: f32) -> Option<ConvexPoly> {
+    match o {
+        Orientation::Horizontal => frame_rect(across0, along0, across1, along1),
+        Orientation::Vertical => frame_rect(along0, across0, along1, across1),
+    }
+}
+
+/// A shape outline at full size (it covers the whole frame), star-shaped about the centre,
+/// with vertices in clockwise order.
+fn outline(shape: RevealShape) -> Vec<Pt> {
+    match shape {
+        RevealShape::Circle => {
+            const R: f32 = 0.708;
+            (0..32)
+                .map(|i| {
+                    let a = i as f32 * std::f32::consts::TAU / 32.0;
+                    (0.5 + R * a.sin(), 0.5 - R * a.cos())
+                })
+                .collect()
+        }
+        RevealShape::Box => frame_poly(),
+        RevealShape::Diamond => vec![(0.5, -0.5), (1.5, 0.5), (0.5, 1.5), (-0.5, 0.5)],
+        RevealShape::Plus => {
+            let (a, b) = (1.0, 0.5);
+            [
+                (-b, -a),
+                (b, -a),
+                (b, -b),
+                (a, -b),
+                (a, b),
+                (b, b),
+                (b, a),
+                (-b, a),
+                (-b, b),
+                (-a, b),
+                (-a, -b),
+                (-b, -b),
+            ]
+            .iter()
+            .map(|&(x, y)| (0.5 + x, 0.5 + y))
+            .collect()
+        }
+    }
+}
+
+const CENTRE: Pt = (0.5, 0.5);
+
+fn scaled(p: Pt, t: f32) -> Pt {
+    (
+        CENTRE.0 + (p.0 - CENTRE.0) * t,
+        CENTRE.1 + (p.1 - CENTRE.1) * t,
+    )
+}
+
+/// The inside of `outline` scaled by `t`, as triangles from the centre, cut to the frame.
+fn star_inside(outline: &[Pt], t: f32) -> Vec<ConvexPoly> {
+    (0..outline.len())
+        .map(|i| {
+            let a = scaled(outline[i], t);
+            let b = scaled(outline[(i + 1) % outline.len()], t);
+            let mut poly = frame_poly();
+            for (p, q) in [(CENTRE, a), (a, b), (b, CENTRE)] {
+                // Clockwise on screen: the inside is on the right of each edge.
+                poly = clip_half(
+                    &poly,
+                    q.1 - p.1,
+                    p.0 - q.0,
+                    (q.1 - p.1) * p.0 + (p.0 - q.0) * p.1,
+                );
+            }
+            ConvexPoly(poly)
+        })
+        .collect()
+}
+
+/// The frame outside `outline` scaled by `t`: per edge, the wedge from the centre through its
+/// ends, beyond the edge. The wedges don't overlap, and each is convex.
+fn star_outside(outline: &[Pt], t: f32) -> Vec<ConvexPoly> {
+    (0..outline.len())
+        .map(|i| {
+            let a = scaled(outline[i], t);
+            let b = scaled(outline[(i + 1) % outline.len()], t);
+            let da = (outline[i].0 - CENTRE.0, outline[i].1 - CENTRE.1);
+            let n = outline.len();
+            let db = (
+                outline[(i + 1) % n].0 - CENTRE.0,
+                outline[(i + 1) % n].1 - CENTRE.1,
+            );
+            let mut poly = frame_poly();
+            // Right of the ray through `a` (clockwise side), left of the ray through `b`.
+            poly = clip_half(&poly, da.1, -da.0, da.1 * CENTRE.0 - da.0 * CENTRE.1);
+            poly = clip_half(&poly, -db.1, db.0, -db.1 * CENTRE.0 + db.0 * CENTRE.1);
+            // Beyond the edge a→b (its left side, away from the centre).
+            poly = clip_half(
+                &poly,
+                -(b.1 - a.1),
+                -(a.0 - b.0),
+                -((b.1 - a.1) * a.0 + (a.0 - b.0) * a.1),
+            );
+            ConvexPoly(poly)
+        })
+        .collect()
+}
+
+/// Deterministic shuffle rank of `i` among `0..n` (the same every run and on every platform).
+fn ranks(n: u32) -> Vec<u32> {
+    let mix = |mut x: u32| {
+        x ^= x >> 16;
+        x = x.wrapping_mul(0x7feb_352d);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x846c_a68b);
+        x ^ (x >> 16)
+    };
+    let mut order: Vec<u32> = (0..n).collect();
+    order.sort_by_key(|&i| (mix(i.wrapping_add(0x9e37_79b9)), i));
+    let mut rank = vec![0; n as usize];
+    for (r, &i) in order.iter().enumerate() {
+        if let Some(slot) = rank.get_mut(i as usize) {
+            *slot = r as u32;
+        }
+    }
+    rank
+}
+
+/// How many of `n` pieces show at `s` (all of them only at the very end).
+fn pieces_shown(s: f32, n: u32) -> u32 {
+    ((s * n as f32).floor() as u32).min(n)
+}
+
+// ------------------------------------------------------------------ effects
+
+fn appear(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    ObjectSample {
+        opacity: if ctx.shown() > 0.0 { 1.0 } else { 0.0 },
+        ..ObjectSample::IDENTITY
+    }
+}
+
 fn fade(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     ObjectSample {
         opacity: ctx.shown(),
@@ -94,19 +356,181 @@ fn fade(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     }
 }
 
+fn grow(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    ObjectSample {
+        scale: ObjectSample::uniform(ctx.shown()),
+        ..ObjectSample::IDENTITY
+    }
+}
+
 fn fly_in(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     let f = ctx.frame;
-    let full = match from(effect) {
-        Direction::Left => (-(f.x + f.w), 0.0),
-        Direction::Right => (ctx.slide_size.w as f32 - f.x, 0.0),
-        Direction::Top => (0.0, -(f.y + f.h)),
-        Direction::Bottom => (0.0, ctx.slide_size.h as f32 - f.y),
+    let (vx, vy) = from(effect).vector();
+    let off = |v: f32, pos: f32, size: f32, slide: f32| {
+        if v < 0.0 {
+            -(pos + size)
+        } else if v > 0.0 {
+            slide - pos
+        } else {
+            0.0
+        }
     };
+    let full = (
+        off(vx, f.x, f.w, ctx.slide_size.w as f32),
+        off(vy, f.y, f.h, ctx.slide_size.h as f32),
+    );
     let away = 1.0 - ctx.shown();
     ObjectSample {
         offset: (full.0 * away, full.1 * away),
         ..ObjectSample::IDENTITY
     }
+}
+
+/// How far Float travels, in slide pixels.
+const FLOAT_DISTANCE: f32 = 40.0;
+
+fn float(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let (vx, vy) = from(effect).vector();
+    let s = ctx.shown();
+    let away = 1.0 - s;
+    ObjectSample {
+        offset: (vx * FLOAT_DISTANCE * away, vy * FLOAT_DISTANCE * away),
+        opacity: s,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn split(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    // A vertical split line opens sideways; a horizontal one opens up and down.
+    let o = orientation(effect);
+    let inout = effect.inout().unwrap_or_default();
+    with_mask(reveal(s, || match inout {
+        InOut::Out => bar(o, 0.5 - s / 2.0, 0.5 + s / 2.0, 0.0, 1.0)
+            .into_iter()
+            .collect(),
+        InOut::In => [
+            bar(o, 0.0, s / 2.0, 0.0, 1.0),
+            bar(o, 1.0 - s / 2.0, 1.0, 0.0, 1.0),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    }))
+}
+
+fn wipe(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    let side = |min_x, min_y, max_x, max_y| ObjectSample {
+        clip: Some(ClipFrac {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }),
+        ..ObjectSample::IDENTITY
+    };
+    match from(effect) {
+        Direction::Left => side(0.0, 0.0, s, 1.0),
+        Direction::Right => side(1.0 - s, 0.0, 1.0, 1.0),
+        Direction::Top => side(0.0, 0.0, 1.0, s),
+        Direction::Bottom => side(0.0, 1.0 - s, 1.0, 1.0),
+        corner => {
+            // The front runs across the frame from `corner` to the opposite one.
+            let (vx, vy) = corner.vector();
+            let m = (vx.abs() + vy.abs()) * 0.5;
+            let k = (2.0 * s - 1.0) * m - 0.5 * (vx + vy);
+            with_mask(reveal(s, || {
+                vec![ConvexPoly(clip_half(&frame_poly(), -vx, -vy, k))]
+            }))
+        }
+    }
+}
+
+fn shape(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    let outline = outline(effect.shape().unwrap_or_default());
+    let inout = effect.inout().unwrap_or_default();
+    with_mask(reveal(s, || match inout {
+        InOut::Out => star_inside(&outline, s),
+        InOut::In => star_outside(&outline, 1.0 - s),
+    }))
+}
+
+fn wheel(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    let n = u32::from(effect.spokes().unwrap_or(1).max(1));
+    with_mask(reveal(s, || {
+        const R: f32 = 1.0;
+        const CHUNK: f32 = std::f32::consts::FRAC_PI_4;
+        let sector = std::f32::consts::TAU / n as f32;
+        let sweep = sector * s;
+        let at = |a: f32| (CENTRE.0 + R * a.sin(), CENTRE.1 - R * a.cos());
+        let mut polys = Vec::new();
+        for k in 0..n {
+            let start = sector * k as f32;
+            let mut done = 0.0;
+            while done < sweep {
+                let step = (sweep - done).min(CHUNK);
+                let a0 = start + done;
+                let mut pts = vec![CENTRE];
+                for j in 0..=3 {
+                    pts.push(at(a0 + step * j as f32 / 3.0));
+                }
+                let mut poly = frame_poly();
+                for w in 0..pts.len() {
+                    let p = pts[w];
+                    let q = pts[(w + 1) % pts.len()];
+                    poly = clip_half(
+                        &poly,
+                        q.1 - p.1,
+                        p.0 - q.0,
+                        (q.1 - p.1) * p.0 + (p.0 - q.0) * p.1,
+                    );
+                }
+                polys.push(ConvexPoly(poly));
+                done += step;
+            }
+        }
+        polys
+    }))
+}
+
+/// Runs of consecutive shown pieces, as `(first, last + 1)`.
+fn runs(shown: impl Iterator<Item = bool>) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    let mut i = 0u32;
+    for on in shown {
+        match (on, start) {
+            (true, None) => start = Some(i),
+            (false, Some(a)) => {
+                out.push((a, i));
+                start = None;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if let Some(a) = start {
+        out.push((a, i));
+    }
+    out
+}
+
+fn random_bars(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    const BARS: u32 = 40;
+    let s = ctx.shown();
+    let o = orientation(effect);
+    with_mask(reveal(s, || {
+        let rank = ranks(BARS);
+        let k = pieces_shown(s, BARS);
+        let step = 1.0 / BARS as f32;
+        runs(rank.iter().map(|&r| r < k))
+            .into_iter()
+            .filter_map(|(a, b)| bar(o, a as f32 * step, b as f32 * step, 0.0, 1.0))
+            .collect()
+    }))
 }
 
 fn zoom(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
@@ -118,57 +542,208 @@ fn zoom(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     }
 }
 
-fn wipe(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+fn dissolve(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    const SIDE: u32 = 8;
     let s = ctx.shown();
-    let clip = match from(effect) {
-        Direction::Left => ClipFrac {
-            min_x: 0.0,
-            min_y: 0.0,
-            max_x: s,
-            max_y: 1.0,
-        },
-        Direction::Right => ClipFrac {
-            min_x: 1.0 - s,
-            min_y: 0.0,
-            max_x: 1.0,
-            max_y: 1.0,
-        },
-        Direction::Top => ClipFrac {
-            min_x: 0.0,
-            min_y: 0.0,
-            max_x: 1.0,
-            max_y: s,
-        },
-        Direction::Bottom => ClipFrac {
-            min_x: 0.0,
-            min_y: 1.0 - s,
-            max_x: 1.0,
-            max_y: 1.0,
-        },
+    with_mask(reveal(s, || {
+        let rank = ranks(SIDE * SIDE);
+        let k = pieces_shown(s, SIDE * SIDE);
+        let step = 1.0 / SIDE as f32;
+        let mut polys = Vec::new();
+        for row in 0..SIDE {
+            let cells =
+                (0..SIDE).map(|c| rank.get((row * SIDE + c) as usize).is_some_and(|&r| r < k));
+            for (a, b) in runs(cells) {
+                polys.extend(frame_rect(
+                    a as f32 * step,
+                    row as f32 * step,
+                    b as f32 * step,
+                    (row + 1) as f32 * step,
+                ));
+            }
+        }
+        polys
+    }))
+}
+
+fn blinds(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    const SLATS: u32 = 6;
+    let s = ctx.shown();
+    let o = orientation(effect);
+    with_mask(reveal(s, || {
+        let step = 1.0 / SLATS as f32;
+        (0..SLATS)
+            .filter_map(|i| {
+                let a = i as f32 * step;
+                bar(o, a, a + s * step, 0.0, 1.0)
+            })
+            .collect()
+    }))
+}
+
+fn peek(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    let f = ctx.frame;
+    let away = 1.0 - s;
+    let (offset, clip) = match from(effect) {
+        Direction::Left => ((-f.w * away, 0.0), (1.0 - s, 0.0, 1.0, 1.0)),
+        Direction::Right => ((f.w * away, 0.0), (0.0, 0.0, s, 1.0)),
+        Direction::Top => ((0.0, -f.h * away), (0.0, 1.0 - s, 1.0, 1.0)),
+        _ => ((0.0, f.h * away), (0.0, 0.0, 1.0, s)),
     };
-    let full = clip.min_x <= 0.0 && clip.min_y <= 0.0 && clip.max_x >= 1.0 && clip.max_y >= 1.0;
     ObjectSample {
-        clip: if full { None } else { Some(clip) },
+        offset,
+        clip: Some(ClipFrac {
+            min_x: clip.0,
+            min_y: clip.1,
+            max_x: clip.2,
+            max_y: clip.3,
+        }),
         ..ObjectSample::IDENTITY
     }
 }
 
-/// How far Float travels, in slide pixels.
-const FLOAT_DISTANCE: f32 = 40.0;
-
-fn float(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
-    let d = FLOAT_DISTANCE;
-    let dir = match from(effect) {
-        Direction::Left => (-d, 0.0),
-        Direction::Right => (d, 0.0),
-        Direction::Top => (0.0, -d),
-        Direction::Bottom => (0.0, d),
-    };
+fn expand(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     let s = ctx.shown();
-    let away = 1.0 - s;
     ObjectSample {
-        offset: (dir.0 * away, dir.1 * away),
+        scale: (toward_one(s, 0.7), 1.0),
         opacity: s,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+/// How far Rise up travels, in slide pixels.
+const RISE_DISTANCE: f32 = 80.0;
+
+fn rise(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    ObjectSample {
+        offset: (0.0, RISE_DISTANCE * (1.0 - back_out(s))),
+        opacity: s,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn spin(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    ObjectSample {
+        rotation_deg: -360.0 * (1.0 - s),
+        opacity: s,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn spin_grow(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    ObjectSample {
+        rotation_deg: -360.0 * (1.0 - s),
+        scale: ObjectSample::uniform(s),
+        opacity: s,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn grow_turn(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    ObjectSample {
+        rotation_deg: -90.0 * (1.0 - s),
+        scale: ObjectSample::uniform(s),
+        opacity: s,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn checkerboard(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    const CELLS: u32 = 6;
+    let s = ctx.shown();
+    // Horizontal runs across (cells open left to right); vertical runs down.
+    let o = match orientation(effect) {
+        Orientation::Horizontal => Orientation::Vertical,
+        Orientation::Vertical => Orientation::Horizontal,
+    };
+    with_mask(reveal(s, || {
+        let w = 1.0 / CELLS as f32;
+        let mut polys = Vec::new();
+        for row in 0..CELLS {
+            let shift = if row % 2 == 1 { w / 2.0 } else { 0.0 };
+            let (r0, r1) = (row as f32 * w, (row + 1) as f32 * w);
+            for c in 0..=CELLS {
+                let x0 = c as f32 * w - shift;
+                polys.extend(bar(o, x0, x0 + s * w, r0, r1));
+            }
+        }
+        polys
+    }))
+}
+
+fn strips(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    const SIDE: u32 = 8;
+    let s = ctx.shown();
+    let (vx, vy) = from(effect).vector();
+    with_mask(reveal(s, || {
+        let step = 1.0 / SIDE as f32;
+        // Cells in diagonal bands from the `from` corner: band d shows once the front passes it.
+        let bands = (2 * SIDE - 1) as f32;
+        let front = s * bands;
+        (0..SIDE)
+            .filter_map(|row| {
+                // Distance of this row from the corner's edge, in cells.
+                let dy = if vy < 0.0 { row } else { SIDE - 1 - row };
+                let count = (front - dy as f32).ceil().clamp(0.0, SIDE as f32) as u32;
+                if count == 0 {
+                    return None;
+                }
+                let y0 = row as f32 * step;
+                let (x0, x1) = if vx < 0.0 {
+                    (0.0, count as f32 * step)
+                } else {
+                    (1.0 - count as f32 * step, 1.0)
+                };
+                frame_rect(x0, y0, x1, y0 + step)
+            })
+            .collect()
+    }))
+}
+
+fn flip(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = (ctx.shown() * std::f32::consts::FRAC_PI_2).sin();
+    ObjectSample {
+        scale: match orientation(effect) {
+            Orientation::Vertical => (s, 1.0),
+            Orientation::Horizontal => (1.0, s),
+        },
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn swivel(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    // One and a quarter turns about the axis, settling face-on.
+    let w = (2.5 * std::f32::consts::PI * (1.0 - s)).cos().abs();
+    ObjectSample {
+        scale: match orientation(effect) {
+            Orientation::Vertical => (w, 1.0),
+            Orientation::Horizontal => (1.0, w),
+        },
+        opacity: s,
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn bounce(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let f = ctx.frame;
+    let drop = f.y + f.h;
+    ObjectSample {
+        offset: (0.0, -drop * (1.0 - bounce_out(ctx.shown()))),
+        ..ObjectSample::IDENTITY
+    }
+}
+
+fn pop(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
+    let s = ctx.shown();
+    ObjectSample {
+        scale: ObjectSample::uniform(back_out(s).max(0.0)),
+        opacity: (2.0 * s).min(1.0),
         ..ObjectSample::IDENTITY
     }
 }
@@ -236,7 +811,7 @@ mod tests {
         };
         let unknown = AnimEffect {
             id: "from_the_future".to_owned(),
-            from: None,
+            ..AnimEffect::default()
         };
         assert_eq!(
             sample_effect(&unknown, &ctx),
@@ -282,5 +857,158 @@ mod tests {
         }
         .sanitized();
         assert_eq!(s.mask, None, "too many polygons show the object whole");
+    }
+
+    /// Every effect with every value of every option it takes.
+    fn all_variants() -> Vec<AnimEffect> {
+        let mut out = Vec::new();
+        for def in EFFECTS {
+            let mut variants = vec![AnimEffect::new(def.id)];
+            if let Some((_, allowed)) = def.direction() {
+                variants = variants
+                    .iter()
+                    .flat_map(|v| {
+                        allowed.iter().map(|&d| AnimEffect {
+                            from: Some(d),
+                            ..v.clone()
+                        })
+                    })
+                    .collect();
+            }
+            if let Some((_, allowed)) = def.shape() {
+                variants = variants
+                    .iter()
+                    .flat_map(|v| {
+                        allowed.iter().map(|&x| AnimEffect {
+                            shape: Some(x),
+                            ..v.clone()
+                        })
+                    })
+                    .collect();
+            }
+            if def.inout().is_some() {
+                variants = variants
+                    .iter()
+                    .flat_map(|v| {
+                        InOut::ALL.iter().map(|&x| AnimEffect {
+                            inout: Some(x),
+                            ..v.clone()
+                        })
+                    })
+                    .collect();
+            }
+            if let Some((_, allowed)) = def.spokes() {
+                variants = variants
+                    .iter()
+                    .flat_map(|v| {
+                        allowed.iter().map(|&x| AnimEffect {
+                            spokes: Some(x),
+                            ..v.clone()
+                        })
+                    })
+                    .collect();
+            }
+            if def.orientation().is_some() {
+                variants = variants
+                    .iter()
+                    .flat_map(|v| {
+                        Orientation::ALL.iter().map(|&x| AnimEffect {
+                            orientation: Some(x),
+                            ..v.clone()
+                        })
+                    })
+                    .collect();
+            }
+            out.extend(variants);
+        }
+        out
+    }
+
+    fn ctx_at(eased: f32) -> EffectCtx {
+        EffectCtx {
+            phase: AnimationPhase::Entering,
+            eased,
+            frame: Rect {
+                x: 100.0,
+                y: 100.0,
+                w: 200.0,
+                h: 100.0,
+            },
+            slide_size: Size { w: 960, h: 540 },
+        }
+    }
+
+    /// Visible part of the frame, 0..1: the mask's pieces cut to the frame, added up.
+    fn mask_area(m: &Mask) -> f32 {
+        const FRAME_EDGES: [(f32, f32, f32); 4] = [
+            (-1.0, 0.0, 0.0),
+            (1.0, 0.0, 1.0),
+            (0.0, -1.0, 0.0),
+            (0.0, 1.0, 1.0),
+        ];
+        m.polys()
+            .iter()
+            .map(|p| {
+                let cut = FRAME_EDGES
+                    .iter()
+                    .fold(p.0.clone(), |acc, &(a, b, k)| clip_half(&acc, a, b, k));
+                if cut.len() < 3 {
+                    0.0
+                } else {
+                    ConvexPoly(cut).area().abs()
+                }
+            })
+            .sum()
+    }
+
+    #[test]
+    fn every_variant_starts_hidden_and_masks_grow_without_overlap() {
+        let variants = all_variants();
+        assert!(variants.len() > 60, "{}", variants.len());
+        for e in &variants {
+            let start = sample_effect(e, &ctx_at(0.0));
+            let hidden = start.opacity == 0.0
+                || start.scale.0 == 0.0
+                || start.scale.1 == 0.0
+                || start.mask.as_ref().is_some_and(|m| m.polys().is_empty())
+                || start
+                    .clip
+                    .is_some_and(|c| c.max_x <= c.min_x || c.max_y <= c.min_y)
+                || start.offset.0.abs() >= 300.0
+                || start.offset.1.abs() >= 200.0;
+            assert!(hidden, "{e:?} is visible at the start: {start:?}");
+
+            let mut last = -1.0;
+            for i in 1..20 {
+                let s = sample_effect(e, &ctx_at(i as f32 / 20.0));
+                let Some(m) = &s.mask else {
+                    continue;
+                };
+                assert!(m.polys().len() <= crate::animation::MAX_MASK_POLYS, "{e:?}");
+                for p in m.polys() {
+                    assert!(p.0.len() <= crate::animation::MAX_POLY_POINTS);
+                    // Convex: every turn goes the same way.
+                    let n = p.0.len();
+                    let turns: Vec<f32> = (0..n)
+                        .map(|k| {
+                            let (a, b, c) = (p.0[k], p.0[(k + 1) % n], p.0[(k + 2) % n]);
+                            (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0)
+                        })
+                        .filter(|t| t.abs() > 1e-6)
+                        .collect();
+                    assert!(
+                        turns.iter().all(|t| *t > 0.0) || turns.iter().all(|t| *t < 0.0),
+                        "{e:?} has a non-convex piece {p:?}"
+                    );
+                }
+                let area = mask_area(m);
+                assert!(area <= 1.0 + 1e-3, "{e:?} pieces overlap: {area}");
+                assert!(
+                    area + 1e-3 >= last,
+                    "{e:?} shrinks at step {i}: {last} → {area}"
+                );
+                last = area;
+            }
+        }
     }
 }

@@ -19,13 +19,13 @@
 | Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
-| Animation, transitions, timeline | 12 | 2 | 8 | 0 |
+| Animation, transitions, timeline | 13 | 1 | 8 | 0 |
 | Questions and quizzes | 8 | 4 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **110** | **39** | **58** | **12** |
+| **Total** | **111** | **38** | **58** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -182,7 +182,7 @@ Counted from the tables below; recount when a row changes.
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
 | Entrance and exit animations | `object.set_animation` | ✅ | — |
-| Animation duration and direction | `object.set_animation` | ✅ | — |
+| Animation duration and effect options (8 directions, shape, in/out, spokes, orientation) | `object.set_animation`; Animate inspector lists each option the effect takes | ✅ | — |
 | Motion paths (add, duration, name, options) | `object.*motion_path` | ✅ | — |
 | Slide transitions and duration | `slide.set_transition` | ✅ | — |
 | Timeline: bars, drag timing, rename, restack | `timeline.rs` | ✅ | — |
@@ -191,7 +191,7 @@ Counted from the tables below; recount when a row changes.
 | Slide duration | `slide.set_duration` | ✅ | — |
 | Play / stop / zoom in timeline | `timeline_playback.rs` | ✅ | — |
 | Timeline shows current layer; group rows expand | `timeline.rs` | ✅ | — |
-| Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`) with the six effects the runtime has | 🟡 subset | M42 |
+| Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`): 25 effects from the registry, each also as an exit | ✅ | M46 |
 | Transition effect options | Transitions › Effect Options ▾ (from left, right, top, bottom) | ✅ | — |
 | Path options | | 🟡 | M42 |
 | Emphasis animations | — | ⛔ | M42 |

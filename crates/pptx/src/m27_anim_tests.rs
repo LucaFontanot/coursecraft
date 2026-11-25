@@ -702,7 +702,7 @@ fn c1_9_easing_and_repeat_count_handling() {
 }
 
 #[test]
-fn c1_10_unsupported_preset_fallback_and_diagonal_direction() {
+fn c1_10_presets_map_to_effects_and_unknown_falls_back() {
     let shapes = format!(
         "{}{}{}",
         rect_shape_xml(2, "BounceBox", 914_400, 914_400),
@@ -716,7 +716,7 @@ fn c1_10_unsupported_preset_fallback_and_diagonal_direction() {
           <p:seq><p:cTn id="2" nodeType="mainSeq"><p:childTnLst>
             <p:par><p:cTn id="3"><p:childTnLst>
               <p:par><p:cTn id="10" presetID="26" presetClass="entr" nodeType="withEffect" dur="500"><p:stCondLst><p:cond delay="200"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr></p:set></p:childTnLst></p:cTn></p:par>
-              <p:par><p:cTn id="11" presetID="37" presetClass="entr" nodeType="withEffect" dur="500"><p:stCondLst><p:cond delay="400"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cBhvr></p:set></p:childTnLst></p:cTn></p:par>
+              <p:par><p:cTn id="11" presetID="99" presetClass="entr" nodeType="withEffect" dur="500"><p:stCondLst><p:cond delay="400"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cBhvr></p:set></p:childTnLst></p:cTn></p:par>
               <p:par><p:cTn id="12" presetID="2" presetClass="entr" presetSubtype="6" nodeType="withEffect" dur="500"><p:childTnLst><p:set><p:cBhvr><p:tgtEl><p:spTgt spid="4"/></p:tgtEl></p:cBhvr></p:set></p:childTnLst></p:cTn></p:par>
             </p:childTnLst></p:cTn></p:par>
           </p:childTnLst></p:cTn></p:seq>
@@ -731,7 +731,8 @@ fn c1_10_unsupported_preset_fallback_and_diagonal_direction() {
     assert_eq!(bounce.timing.start_ms, 200);
     assert_eq!(
         bounce.entrance.as_ref().unwrap().effect,
-        AnimEffect::new("fade")
+        AnimEffect::new("bounce"),
+        "Bounce (26) imports as itself since M46"
     );
 
     let exotic = obj_by_name(slide, "ExoticBox");
@@ -744,13 +745,14 @@ fn c1_10_unsupported_preset_fallback_and_diagonal_direction() {
     let diag = obj_by_name(slide, "DiagFly");
     assert_eq!(
         diag.entrance.as_ref().unwrap().effect,
-        AnimEffect::with_from("fly_in", Direction::Bottom)
+        AnimEffect::with_from("fly_in", Direction::BottomRight),
+        "Fly In keeps its corner since M46"
     );
 
     let notes = anim_notes(&report);
-    assert!(notes.iter().any(|n| n.contains("id=26")));
-    assert!(notes.iter().any(|n| n.contains("id=37")));
-    assert!(notes.iter().any(|n| n.contains("Diagonal")));
+    assert!(notes.iter().any(|n| n.contains("id=99")));
+    assert!(!notes.iter().any(|n| n.contains("id=26")));
+    assert!(!notes.iter().any(|n| n.contains("Diagonal")));
 }
 
 #[test]

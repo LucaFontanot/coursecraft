@@ -511,8 +511,14 @@ rebuilt Animations panel; live preview on the canvas.
   player, the editor's timeline preview and offscreen renders; scaled text shrinks instead of
   rewrapping. Pixel tests cover each part, and every effect ends pixel-identical to its resting
   object. No effect uses the new parts yet.
-- Next: effect pack 1, icons, Animations panel and canvas preview, emphasis, build by paragraph,
-  transitions.
+- Phase 3 (effect pack 1) **built (2026-11-25)**: 25 effects (Appear, Fade, Grow, Fly, Float,
+  Split, Wipe, Shape, Wheel, Random bars, Zoom, Dissolve, Blinds, Peek, Expand, Rise up, Spin,
+  Spin & grow, Grow & turn, Checkerboard, Strips, Flip, Swivel, Bounce, Pop), each also an exit.
+  Directions gain the four corners. New options: shape, in/out, spokes, orientation. The Animate
+  inspector shows every option the effect takes, and PowerPoint import maps the matching presets
+  instead of falling back to Fade.
+- Next: icons (per-effect and option icons, sectioned Effect Options menu), Animations panel and
+  canvas preview, emphasis, build by paragraph, transitions.
 
 ## After the first release
 

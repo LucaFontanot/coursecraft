@@ -96,9 +96,10 @@ fn the_entrance_gallery_animates_the_selected_object() {
     let mut h = harness();
     h.editor.selection.object = Some("sh1".into());
     open_tab(&mut h, "animations");
-    let tiles = h.find_texts("Fly in");
-    let fly = tiles.first().copied().expect("Fly in tile");
-    h.click_at(fly);
+    // Fade is near the start of the gallery, so its tile is always in view.
+    let tiles = h.find_texts("Fade in");
+    let fade = tiles.first().copied().expect("Fade in tile");
+    h.click_at(fade);
     frames(&mut h, 2);
     let object = |h: &TestHarness| {
         h.editor
@@ -111,9 +112,9 @@ fn the_entrance_gallery_animates_the_selected_object() {
     };
     assert!(matches!(
         object(&h).entrance.map(|a| a.effect),
-        Some(e) if e.id == "fly_in"
+        Some(e) if e.id == "fade"
     ));
-    assert!(object(&h).exit.is_none(), "the first Fly in is Entrance");
+    assert!(object(&h).exit.is_none(), "the first Fade in is Entrance");
 }
 
 #[test]
