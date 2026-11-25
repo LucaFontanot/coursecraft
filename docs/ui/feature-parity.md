@@ -15,17 +15,17 @@
 |---|---|---|---|---|
 | Project and file | 7 | 2 | 1 | 2 |
 | Structure: scenes, slides, masters | 8 | 3 | 6 | 0 |
-| Text | 13 | 3 | 8 | 0 |
+| Text | 12 | 4 | 8 | 0 |
 | Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
 | Animation, transitions, timeline | 12 | 2 | 8 | 0 |
-| Questions and quizzes | 9 | 3 | 3 | 0 |
+| Questions and quizzes | 8 | 4 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **112** | **37** | **58** | **12** |
+| **Total** | **110** | **39** | **58** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -81,10 +81,10 @@ Counted from the tables below; recount when a row changes.
 | Text styles | `text_style.*` | ✅ | — |
 | Bullets, numbering, indent, line spacing, alignment | `text.set_paragraph(s)`; Home › Paragraph through `text_format.rs` | 🟡 numbering styles | M39 |
 | Find and replace | `course.find`, `course.replace` | ✅ | — |
-| Spelling | `spell_check.rs` | ✅ | — |
+| Spelling | `spell_check.rs` (English dictionary; skips non-English course languages with a note) | ✅ | — |
 | Hyperlinks | `text.set_link` | ✅ | — |
 | Format painter | `format_painter.rs` | ✅ | — |
-| Theme fonts (heading + body) | Theme dialog | ✅ | — |
+| Theme fonts (heading + body) | Theme dialog (`course.set_theme` sets one course theme font; separate heading and body font pairs not yet) | 🟡 | M39 |
 | Paste options (destination theme, keep source, text only) | `object.paste` | 🟡 one mode | M39 |
 | Vertical text alignment | `text.set_paragraph` `{valign}`: Home › Paragraph › Align Text, inspector | ✅ | — |
 | Clear formatting | — | ⛔ | M39 |
@@ -208,7 +208,7 @@ Counted from the tables below; recount when a row changes.
 
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
-| Graded question kinds (MC, MR, T/F, fill-in, word bank, matching, sequence, numeric, hotspot) | `question.*` | ✅ | — |
+| Graded question kinds (MC, MR, T/F, fill-in, word bank, matching, sequence, numeric, hotspot, drag and drop) | `question.*` (MC, MR, T/F, fill-in, matching, sequence, hotspot, drag and drop built; word bank and numeric not yet) | 🟡 | M41 |
 | Survey questions | `question.insert` | ✅ | — |
 | Custom questions | `question.set_kind` | ✅ | — |
 | Feedback layers (correct, incorrect, try again) | `question.add_feedback_layers` | ✅ | — |
