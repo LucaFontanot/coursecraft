@@ -690,6 +690,7 @@ fn fill_xliff_keeps_master_text_rich_runs_and_references() {
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         };
     }
     course.masters.push(master);
@@ -808,6 +809,7 @@ fn masters_round_trip_through_xliff_and_templates_are_not_exported() {
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         };
     }
     course.masters.push(master);
@@ -827,6 +829,7 @@ fn masters_round_trip_through_xliff_and_templates_are_not_exported() {
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         };
     }
     course.templates.push(template);

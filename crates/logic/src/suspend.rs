@@ -31,14 +31,16 @@
 //!      - `slide_index`: varint (play-order index)
 //!
 //! 3. `modified_object_states`:
-//!    - `slide_count`: varint (number of slides with modified objects)
+//!    - `slide_count`: varint (number of slides with modified objects or interactive groups)
 //!    - for each slide:
 //!      - `slide_index`: varint (play-order index)
-//!      - `object_count`: varint (number of modified objects on this slide)
-//!      - for each modified object:
-//!        - `object_index`: varint (index in base objects, then layer objects in order)
-//!        - `state_index`: varint (0..6 for [`BUILTIN_STATES`], then 7+ for object's
-//!          non-builtin states in model order)
+//!      - `object_count`: varint (number of modified entries on this slide)
+//!      - for each modified entry:
+//!        - `object_index`: varint (index in base objects then layer objects in order;
+//!          indices `all_objects.len()..` address interactive groups in base then layer order)
+//!        - `state_index`: varint (for objects: 0..6 for [`BUILTIN_STATES`], then 7+ for object's
+//!          non-builtin states in model order; for interactive groups: index in
+//!          `["normal", "hidden", "disabled"]` followed by sorted deduplicated member state names)
 //!
 //! 4. `variables`:
 //!    - `var_count`: varint
@@ -58,10 +60,10 @@
 //!      - `attempts`: varint (`u32`)
 //!      - `points`: varint (`u32`)
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use coursecraft_course::{BUILTIN_STATES, Course, Object, Slide, Value};
+use coursecraft_course::{BUILTIN_STATES, Course, Group, Object, Slide, Value};
 
 use crate::{Answer, PlayerState};
 
@@ -298,6 +300,48 @@ fn slide_objects(slide: &Slide) -> impl Iterator<Item = &Object> {
         .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
 }
 
+fn slide_interactive_groups(slide: &Slide) -> Vec<&Group> {
+    slide
+        .groups
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.groups.iter()))
+        .filter(|g| g.interactive)
+        .collect()
+}
+
+fn group_state_list(slide: &Slide, group_id: &str) -> Vec<String> {
+    let mut states = vec![
+        "normal".to_owned(),
+        "hidden".to_owned(),
+        "disabled".to_owned(),
+    ];
+    let mut extras: BTreeSet<String> = BTreeSet::new();
+    for member in slide.group_members(group_id) {
+        for s in &member.states {
+            if !matches!(s.name.as_str(), "normal" | "hidden" | "disabled") {
+                extras.insert(s.name.clone());
+            }
+        }
+    }
+    states.extend(extras);
+    states
+}
+
+fn group_state_to_index(slide: &Slide, group_id: &str, state: &str) -> Option<u64> {
+    let states = group_state_list(slide, group_id);
+    let pos = states.iter().position(|s| s == state)?;
+    u64::try_from(pos).ok()
+}
+
+fn index_to_group_state(slide: &Slide, group_id: &str, idx: u64) -> Result<String, SuspendError> {
+    let idx_usize = usize::try_from(idx).map_err(|_| SuspendError::InvalidStateIndex)?;
+    let states = group_state_list(slide, group_id);
+    states
+        .get(idx_usize)
+        .cloned()
+        .ok_or(SuspendError::InvalidStateIndex)
+}
+
 fn state_to_index(obj: &Object, state: &str) -> Option<u64> {
     if let Some(pos) = BUILTIN_STATES.iter().position(|&b| b == state) {
         return Some(pos as u64);
@@ -332,6 +376,11 @@ fn index_to_state(obj: &Object, idx: u64) -> Result<&str, SuspendError> {
 fn rebuild_initial_states(slide: &Slide) -> BTreeMap<String, String> {
     slide_objects(slide)
         .map(|o| (o.id.clone(), o.initial_state.clone()))
+        .chain(
+            slide_interactive_groups(slide)
+                .into_iter()
+                .map(|g| (g.id.clone(), g.initial_state.clone())),
+        )
         .collect()
 }
 
@@ -369,17 +418,29 @@ pub fn encode_suspend(course: &Course, st: &PlayerState) -> String {
         encode_varint(idx, &mut buf);
     }
 
-    // 3. Modified object states
+    // 3. Modified object states (and interactive group states at indices obj_len..)
     let mut modified_slides = Vec::new();
     for (slide_idx, slide) in slides.iter().enumerate() {
         if let Some(slide_states) = st.object_states.get(&slide.id) {
             let mut diffs = Vec::new();
+            let mut obj_len: usize = 0;
             for (obj_idx, obj) in slide_objects(slide).enumerate() {
+                obj_len = obj_idx.saturating_add(1);
                 if let Some(cur_state) = slide_states.get(&obj.id)
                     && cur_state != &obj.initial_state
                     && let Some(state_idx) = state_to_index(obj, cur_state)
                 {
                     diffs.push((obj_idx as u64, state_idx));
+                }
+            }
+            for (g_idx, group) in slide_interactive_groups(slide).into_iter().enumerate() {
+                if let Some(cur_state) = slide_states.get(&group.id)
+                    && cur_state != &group.initial_state
+                    && let Some(state_idx) = group_state_to_index(slide, &group.id, cur_state)
+                    && let Some(slot) = obj_len.checked_add(g_idx)
+                    && let Ok(slot_u64) = u64::try_from(slot)
+                {
+                    diffs.push((slot_u64, state_idx));
                 }
             }
             if !diffs.is_empty() {
@@ -518,13 +579,14 @@ pub fn decode_suspend(course: &Course, text: &str) -> Result<PlayerState, Suspen
         }
     }
 
-    // 3. Modified object states
+    // 3. Modified object states (and interactive group states at indices all_objects.len()..)
     let mod_slide_count = cursor.read_bounded_count()?;
     for _ in 0..mod_slide_count {
         let s_idx = cursor.read_varint()?;
         let s_usize = usize::try_from(s_idx).map_err(|_| SuspendError::InvalidSlideIndex)?;
         let slide = slides.get(s_usize).ok_or(SuspendError::InvalidSlideIndex)?;
         let all_objects: Vec<&Object> = slide_objects(slide).collect();
+        let interactive_groups = slide_interactive_groups(slide);
 
         let obj_count = cursor.read_bounded_count()?;
         let slide_map = st
@@ -535,12 +597,21 @@ pub fn decode_suspend(course: &Course, text: &str) -> Result<PlayerState, Suspen
         for _ in 0..obj_count {
             let o_idx = cursor.read_varint()?;
             let o_usize = usize::try_from(o_idx).map_err(|_| SuspendError::InvalidObjectIndex)?;
-            let obj = all_objects
-                .get(o_usize)
-                .ok_or(SuspendError::InvalidObjectIndex)?;
-            let st_idx = cursor.read_varint()?;
-            let state_name = index_to_state(obj, st_idx)?;
-            slide_map.insert(obj.id.clone(), state_name.to_owned());
+            if let Some(obj) = all_objects.get(o_usize) {
+                let st_idx = cursor.read_varint()?;
+                let state_name = index_to_state(obj, st_idx)?;
+                slide_map.insert(obj.id.clone(), state_name.to_owned());
+            } else {
+                let g_idx = o_usize
+                    .checked_sub(all_objects.len())
+                    .ok_or(SuspendError::InvalidObjectIndex)?;
+                let group = interactive_groups
+                    .get(g_idx)
+                    .ok_or(SuspendError::InvalidObjectIndex)?;
+                let st_idx = cursor.read_varint()?;
+                let state_name = index_to_group_state(slide, &group.id, st_idx)?;
+                slide_map.insert(group.id.clone(), state_name);
+            }
         }
     }
 

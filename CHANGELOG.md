@@ -2,6 +2,21 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.4.6
+
+Text boxes fit their text, and a group can work as one button.
+
+**Point text** (issue #7):
+- Click with the Text box tool to place a one-line text box that is only as wide as its text and grows as you type, so labels line up and centre without resizing. Drag to draw a fixed-width box that wraps, as before.
+- Turning on Wrap text, dragging the side width handle or choosing Shrink turns it into a wrapping box, in one undo step. Works in the State Editor too, and from the CLI and MCP.
+
+**Grouped buttons** (issue #8, part B):
+- Turn on **Act as one button** for a group (or Arrange ▸ Make button from group). Hover, Down, Selected, Visited and Disabled then change on every member together, without flicker as the pointer moves between them.
+- A click trigger on the group fires once, Tab stops on the button once with a focus ring around the whole group, Enter and Space activate it, and screen readers announce it as one button. Preview and published courses behave the same.
+- Existing triggers on the members are never moved or deleted. Duplicating a slide keeps triggers that use the group.
+
+Courses saved by older versions open, save and publish exactly as before.
+
 ## 0.4.5
 
 Groups are easier to work with on the timeline, and the code underneath is tidier.

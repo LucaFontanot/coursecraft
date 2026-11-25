@@ -358,6 +358,13 @@ pub struct PropertiesState {
     pub multi_outline_enabled: Option<bool>,
     pub multi_decorative: Option<bool>,
 
+    // Interactive group buffers
+    pub group_name: String,
+    pub group_description: String,
+    pub group_focus_order: Option<u32>,
+    pub group_name_rect: Option<Rect>,
+    pub group_description_rect: Option<Rect>,
+
     // Course buffers
     pub course_title: String,
 
@@ -599,6 +606,11 @@ impl Default for PropertiesState {
             multi_fill_mixed: false,
             multi_outline_enabled: None,
             multi_decorative: None,
+            group_name: String::new(),
+            group_description: String::new(),
+            group_focus_order: None,
+            group_name_rect: None,
+            group_description_rect: None,
             course_title: String::new(),
             slide_title: String::new(),
             slide_duration_ms: 5000,
@@ -1316,6 +1328,22 @@ impl PropertiesState {
         }
 
         self.multi_decorative = all_same_bool(objects.iter().map(|object| object.decorative));
+
+        self.group_name.clear();
+        self.group_description.clear();
+        self.group_focus_order = None;
+        self.group_name_rect = None;
+        self.group_description_rect = None;
+        if let Some(first_group) = objects.first().and_then(|o| o.group.as_deref())
+            && objects
+                .iter()
+                .all(|o| o.group.as_deref() == Some(first_group))
+            && let Some((group, _)) = slide.interactive_group(first_group)
+        {
+            self.group_name = group.name.clone();
+            self.group_description = group.description.clone().unwrap_or_default();
+            self.group_focus_order = group.focus_order;
+        }
     }
 }
 
@@ -2619,6 +2647,8 @@ struct TextTarget<'a> {
     paragraphs: &'a [Paragraph],
     text: &'a str,
     autofit: Option<Autofit>,
+    /// True for a point-text object (width fits content, no fixed wrap width).
+    point_text: bool,
     /// Shape text that has no text yet: the paragraph controls wait for some.
     empty_shape: bool,
 }
@@ -2684,6 +2714,7 @@ fn text_panel_sections(
             runs,
             paragraphs,
             autofit,
+            point_text,
             ..
         } => {
             let mut eff = state
@@ -2705,6 +2736,7 @@ fn text_panel_sections(
                     .unwrap_or(paragraphs),
                 text: state.and_then(|s| s.text.as_deref()).unwrap_or(text),
                 autofit: Some(state.and_then(|s| s.autofit).unwrap_or(*autofit)),
+                point_text: *point_text,
                 empty_shape: false,
             })
         }
@@ -2741,6 +2773,7 @@ fn text_panel_sections(
                     .unwrap_or(paragraphs),
                 text: state.and_then(|s| s.text.as_deref()).unwrap_or(body),
                 autofit: state.and_then(|s| s.autofit).or(autofit),
+                point_text: false,
                 empty_shape: text.is_none(),
             })
         }
@@ -2783,6 +2816,7 @@ fn text_panel_sections(
                 &lists.font_families,
                 None,
                 target.autofit,
+                target.point_text,
                 system_fonts,
                 &mut font_requests,
             ) {
@@ -3589,6 +3623,15 @@ pub(crate) fn default_shape_text_style(fill: &Color) -> TextStyle {
     }
 }
 
+fn format_group_state_label(state: &str) -> String {
+    match state {
+        "normal" => "Normal".to_owned(),
+        "hidden" => "Hidden".to_owned(),
+        "disabled" => "Disabled".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 fn show_multi_properties(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -3608,10 +3651,40 @@ fn show_multi_properties(
         return;
     }
     let is_one_group = editor.selection.is_one_group(&editor.session.course);
+    let selected_group_id = is_one_group
+        .then(|| objects.first().and_then(|object| object.group.clone()))
+        .flatten();
+    let interactive_group = selected_group_id
+        .as_deref()
+        .and_then(|gid| slide.interactive_group(gid))
+        .map(|(g, _)| g.clone());
+    let group_states: Vec<String> = selected_group_id
+        .as_deref()
+        .filter(|_| interactive_group.is_some())
+        .map(|gid| {
+            let mut states = vec![
+                "normal".to_owned(),
+                "hidden".to_owned(),
+                "disabled".to_owned(),
+            ];
+            let mut extra: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for member in slide.group_members(gid) {
+                for st in &member.states {
+                    if !matches!(st.name.as_str(), "normal" | "hidden" | "disabled") {
+                        extra.insert(st.name.clone());
+                    }
+                }
+            }
+            states.extend(extra);
+            states
+        })
+        .unwrap_or_default();
+    let master_view = editor.ui.master_view;
     let group_ids: Vec<String> = objects.iter().map(|object| object.id.clone()).collect();
     let font_families = editor.ui.properties_lists.font_families.clone();
     let system_fonts = editor.ui.system_fonts.as_deref();
     let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
+    let mut open_trigger_for_group: Option<String> = None;
     let props = &mut editor.ui.properties;
     let header = if is_one_group {
         format!("Group of {} objects", objects.len())
@@ -3649,6 +3722,156 @@ fn show_multi_properties(
             ));
         }
     });
+
+    if let Some(ref group_id) = selected_group_id
+        && !master_view
+    {
+        ui.add_space(coursecraft_render::SPACE_SM);
+        let mut interactive = interactive_group.is_some();
+        let cb = ui
+            .checkbox(&mut interactive, "Act as one button")
+            .on_hover_text(
+                "Share hover, down, selected, visited, and disabled states across all objects in this group",
+            );
+        if cb.changed() {
+            actions_to_run.push((
+                "group.set_interactive",
+                serde_json::json!({
+                    "slide": slide.id,
+                    "group": group_id,
+                    "interactive": interactive,
+                }),
+            ));
+        }
+
+        if let Some(ref group) = interactive_group {
+            ui.add_space(coursecraft_render::SPACE_SM);
+
+            inspector_row(ui, "Name", |ui| {
+                let rem_w = ui.available_width().max(30.0);
+                let r = ui.add_sized(
+                    [rem_w, coursecraft_render::CONTROL_COMPACT],
+                    TextEdit::singleline(&mut props.group_name).id_salt("prop_group_name"),
+                );
+                props.group_name_rect = Some(r.rect);
+                if is_committed(&r, ui) && props.group_name != group.name {
+                    actions_to_run.push((
+                        "group.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "group": group_id,
+                            "name": props.group_name,
+                        }),
+                    ));
+                }
+            });
+
+            inspector_row(ui, "Initial state", |ui| {
+                let rem_w = ui.available_width().max(30.0);
+                let mut current_state = group.initial_state.clone();
+                crate::widgets::styled_combo(ui, "prop_group_initial_state", rem_w)
+                    .selected_text(format_group_state_label(&current_state))
+                    .show_ui(ui, |ui| {
+                        for state in &group_states {
+                            let label = format_group_state_label(state);
+                            if ui
+                                .selectable_value(&mut current_state, state.clone(), label)
+                                .clicked()
+                                && current_state != group.initial_state
+                            {
+                                actions_to_run.push((
+                                    "group.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "group": group_id,
+                                        "initial_state": state,
+                                    }),
+                                ));
+                            }
+                        }
+                    });
+            });
+
+            inspector_row(ui, "Accessible description", |ui| {
+                let rem_w = ui.available_width().max(30.0);
+                let r = ui.add_sized(
+                    [rem_w, coursecraft_render::CONTROL_COMPACT],
+                    TextEdit::singleline(&mut props.group_description)
+                        .id_salt("prop_group_description"),
+                );
+                props.group_description_rect = Some(r.rect);
+                let current = group.description.as_deref().unwrap_or("");
+                if is_committed(&r, ui) && props.group_description.trim() != current {
+                    let value = if props.group_description.trim().is_empty() {
+                        Json::Null
+                    } else {
+                        Json::String(props.group_description.trim().to_owned())
+                    };
+                    actions_to_run.push((
+                        "group.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "group": group_id,
+                            "description": value,
+                        }),
+                    ));
+                }
+            });
+
+            inspector_row(ui, "Focus order", |ui| {
+                let mut order = props.group_focus_order.unwrap_or(0);
+                let r = ui.add(DragValue::new(&mut order).speed(1.0));
+                if r.changed() {
+                    props.group_focus_order = Some(order);
+                }
+                let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (r.drag_stopped() || r.lost_focus() || enter)
+                    && props.group_focus_order != group.focus_order
+                {
+                    let committed = props.group_focus_order.unwrap_or(order);
+                    props.group_focus_order = Some(committed);
+                    actions_to_run.push((
+                        "group.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "group": group_id,
+                            "focus_order": committed,
+                        }),
+                    ));
+                }
+                if ui
+                    .add_enabled(
+                        props.group_focus_order.is_some(),
+                        egui::Button::new("Clear")
+                            .min_size(vec2(24.0, coursecraft_render::CONTROL_COMPACT)),
+                    )
+                    .on_disabled_hover_text("No focus order set")
+                    .clicked()
+                {
+                    props.group_focus_order = None;
+                    actions_to_run.push((
+                        "group.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "group": group_id,
+                            "focus_order": Json::Null,
+                        }),
+                    ));
+                }
+            });
+
+            ui.add_space(coursecraft_render::SPACE_SM);
+            if ui
+                .add(
+                    egui::Button::new("Add trigger…")
+                        .min_size(vec2(0.0, coursecraft_render::CONTROL_COMPACT)),
+                )
+                .clicked()
+            {
+                open_trigger_for_group = Some(group_id.clone());
+            }
+        }
+    }
 
     inspector_separator(ui);
     inspector_section_header(ui, "Frame");
@@ -4309,6 +4532,18 @@ fn show_multi_properties(
         }
     });
     editor.pending_requests.append(&mut font_requests);
+    if let Some(group_id) = open_trigger_for_group {
+        let slide_clone = slide.clone();
+        let selected_layer = editor.selection.layer.clone();
+        editor.ui.trigger_form = Some(
+            crate::triggers::TriggerFormState::new_for_owner(
+                &slide_clone,
+                selected_layer.as_deref(),
+                &editor.session.course,
+            )
+            .with_selected_object(&slide_clone, Some(&group_id)),
+        );
+    }
 }
 
 /// Object accessibility fields: text alternative, decorative flag and focus order.
@@ -4746,6 +4981,7 @@ fn show_text_controls(
     font_families: &[String],
     cell: Option<(usize, usize)>,
     autofit: Option<Autofit>,
+    point_text: bool,
     system_fonts: Option<&[crate::SystemFontChoice]>,
     font_requests: &mut Vec<crate::EditorRequest>,
 ) -> Option<(&'static str, Json)> {
@@ -5254,7 +5490,15 @@ fn show_text_controls(
 
     inspector_row(ui, "Wrap", |ui| {
         let mut wrap = style.wrap;
-        if ui.checkbox(&mut wrap, "Wrap text").changed() {
+        let resp = ui.checkbox(&mut wrap, "Wrap text");
+        let resp = if point_text {
+            resp.on_hover_text(
+                "Fits width to text. Turn on wrap or drag a side handle for fixed width.",
+            )
+        } else {
+            resp
+        };
+        if resp.changed() {
             action_to_run = Some((
                 "text.set_paragraph",
                 serde_json::json!({ "slide": slide_id, "object": obj_id, "wrap": wrap }),
@@ -6701,6 +6945,7 @@ fn show_table_controls(
             font_families,
             Some((row, column)),
             None,
+            false,
             system_fonts,
             font_requests,
         ) {
@@ -8077,6 +8322,7 @@ fn show_object_properties(
             style,
             runs,
             autofit,
+            point_text,
             outline,
             ..
         } => {
@@ -8111,6 +8357,7 @@ fn show_object_properties(
                 &lists.font_families,
                 None,
                 Some(eff_autofit),
+                *point_text,
                 system_fonts,
                 &mut font_requests,
             ) {
@@ -8484,6 +8731,7 @@ fn show_object_properties(
                     &lists.font_families,
                     None,
                     eff_autofit,
+                    false,
                     system_fonts,
                     &mut font_requests,
                 ) {
@@ -11279,10 +11527,17 @@ pub(crate) fn animation_unchanged(
 }
 
 pub(crate) fn is_committed(r: &Response, ui: &Ui) -> bool {
-    r.lost_focus()
-        || (r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-        || ui.data(|d| d.get_temp::<(egui::Id, u64)>(color_picked_id()))
-            == Some((r.id, ui.ctx().cumulative_pass_nr()))
+    if r.lost_focus() {
+        ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+        });
+        return true;
+    }
+    if r.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        return true;
+    }
+    ui.data(|d| d.get_temp::<(egui::Id, u64)>(color_picked_id()))
+        == Some((r.id, ui.ctx().cumulative_pass_nr()))
 }
 
 /// Parse a clip time typed in the inspector: `ss`, `m:ss`, `m:ss.t` or

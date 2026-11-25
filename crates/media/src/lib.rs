@@ -26,6 +26,7 @@ pub mod font;
 pub mod svg;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod system_fonts;
+pub mod text_metrics;
 pub mod webvtt;
 pub use animation::{
     Animation, AnimationFrame, MAX_ANIMATION_BYTES, MAX_ANIMATION_FRAMES, MAX_FRAME_DELAY_MS,

@@ -366,6 +366,14 @@ Plan by Gemini 4 Neon: `docs/testing/m36-plan.md`; report: `docs/testing/m36-rep
 - One shared media walker and an indexed `MediaStore`; one zero-copy publish path; `crates/engine/src/commands.rs` split into modules by area, with each command's undo scope and validation declared in the registry. No behaviour change.
 - Splitting `apps/coursecraft/src/main.rs` (R8) waits until after the dockable-windows UI overhaul.
 
+## M37 Point text and grouped buttons ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m37-plan.md`; report: `docs/testing/m37-report.md`. Implemented and reviewed by Gemini 4 Neon. From GitHub issues #7 and #8 (part B).
+
+- Point text: a click places a one-line text box that fits its text; wrap, a width drag or Shrink turns it into area text.
+- Interactive groups: a group can act as one button with one shared state, one click trigger, one Tab stop, one focus ring and one screen-reader button.
+- Released as 0.4.6.
+
 ## M37 Ribbon UI parity (planned)
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:

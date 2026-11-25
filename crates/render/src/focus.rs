@@ -396,18 +396,22 @@ pub(crate) fn build_list_with_visibility(
             .unwrap_or_default()
     };
     for id in player.keyboard_objects() {
-        let Some((obj, _layer)) = slide.object(&id) else {
+        let focus_order = if let Some((obj, _layer)) = slide.object(&id) {
+            if obj.decorative || is_control_object(player, slide, &id) {
+                continue;
+            }
+            obj.focus_order
+        } else if let Some((group, _layer)) = slide.interactive_group(&id) {
+            group.focus_order
+        } else {
             continue;
         };
-        if obj.decorative || is_control_object(player, slide, &id) {
-            continue;
-        }
         let target = FocusTarget::Object(id.clone());
         let links = links_for(&id);
         if !links.is_empty() {
             linked.push(id.clone());
         }
-        match obj.focus_order {
+        match focus_order {
             Some(order) => {
                 ordered.push((order, target));
                 for link in links {
@@ -426,12 +430,19 @@ pub(crate) fn build_list_with_visibility(
         if linked.iter().any(|linked| linked == id) {
             continue;
         }
-        let Some((obj, _)) = slide.object(id) else {
+        let focus_order = if let Some((obj, _)) = slide.object(id) {
+            if obj.decorative
+                || is_control_object(player, slide, id)
+                || slide.interactive_group_of_object(id).is_some()
+            {
+                continue;
+            }
+            obj.focus_order
+        } else if let Some((group, _)) = slide.interactive_group(id) {
+            group.focus_order
+        } else {
             continue;
         };
-        if obj.decorative || is_control_object(player, slide, id) {
-            continue;
-        }
         let targets: Vec<FocusTarget> = links
             .iter()
             .enumerate()
@@ -441,7 +452,7 @@ pub(crate) fn build_list_with_visibility(
                 link: link.clone(),
             })
             .collect();
-        match obj.focus_order {
+        match focus_order {
             Some(order) => {
                 for target in targets {
                     ordered.push((order, target));
@@ -574,6 +585,9 @@ fn question_controls(player: &Player<'_>, slide: &Slide) -> Vec<FocusTarget> {
 }
 
 fn is_decorative(slide: &Slide, id: &str) -> bool {
+    if slide.interactive_group(id).is_some() {
+        return false;
+    }
     slide.object(id).is_some_and(|(obj, _)| obj.decorative)
 }
 
@@ -586,13 +600,17 @@ fn is_permutation(order: &[String], authored: &[String]) -> bool {
 fn first_target_on_layer(player: &Player<'_>, layer: &str) -> Option<FocusTarget> {
     let slide = player.current_slide()?;
     for id in player.keyboard_objects() {
-        let Some((obj, owner)) = slide.object(&id) else {
-            continue;
-        };
-        if owner != Some(layer) || obj.decorative || is_control_object(player, slide, &id) {
-            continue;
+        if let Some((obj, owner)) = slide.object(&id) {
+            if owner != Some(layer) || obj.decorative || is_control_object(player, slide, &id) {
+                continue;
+            }
+            return Some(FocusTarget::Object(id));
         }
-        return Some(FocusTarget::Object(id));
+        if let Some((_group, owner)) = slide.interactive_group(&id)
+            && owner == Some(layer)
+        {
+            return Some(FocusTarget::Object(id));
+        }
     }
     None
 }
@@ -1078,10 +1096,32 @@ impl FocusManager {
         let Some(slide) = player.current_slide() else {
             return;
         };
-        let Some((object, _)) = slide.object(id) else {
-            return;
-        };
-        let Some(panel_id) = object.panel.as_deref() else {
+        let (panel_id, target_top, target_bottom) = if let Some((object, _)) = slide.object(id) {
+            let Some(panel_id) = object.panel.as_deref() else {
+                return;
+            };
+            (panel_id, object.frame.y, object.frame.y + object.frame.h)
+        } else if slide.interactive_group(id).is_some() {
+            let members = slide.group_members(id);
+            let Some(panel_id) = members.iter().find_map(|m| m.panel.as_deref()) else {
+                return;
+            };
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for member in members {
+                if member.panel.as_deref() == Some(panel_id)
+                    && member.frame.y.is_finite()
+                    && member.frame.h.is_finite()
+                {
+                    min_y = min_y.min(member.frame.y);
+                    max_y = max_y.max(member.frame.y + member.frame.h);
+                }
+            }
+            if !min_y.is_finite() || !max_y.is_finite() {
+                return;
+            }
+            (panel_id, min_y, max_y)
+        } else {
             return;
         };
         let Some((panel, _)) = slide.object(panel_id) else {
@@ -1091,12 +1131,18 @@ impl FocusManager {
             return;
         };
         let viewport = panel.frame.h;
-        if !viewport.is_finite() || viewport <= 0.0 || object.frame.h >= viewport {
+        let target_h = target_bottom - target_top;
+        if !viewport.is_finite()
+            || viewport <= 0.0
+            || !target_top.is_finite()
+            || !target_bottom.is_finite()
+            || target_h >= viewport
+        {
             return;
         }
         let current = player.panel_offset(panel_id);
-        let top = object.frame.y - current;
-        let bottom = top + object.frame.h;
+        let top = target_top - current;
+        let bottom = target_bottom - current;
         let panel_top = panel.frame.y;
         let panel_bottom = panel_top + viewport;
         let mut offset = current;
@@ -2194,8 +2240,10 @@ impl FocusManager {
             return;
         };
         // Objects (including rotated and flipped ones) get a ring on their
-        // exact frame. Question chrome keeps its axis-aligned rect.
+        // exact frame. Interactive groups and question chrome keep an
+        // axis-aligned rect (union of all primary members for groups).
         let focused_item = match target {
+            FocusTarget::Object(id) if player.is_interactive_group(id) => None,
             FocusTarget::Object(id) | FocusTarget::DragItem(id) => {
                 items.iter().rev().find(|item| match &item.hit {
                     Hit::Object(hit) | Hit::DragItem(hit) => hit == id,
@@ -2316,8 +2364,30 @@ fn draw_ring_corners(
     ));
 }
 
+fn interactive_group_union_rect(items: &[DrawItem], group_id: &str) -> Option<Rect> {
+    let mut union: Option<Rect> = None;
+    for item in items {
+        if item.is_state_extra {
+            continue;
+        }
+        if matches!(&item.hit, Hit::Object(hit) if hit == group_id) {
+            let bounds = crate::compose::item_bounds(item);
+            if bounds.is_finite() {
+                union = Some(match union {
+                    Some(acc) => acc.union(bounds),
+                    None => bounds,
+                });
+            }
+        }
+    }
+    union
+}
+
 fn target_rect(player: &Player<'_>, target: &FocusTarget, items: &[DrawItem]) -> Option<Rect> {
     match target {
+        FocusTarget::Object(id) if player.is_interactive_group(id) => {
+            interactive_group_union_rect(items, id)
+        }
         FocusTarget::Object(id) | FocusTarget::DragItem(id) => {
             items.iter().rev().find_map(|item| match &item.hit {
                 Hit::Object(hit) | Hit::DragItem(hit) if hit == id => Some(item.rect),

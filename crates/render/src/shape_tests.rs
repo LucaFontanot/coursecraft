@@ -387,6 +387,7 @@ fn outline_text_slide() -> Slide {
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     }
 }
 
@@ -446,6 +447,7 @@ fn adjust_slide(text_color: Color) -> Slide {
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     }
 }
 
@@ -466,6 +468,7 @@ fn label_object(id: &str, text: &str, frame: ModelRect, color: Color) -> Object 
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame,
         timing: Timing::default(),
@@ -555,6 +558,7 @@ fn category_slide(category: ShapeCategory, text_color: Color) -> Slide {
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     }
 }
 
@@ -965,6 +969,7 @@ fn draw_slide(text_color: Color) -> Slide {
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     }
 }
 

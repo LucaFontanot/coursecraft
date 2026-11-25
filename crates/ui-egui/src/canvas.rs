@@ -356,6 +356,8 @@ fn start_inline_edit(editor: &mut Editor, object_id: &str) {
         extra_id: None,
     });
     editor.ui.inline_edit_yielded_to_panel = false;
+    editor.ui.inline_edit_measured_size = None;
+    editor.ui.inline_edit_live_rect = None;
 }
 
 /// Enter in-place text editing for a `StateExtra` (Text or text-bearing Shape).
@@ -434,6 +436,8 @@ fn start_extra_inline_edit(
         extra_id: Some(extra_id.to_owned()),
     });
     editor.ui.inline_edit_yielded_to_panel = false;
+    editor.ui.inline_edit_measured_size = None;
+    editor.ui.inline_edit_live_rect = None;
 }
 
 /// The slide-space rect of one table cell, including its spans.
@@ -574,6 +578,8 @@ fn start_table_cell_edit(editor: &mut Editor, object_id: &str, row: usize, colum
         extra_id: None,
     });
     editor.ui.inline_edit_yielded_to_panel = false;
+    editor.ui.inline_edit_measured_size = None;
+    editor.ui.inline_edit_live_rect = None;
 }
 
 /// Enter point editing for a path object.
@@ -772,10 +778,114 @@ fn enter_edits_selection(editor: &mut Editor, ui: &Ui) {
     }
 }
 
+fn commit_state_extra_inline_edit(
+    editor: &mut Editor,
+    edit: InlineEdit,
+    object: &coursecraft_course::Object,
+    state_name: String,
+    extra_id: String,
+    measured_size: Option<(f32, f32)>,
+) {
+    let Some(extra) = object
+        .states
+        .iter()
+        .find(|s| s.name == state_name)
+        .and_then(|s| s.extras.iter().find(|e| e.id == extra_id))
+    else {
+        return;
+    };
+    let live_plain: String = edit.live_runs.iter().map(|r| r.text.as_str()).collect();
+    let mut updated_kind = extra.kind.clone();
+    let mut is_point_text_extra = false;
+    match &mut updated_kind {
+        coursecraft_course::StateExtraKind::Text {
+            text,
+            runs,
+            paragraphs,
+            point_text,
+            ..
+        } => {
+            is_point_text_extra = *point_text;
+            if !edit.live_runs.is_empty() && live_plain == edit.buffer {
+                *runs = coursecraft_course::normalize_runs(&edit.live_runs);
+                *paragraphs = edit.live_paragraphs;
+            } else {
+                let prev_plain: String = if runs.is_empty() {
+                    text.clone()
+                } else {
+                    runs.iter().map(|r| r.text.as_str()).collect()
+                };
+                if !runs.is_empty() {
+                    *runs = coursecraft_course::apply_text_edit(runs, &prev_plain, &edit.buffer);
+                }
+                if !paragraphs.is_empty() {
+                    *paragraphs =
+                        coursecraft_course::align_paragraphs(&prev_plain, paragraphs, &edit.buffer);
+                }
+            }
+            *text = edit.buffer;
+        }
+        coursecraft_course::StateExtraKind::Shape {
+            shape, fill, text, ..
+        } if coursecraft_course::shape_allows_text(*shape) => {
+            let st = text.get_or_insert_with(|| coursecraft_course::ShapeText {
+                text: String::new(),
+                style: default_shape_text_style(fill),
+                runs: Vec::new(),
+                paragraphs: Vec::new(),
+                autofit: coursecraft_course::Autofit::None,
+            });
+            if !edit.live_runs.is_empty() && live_plain == edit.buffer {
+                st.runs = coursecraft_course::normalize_runs(&edit.live_runs);
+                st.paragraphs = edit.live_paragraphs;
+            } else {
+                let prev_plain: String = if st.runs.is_empty() {
+                    st.text.clone()
+                } else {
+                    st.runs.iter().map(|r| r.text.as_str()).collect()
+                };
+                if !st.runs.is_empty() {
+                    st.runs =
+                        coursecraft_course::apply_text_edit(&st.runs, &prev_plain, &edit.buffer);
+                }
+                if !st.paragraphs.is_empty() {
+                    st.paragraphs = coursecraft_course::align_paragraphs(
+                        &prev_plain,
+                        &st.paragraphs,
+                        &edit.buffer,
+                    );
+                }
+            }
+            st.text = edit.buffer;
+        }
+        _ => return,
+    }
+    let mut params = serde_json::json!({
+        "slide": edit.slide,
+        "object": edit.object,
+        "state": state_name,
+        "extra": extra_id,
+        "patch": { "kind": updated_kind },
+    });
+    if is_point_text_extra && let Some((w, h)) = measured_size {
+        params["measured_size"] = serde_json::json!({ "w": w, "h": h });
+    }
+    editor.run("object.state_update_extra", params);
+}
+
 pub(crate) fn commit_inline_edit(editor: &mut Editor) {
     let Some(edit) = editor.ui.inline_edit.take() else {
         return;
     };
+    let measured_size = editor
+        .ui
+        .inline_edit_measured_size
+        .take()
+        .and_then(|(buf, (w, h))| {
+            (buf == edit.buffer && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0)
+                .then_some((w, h))
+        });
+    editor.ui.inline_edit_live_rect = None;
     if edit.buffer == edit.original {
         return;
     }
@@ -785,98 +895,16 @@ pub(crate) fn commit_inline_edit(editor: &mut Editor) {
     let Some((object, _)) = slide.object(&edit.object) else {
         return;
     };
-    if let Some(state_name) = edit.state_name {
-        if let Some(extra_id) = edit.extra_id {
-            let Some(extra) = object
-                .states
-                .iter()
-                .find(|s| s.name == state_name)
-                .and_then(|s| s.extras.iter().find(|e| e.id == extra_id))
-            else {
-                return;
-            };
-            let live_plain: String = edit.live_runs.iter().map(|r| r.text.as_str()).collect();
-            let mut updated_kind = extra.kind.clone();
-            match &mut updated_kind {
-                coursecraft_course::StateExtraKind::Text {
-                    text,
-                    runs,
-                    paragraphs,
-                    ..
-                } => {
-                    if !edit.live_runs.is_empty() && live_plain == edit.buffer {
-                        *runs = coursecraft_course::normalize_runs(&edit.live_runs);
-                        *paragraphs = edit.live_paragraphs;
-                    } else {
-                        let prev_plain: String = if runs.is_empty() {
-                            text.clone()
-                        } else {
-                            runs.iter().map(|r| r.text.as_str()).collect()
-                        };
-                        if !runs.is_empty() {
-                            *runs = coursecraft_course::apply_text_edit(
-                                runs,
-                                &prev_plain,
-                                &edit.buffer,
-                            );
-                        }
-                        if !paragraphs.is_empty() {
-                            *paragraphs = coursecraft_course::align_paragraphs(
-                                &prev_plain,
-                                paragraphs,
-                                &edit.buffer,
-                            );
-                        }
-                    }
-                    *text = edit.buffer;
-                }
-                coursecraft_course::StateExtraKind::Shape {
-                    shape, fill, text, ..
-                } if coursecraft_course::shape_allows_text(*shape) => {
-                    let st = text.get_or_insert_with(|| coursecraft_course::ShapeText {
-                        text: String::new(),
-                        style: default_shape_text_style(fill),
-                        runs: Vec::new(),
-                        paragraphs: Vec::new(),
-                        autofit: coursecraft_course::Autofit::None,
-                    });
-                    if !edit.live_runs.is_empty() && live_plain == edit.buffer {
-                        st.runs = coursecraft_course::normalize_runs(&edit.live_runs);
-                        st.paragraphs = edit.live_paragraphs;
-                    } else {
-                        let prev_plain: String = if st.runs.is_empty() {
-                            st.text.clone()
-                        } else {
-                            st.runs.iter().map(|r| r.text.as_str()).collect()
-                        };
-                        if !st.runs.is_empty() {
-                            st.runs = coursecraft_course::apply_text_edit(
-                                &st.runs,
-                                &prev_plain,
-                                &edit.buffer,
-                            );
-                        }
-                        if !st.paragraphs.is_empty() {
-                            st.paragraphs = coursecraft_course::align_paragraphs(
-                                &prev_plain,
-                                &st.paragraphs,
-                                &edit.buffer,
-                            );
-                        }
-                    }
-                    st.text = edit.buffer;
-                }
-                _ => return,
-            }
-            editor.run(
-                "object.state_update_extra",
-                serde_json::json!({
-                    "slide": edit.slide,
-                    "object": edit.object,
-                    "state": state_name,
-                    "extra": extra_id,
-                    "patch": { "kind": updated_kind },
-                }),
+    let object = object.clone();
+    if let Some(state_name) = edit.state_name.clone() {
+        if let Some(extra_id) = edit.extra_id.clone() {
+            commit_state_extra_inline_edit(
+                editor,
+                edit,
+                &object,
+                state_name,
+                extra_id,
+                measured_size,
             );
             return;
         }
@@ -944,7 +972,7 @@ pub(crate) fn commit_inline_edit(editor: &mut Editor) {
         return;
     }
     match &object.kind {
-        coursecraft_course::ObjectKind::Text { .. } => {
+        coursecraft_course::ObjectKind::Text { point_text, .. } => {
             let mut params = serde_json::json!({
                 "slide": edit.slide,
                 "object": edit.object,
@@ -955,6 +983,9 @@ pub(crate) fn commit_inline_edit(editor: &mut Editor) {
                 params["runs"] = serde_json::to_value(&edit.live_runs).unwrap_or_default();
                 params["paragraphs"] =
                     serde_json::to_value(&edit.live_paragraphs).unwrap_or_default();
+            }
+            if *point_text && let Some((w, h)) = measured_size {
+                params["measured_size"] = serde_json::json!({ "w": w, "h": h });
             }
             editor.run("text.set", params);
         }
@@ -1096,6 +1127,8 @@ pub(crate) fn commit_inline_edit(editor: &mut Editor) {
 
 fn cancel_inline_edit(editor: &mut Editor) {
     editor.ui.inline_edit = None;
+    editor.ui.inline_edit_measured_size = None;
+    editor.ui.inline_edit_live_rect = None;
 }
 
 /// Return the canvas rect within the central panel area.
@@ -2358,8 +2391,160 @@ fn selected_state_extra_geometry(editor: &Editor) -> Option<(String, Rect, f32)>
     Some((extra.id.clone(), world_rect, world_rot))
 }
 
+/// Measure the fitted slide-space `(w, h)` of unwrapped point text using egui's
+/// active font layout plus point-text padding and insets.
+fn measure_point_text_box_size(
+    ctx: &egui::Context,
+    text: &str,
+    style: &coursecraft_course::TextStyle,
+    runs: &[coursecraft_course::TextRun],
+    paragraphs: &[coursecraft_course::Paragraph],
+    theme_font: &str,
+) -> (f32, f32) {
+    let text_color = coursecraft_render::parse_color(&style.color)
+        .unwrap_or_else(|| coursecraft_render::palette(ctx).text);
+    let probe_text = if text.is_empty() { " " } else { text };
+    let probe_runs: &[coursecraft_course::TextRun] = if text.is_empty() { &[] } else { runs };
+    let resolved = coursecraft_render::resolve_text_runs(
+        probe_text,
+        style,
+        probe_runs,
+        None,
+        text_color,
+        text_color,
+        Some(theme_font),
+    );
+    let probe = Rect::from_min_size(
+        pos2(0.0, 0.0),
+        vec2(
+            coursecraft_media::text_metrics::POINT_TEXT_MAX_DIM,
+            coursecraft_media::text_metrics::POINT_TEXT_MAX_DIM,
+        ),
+    );
+    let laid = coursecraft_render::layout_text_with_wrap(
+        ctx,
+        probe,
+        1.0,
+        &resolved,
+        paragraphs,
+        coursecraft_course::Align::Left,
+        coursecraft_course::VAlign::Top,
+        coursecraft_course::Autofit::None,
+        false,
+    );
+    let content_w = if text.is_empty() { 0.0 } else { laid.width };
+    let content_h = laid.height;
+    let insets = style.insets.map_or(
+        coursecraft_media::text_metrics::TextBoxInsets::ZERO,
+        |ins| coursecraft_media::text_metrics::TextBoxInsets {
+            left: ins.left,
+            top: ins.top,
+            right: ins.right,
+            bottom: ins.bottom,
+        },
+    );
+    let vertical = !matches!(
+        style.direction,
+        coursecraft_course::TextDirection::Horizontal
+    );
+    coursecraft_media::text_metrics::point_text_box_size(content_w, content_h, insets, vertical)
+}
+
+/// Anchor a refitted point-text box relative to `base` according to `align` and
+/// `valign`, matching `coursecraft_engine`'s `fit_point_text_frame`.
+fn anchor_point_text_rect(
+    base: Rect,
+    new_w: f32,
+    new_h: f32,
+    align: coursecraft_course::Align,
+    valign: coursecraft_course::VAlign,
+) -> Rect {
+    let old_x = if base.min.x.is_finite() {
+        base.min.x
+    } else {
+        0.0
+    };
+    let old_y = if base.min.y.is_finite() {
+        base.min.y
+    } else {
+        0.0
+    };
+    let old_w = if base.width().is_finite() && base.width() > 0.0 {
+        base.width()
+    } else {
+        new_w
+    };
+    let old_h = if base.height().is_finite() && base.height() > 0.0 {
+        base.height()
+    } else {
+        new_h
+    };
+    let x = match align {
+        coursecraft_course::Align::Left | coursecraft_course::Align::Justify => old_x,
+        coursecraft_course::Align::Center => old_x + (old_w - new_w) * 0.5,
+        coursecraft_course::Align::Right => old_x + (old_w - new_w),
+    };
+    let y = match valign {
+        coursecraft_course::VAlign::Top => old_y,
+        coursecraft_course::VAlign::Middle => old_y + (old_h - new_h) * 0.5,
+        coursecraft_course::VAlign::Bottom => old_y + (old_h - new_h),
+    };
+    let fx = if x.is_finite() { x.round() } else { 0.0 };
+    let fy = if y.is_finite() { y.round() } else { 0.0 };
+    let fw = new_w
+        .round()
+        .clamp(1.0, coursecraft_media::text_metrics::POINT_TEXT_MAX_DIM);
+    let fh = new_h
+        .round()
+        .clamp(1.0, coursecraft_media::text_metrics::POINT_TEXT_MAX_DIM);
+    Rect::from_min_size(pos2(fx, fy), vec2(fw, fh))
+}
+
+/// Fitted initial frame for clicking with the Text box tool, anchored at the
+/// click point vertically centred on the single line.
+fn point_text_click_frame(editor: &Editor, ctx: &egui::Context, slide_pos: Pos2) -> Rect {
+    let style = coursecraft_course::TextStyle {
+        color: editor.session.course.theme.text.clone(),
+        wrap: false,
+        ..coursecraft_course::TextStyle::default()
+    };
+    let (w, h) = measure_point_text_box_size(
+        ctx,
+        "Text",
+        &style,
+        &[],
+        &[],
+        &editor.session.course.theme.font,
+    );
+    let slide_size = editor.session.course.slide_size;
+    let slide_w = slide_size.w.max(1) as f32;
+    let slide_h = slide_size.h.max(1) as f32;
+    let pos_x = if slide_pos.x.is_finite() {
+        slide_pos.x
+    } else {
+        0.0
+    };
+    let pos_y = if slide_pos.y.is_finite() {
+        slide_pos.y
+    } else {
+        0.0
+    };
+    let x = if w <= slide_w {
+        pos_x.round().clamp(0.0, slide_w - w)
+    } else {
+        0.0
+    };
+    let y = if h <= slide_h {
+        (pos_y - h * 0.5).round().clamp(0.0, slide_h - h)
+    } else {
+        0.0
+    };
+    Rect::from_min_size(pos2(x, y), vec2(w, h))
+}
+
 /// Create the object with `frame` through the same command a click uses.
-fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
+fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect, is_click: bool) {
+    let is_point_text = is_click && matches!(tool, PlacementTool::TextBox);
     if let Some(session) = editor.ui.editing_state.clone() {
         let Some((extra_frame, extra_rot)) = editor
             .session
@@ -2377,13 +2562,25 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
         };
         let (kind, extra_name) = match tool {
             PlacementTool::TextBox => (
-                serde_json::json!({
-                    "type": "text",
-                    "text": "Text",
-                    "style": {
-                        "color": editor.session.course.theme.text.0,
-                    }
-                }),
+                if is_point_text {
+                    serde_json::json!({
+                        "type": "text",
+                        "text": "Text",
+                        "point_text": true,
+                        "style": {
+                            "color": editor.session.course.theme.text.0,
+                            "wrap": false,
+                        }
+                    })
+                } else {
+                    serde_json::json!({
+                        "type": "text",
+                        "text": "Text",
+                        "style": {
+                            "color": editor.session.course.theme.text.0,
+                        }
+                    })
+                },
                 "Text".to_owned(),
             ),
             PlacementTool::Shape(kind) => (
@@ -2404,20 +2601,30 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
             ),
             _ => return,
         };
-        if let Some(res) = editor.run(
-            "object.state_add_extra",
-            serde_json::json!({
-                "slide": session.slide_id,
-                "object": session.object_id,
-                "state": session.state_name,
-                "extra": {
-                    "name": extra_name,
-                    "kind": kind,
-                    "frame": extra_frame,
-                    "rotation": extra_rot,
-                }
-            }),
-        ) && let Some(id) = res.get("id").and_then(serde_json::Value::as_str)
+        let mut params = serde_json::json!({
+            "slide": session.slide_id,
+            "object": session.object_id,
+            "state": session.state_name,
+            "extra": {
+                "name": extra_name,
+                "kind": kind,
+                "frame": extra_frame,
+                "rotation": extra_rot,
+            }
+        });
+        if is_point_text
+            && frame.width().is_finite()
+            && frame.height().is_finite()
+            && frame.width() > 0.0
+            && frame.height() > 0.0
+        {
+            params["measured_size"] = serde_json::json!({
+                "w": frame.width(),
+                "h": frame.height(),
+            });
+        }
+        if let Some(res) = editor.run("object.state_add_extra", params)
+            && let Some(id) = res.get("id").and_then(serde_json::Value::as_str)
             && let Some(active) = editor.ui.editing_state.as_mut()
         {
             active.selected_extra = Some(id.to_owned());
@@ -2425,7 +2632,19 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
         return;
     }
     let is_text = matches!(tool, PlacementTool::TextBox);
-    let (kind, _) = placement_kind_and_size(editor, tool);
+    let kind = if is_point_text {
+        serde_json::json!({
+            "type": "text",
+            "text": "Text",
+            "point_text": true,
+            "style": {
+                "color": editor.session.course.theme.text.0,
+                "wrap": false,
+            }
+        })
+    } else {
+        placement_kind_and_size(editor, tool).0
+    };
     let mut params = serde_json::json!({
         "slide": editor.selection.slide,
         "kind": kind,
@@ -2436,6 +2655,17 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
             "h": frame.height().round().max(1.0)
         }
     });
+    if is_point_text
+        && frame.width().is_finite()
+        && frame.height().is_finite()
+        && frame.width() > 0.0
+        && frame.height() > 0.0
+    {
+        params["measured_size"] = serde_json::json!({
+            "w": frame.width(),
+            "h": frame.height(),
+        });
+    }
     if let PlacementTool::Shape(kind) = tool {
         params["name"] = serde_json::json!(next_shape_name(editor, *kind));
     }
@@ -3337,11 +3567,15 @@ fn process_placement_drag(editor: &mut Editor, t: &SlideTransform, ui: &Ui) {
         editor.ui.snap_guides.clear();
         editor.ui.placement_tool = None;
         if is_click {
-            let (_, (w, h)) = placement_kind_and_size(editor, &tool);
-            let frame = default_placement_frame(editor, drag.start_slide, w, h);
-            place_object(editor, &tool, frame);
+            let frame = if matches!(tool, PlacementTool::TextBox) {
+                point_text_click_frame(editor, ui.ctx(), drag.start_slide)
+            } else {
+                let (_, (w, h)) = placement_kind_and_size(editor, &tool);
+                default_placement_frame(editor, drag.start_slide, w, h)
+            };
+            place_object(editor, &tool, frame, true);
         } else if let Some((frame, _)) = placed_frame {
-            place_object(editor, &tool, frame);
+            place_object(editor, &tool, frame, false);
         }
         return;
     }
@@ -5574,6 +5808,7 @@ struct InlineEditTextProps {
     valign: egui::Align,
     autofit: coursecraft_course::Autofit,
     insets: Option<coursecraft_course::TextInsets>,
+    point_text: bool,
 }
 
 fn inline_edit_text_props(
@@ -5586,15 +5821,19 @@ fn inline_edit_text_props(
     if let (Some(sd), Some(eid)) = (state_def, extra_id) {
         let extra = sd.extras.iter().find(|e| e.id == eid)?;
         return match &extra.kind {
-            coursecraft_course::StateExtraKind::Text { style, autofit, .. } => {
-                Some(InlineEditTextProps {
-                    style: style.clone(),
-                    align: align_for(style.align),
-                    valign: valign_for(style.valign),
-                    autofit: *autofit,
-                    insets: style.insets,
-                })
-            }
+            coursecraft_course::StateExtraKind::Text {
+                style,
+                autofit,
+                point_text,
+                ..
+            } => Some(InlineEditTextProps {
+                style: style.clone(),
+                align: align_for(style.align),
+                valign: valign_for(style.valign),
+                autofit: *autofit,
+                insets: style.insets,
+                point_text: *point_text && !style.wrap,
+            }),
             coursecraft_course::StateExtraKind::Shape {
                 shape, fill, text, ..
             } if coursecraft_course::shape_allows_text(*shape) => {
@@ -5611,13 +5850,22 @@ fn inline_edit_text_props(
                     autofit: af,
                     insets: st.insets,
                     style: st,
+                    point_text: false,
                 })
             }
             _ => None,
         };
     }
     let mut props = match (&object.kind, cell) {
-        (coursecraft_course::ObjectKind::Text { style, autofit, .. }, None) => {
+        (
+            coursecraft_course::ObjectKind::Text {
+                style,
+                autofit,
+                point_text,
+                ..
+            },
+            None,
+        ) => {
             let mut st = style.clone();
             if let Some(sd) = state_def
                 && sd.text_style.is_none()
@@ -5631,6 +5879,7 @@ fn inline_edit_text_props(
                 valign: valign_for(st.valign),
                 autofit: *autofit,
                 insets: st.insets,
+                point_text: *point_text && state_name.is_none() && !st.wrap,
             })
         }
         (coursecraft_course::ObjectKind::Button { .. }, None) => Some(InlineEditTextProps {
@@ -5645,6 +5894,7 @@ fn inline_edit_text_props(
             valign: egui::Align::Center,
             autofit: coursecraft_course::Autofit::None,
             insets: None,
+            point_text: false,
         }),
         (
             coursecraft_course::ObjectKind::Shape {
@@ -5665,6 +5915,7 @@ fn inline_edit_text_props(
                 autofit: af,
                 insets: st.insets,
                 style: st,
+                point_text: false,
             })
         }
         (coursecraft_course::ObjectKind::Table { rows, .. }, Some((row, column))) => {
@@ -5675,6 +5926,7 @@ fn inline_edit_text_props(
                 valign: valign_for(cell.valign),
                 autofit: coursecraft_course::Autofit::None,
                 insets: None,
+                point_text: false,
             })
         }
         _ => None,
@@ -5941,19 +6193,10 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         return;
     };
 
-    let Some(slide_rect) = inline_edit_slide_rect(object, &edit) else {
+    let Some(base_slide_rect) = inline_edit_slide_rect(object, &edit) else {
         cancel_inline_edit(editor);
         return;
     };
-    let rect = t.to_screen_rect(slide_rect);
-    if !rect.width().is_finite()
-        || !rect.height().is_finite()
-        || rect.width() <= 0.0
-        || rect.height() <= 0.0
-    {
-        cancel_inline_edit(editor);
-        return;
-    }
 
     let scale = t.scale();
     let Some(InlineEditTextProps {
@@ -5962,6 +6205,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         valign,
         autofit,
         insets,
+        point_text,
     }) = inline_edit_text_props(
         object,
         edit.cell,
@@ -5981,6 +6225,39 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
 
     let (synced_runs, synced_paragraphs, synced_changed) =
         sync_inline_edit_runs(object, &edit, editor.session.revision);
+    let slide_rect = if point_text {
+        let (fitted_w, fitted_h) = measure_point_text_box_size(
+            ui.ctx(),
+            &edit.buffer,
+            &style,
+            &synced_runs,
+            &synced_paragraphs,
+            &theme_font,
+        );
+        let live_rect = anchor_point_text_rect(
+            base_slide_rect,
+            fitted_w,
+            fitted_h,
+            style.align,
+            style.valign,
+        );
+        editor.ui.inline_edit_measured_size = Some((edit.buffer.clone(), (fitted_w, fitted_h)));
+        editor.ui.inline_edit_live_rect = Some(live_rect);
+        live_rect
+    } else {
+        editor.ui.inline_edit_measured_size = None;
+        editor.ui.inline_edit_live_rect = None;
+        base_slide_rect
+    };
+    let rect = t.to_screen_rect(slide_rect);
+    if !rect.width().is_finite()
+        || !rect.height().is_finite()
+        || rect.width() <= 0.0
+        || rect.height() <= 0.0
+    {
+        cancel_inline_edit(editor);
+        return;
+    }
     if edit.cell.is_some() {
         let forward =
             ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
@@ -6011,7 +6288,9 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let mut buffer = edit.buffer.clone();
     let text_rect = inset_text_rect(rect, insets, scale);
     let frame = inline_edit_frame(accent);
-    if insets.is_some() {
+    if point_text {
+        draw_dashed_rect(ui.painter(), rect, Stroke::new(1.0, accent));
+    } else if insets.is_some() {
         ui.painter().rect_stroke(
             rect,
             CornerRadius::ZERO,
@@ -6063,7 +6342,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             link_color,
             Some(&theme_font),
         );
-        let job = coursecraft_render::inline_edit_layout_job(
+        let job = coursecraft_render::inline_edit_layout_job_with_wrap(
             egui_ui.ctx(),
             scale,
             shrink,
@@ -6072,6 +6351,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             course_align,
             wrap_width,
             is_multiline,
+            wrap,
         );
         let mut galley = egui_ui.fonts_mut(|fonts| fonts.layout_job(job));
         if course_align == coursecraft_course::Align::Justify && is_multiline && wrap {
@@ -6096,19 +6376,22 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     } else {
         egui::TextEdit::multiline(&mut buffer).desired_rows(1)
     };
-    let mut output = edit_builder
+    let mut edit_builder = edit_builder
         .id(edit_id)
         .font(FontId::proportional(font_size))
         .text_color(text_color)
         .align(egui::Align2::new(align, valign))
         .desired_width(text_rect.width())
-        .frame(if insets.is_some() {
+        .frame(if point_text || insets.is_some() {
             egui::Frame::NONE
         } else {
             frame
         })
-        .layouter(&mut layouter)
-        .show(&mut child);
+        .layouter(&mut layouter);
+    if point_text {
+        edit_builder = edit_builder.min_size(text_rect.size());
+    }
+    let mut output = edit_builder.show(&mut child);
 
     // As-you-type spelling: underline each misspelling from the galley and
     // offer the word menu on a right click over a squiggle.
@@ -6227,6 +6510,28 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     }
 
     update_inline_edit_buffer(editor, &edit, &style, &buffer);
+    if point_text && buffer != edit.buffer {
+        let (next_runs, next_paragraphs) = editor
+            .ui
+            .inline_edit
+            .as_ref()
+            .map_or((&synced_runs[..], &synced_paragraphs[..]), |state| {
+                (state.live_runs.as_slice(), state.live_paragraphs.as_slice())
+            });
+        let (next_w, next_h) = measure_point_text_box_size(
+            ui.ctx(),
+            &buffer,
+            &style,
+            next_runs,
+            next_paragraphs,
+            &theme_font,
+        );
+        let next_rect =
+            anchor_point_text_rect(base_slide_rect, next_w, next_h, style.align, style.valign);
+        editor.ui.inline_edit_measured_size = Some((buffer.clone(), (next_w, next_h)));
+        editor.ui.inline_edit_live_rect = Some(next_rect);
+        ui.ctx().request_repaint();
+    }
     if output.response.has_focus()
         && let Some(cr) = cursor_range
     {
@@ -6472,7 +6777,18 @@ fn draw_handles_and_outline(
         let Some(item) = items.iter().find(|it| it.hit == Hit::Object(id.clone())) else {
             continue;
         };
-        let corners: Vec<Pos2> = coursecraft_render::item_corners(item)
+        let mut live_item;
+        let active_item = if let Some(live_rect) = editor.ui.inline_edit_live_rect
+            && editor.ui.inline_edit.as_ref().is_some_and(|edit| {
+                edit.object == *id && edit.extra_id.is_none() && edit.cell.is_none()
+            }) {
+            live_item = item.clone();
+            live_item.rect = live_rect;
+            &live_item
+        } else {
+            item
+        };
+        let corners: Vec<Pos2> = coursecraft_render::item_corners(active_item)
             .into_iter()
             .map(|point| t.to_screen_pos(point))
             .collect();
@@ -6493,7 +6809,7 @@ fn draw_handles_and_outline(
                 ));
             }
         }
-        let bounds = coursecraft_render::item_bounds(item);
+        let bounds = coursecraft_render::item_bounds(active_item);
         bbox = Some(match bbox {
             Some(current) => current.union(bounds),
             None => bounds,
@@ -6522,6 +6838,16 @@ fn draw_handles_and_outline(
         && let Some((extra_id, mut world_rect, mut world_rot)) =
             selected_state_extra_geometry(editor)
     {
+        if let Some(live_rect) = editor.ui.inline_edit_live_rect
+            && editor
+                .ui
+                .inline_edit
+                .as_ref()
+                .and_then(|edit| edit.extra_id.as_deref())
+                == Some(extra_id.as_str())
+        {
+            world_rect = live_rect;
+        }
         if let Some(drag) = editor.ui.canvas_drag.as_ref()
             && drag.object_id == extra_id
         {

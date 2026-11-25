@@ -145,6 +145,7 @@ pub(super) fn slide_add(s: &mut Session, p: &Json) -> Result<Json> {
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -499,6 +500,7 @@ pub(super) fn master_add(s: &mut Session, p: &Json) -> Result<Json> {
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -699,6 +701,7 @@ pub(super) fn new_bank_slide_with_id(
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -836,6 +839,7 @@ pub(super) fn draw_insert(s: &mut Session, p: &Json) -> Result<Json> {
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -958,6 +962,7 @@ fn layout_text(
             autofit: Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame,
         timing: Timing::default(),
@@ -1349,6 +1354,7 @@ fn outline_slide(
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -1841,6 +1847,80 @@ fn sanitize_copied_slide_links_and_player(
     }
 }
 
+fn remap_condition_targets(condition: &mut Condition, targets: &BTreeMap<String, String>) {
+    match condition {
+        Condition::All(list) | Condition::Any(list) => {
+            for inner in list {
+                remap_condition_targets(inner, targets);
+            }
+        }
+        Condition::Not(inner) => remap_condition_targets(inner, targets),
+        Condition::ObjectState { object, .. } => {
+            if let Some(new_id) = targets.get(object) {
+                *object = new_id.clone();
+            }
+        }
+        Condition::Compare { .. } => {}
+    }
+}
+
+fn remap_copied_group_list(
+    groups: &mut [coursecraft_course::Group],
+    objects: &mut [Object],
+    taken: &mut BTreeSet<String>,
+    object_map: &BTreeMap<String, String>,
+    trigger_targets: &mut BTreeMap<String, String>,
+) {
+    if groups.is_empty() {
+        return;
+    }
+    let mut group_map: BTreeMap<String, String> = BTreeMap::new();
+    for group in groups {
+        let old_id = group.id.clone();
+        let new_id = fresh_id_in("grp-", taken);
+        taken.insert(new_id.clone());
+        group.id = new_id.clone();
+        group_map.insert(old_id.clone(), new_id.clone());
+        if group.interactive && !object_map.contains_key(&old_id) {
+            trigger_targets.insert(old_id, new_id);
+        }
+    }
+    for object in objects {
+        if let Some(new_group) = object.group.as_deref().and_then(|old| group_map.get(old)) {
+            object.group = Some(new_group.clone());
+        }
+    }
+}
+
+fn remap_copied_slide_groups(
+    slide: &mut Slide,
+    taken: &mut BTreeSet<String>,
+    object_map: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut trigger_targets = object_map.clone();
+    if slide.groups.is_empty() && slide.layers.iter().all(|l| l.groups.is_empty()) {
+        return trigger_targets;
+    }
+    taken.extend(super::all_group_ids(slide));
+    remap_copied_group_list(
+        &mut slide.groups,
+        &mut slide.objects,
+        taken,
+        object_map,
+        &mut trigger_targets,
+    );
+    for layer in &mut slide.layers {
+        remap_copied_group_list(
+            &mut layer.groups,
+            &mut layer.objects,
+            taken,
+            object_map,
+            &mut trigger_targets,
+        );
+    }
+    trigger_targets
+}
+
 /// Give a slide, its layers and objects fresh ids, then rewrite every internal
 /// reference. `self_slide` is the slide id the triggers originally used.
 fn copy_slide(
@@ -1875,6 +1955,8 @@ fn copy_slide(
         }
     }
 
+    let trigger_targets = remap_copied_slide_groups(&mut slide, &mut taken, &object_map);
+
     remap_object_glues(&mut slide.objects, &object_map);
     for layer in &mut slide.layers {
         remap_object_glues(&mut layer.objects, &object_map);
@@ -1889,7 +1971,7 @@ fn copy_slide(
     for mut trigger in std::mem::take(&mut slide.triggers) {
         if remap_trigger(
             &mut trigger,
-            &object_map,
+            &trigger_targets,
             &layer_map,
             course,
             Some(self_pair),
@@ -1909,7 +1991,7 @@ fn copy_slide(
         for mut trigger in std::mem::take(&mut layer.triggers) {
             if remap_trigger(
                 &mut trigger,
-                &object_map,
+                &trigger_targets,
                 &layer_map,
                 course,
                 Some(self_pair),
@@ -1968,6 +2050,9 @@ fn copy_slide(
             }
         }
         question.drop_targets = targets;
+        if let Some(condition) = &mut question.correct_when {
+            remap_condition_targets(condition, &trigger_targets);
+        }
     }
 
     slide.id = new_slide_id;
@@ -2105,6 +2190,7 @@ fn results_layer(
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     }
 }
 
@@ -2133,6 +2219,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -2317,6 +2404,7 @@ fn certificate_text(
             autofit: Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame,
         timing: Timing::default(),
@@ -2360,6 +2448,7 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
         background: Some(theme.background.clone()),
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,

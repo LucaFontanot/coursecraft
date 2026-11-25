@@ -5,7 +5,9 @@
 //! headings, text, images and controls. It makes no play-time decisions and is
 //! pure so the reading order and announcements can be tested without a browser.
 
-use coursecraft_course::{Link, Object, ObjectKind, QuestionKind, Slide, Value, fill};
+use std::collections::BTreeSet;
+
+use coursecraft_course::{Group, Link, Object, ObjectKind, QuestionKind, Slide, Value, fill};
 use coursecraft_logic::Player;
 use egui::Rect;
 
@@ -172,29 +174,35 @@ pub fn build_access_tree(
     // Master objects are never in the keyboard focus list.
     push_master_nodes(player, slide, &mut nodes);
 
-    // 2. Objects with an author focus order, in the order the manager uses.
+    // 2. Objects and interactive groups with an author focus order, in the order the manager uses.
     for target in &list {
         let FocusTarget::Object(id) = target else {
             continue;
         };
-        let Some((object, _)) = slide.object(id) else {
-            continue;
-        };
-        if object.focus_order.is_none() {
-            continue;
+        if let Some((object, _)) = slide.object(id) {
+            if object.focus_order.is_none() {
+                continue;
+            }
+            if let Some(node) = target_node(player, frame, items, slide, target) {
+                nodes.push(node);
+            }
+            push_marker_card(player, slide, object, &mut nodes);
+            push_link_nodes(
+                player,
+                slide,
+                items,
+                id,
+                &format!("object:{}:{}", slide.id, id),
+                &mut nodes,
+            );
+        } else if let Some((group, _)) = slide.interactive_group(id) {
+            if group.focus_order.is_none() {
+                continue;
+            }
+            if let Some(node) = target_node(player, frame, items, slide, target) {
+                nodes.push(node);
+            }
         }
-        if let Some(node) = target_node(player, frame, items, slide, target) {
-            nodes.push(node);
-        }
-        push_marker_card(player, slide, object, &mut nodes);
-        push_link_nodes(
-            player,
-            slide,
-            items,
-            id,
-            &format!("object:{}:{}", slide.id, id),
-            &mut nodes,
-        );
     }
 
     // 3-5. Base content, the question and interactive base objects, unless a
@@ -202,42 +210,7 @@ pub fn build_access_tree(
     push_base_nodes(player, frame, items, slide, &list, base_hidden, &mut nodes);
 
     // 6. Visible layers, bottom to top, each in composition order.
-    for layer_id in &player.state().visible_layers {
-        let Some(layer) = slide.layer(layer_id) else {
-            continue;
-        };
-        for object in &layer.objects {
-            if !player.object_in_panel_viewport(&object.id) {
-                continue;
-            }
-            let target = FocusTarget::Object(object.id.clone());
-            if object.focus_order.is_some() && list.contains(&target) {
-                continue;
-            }
-            if list.contains(&target) {
-                if let Some(node) = target_node(player, frame, items, slide, &target) {
-                    nodes.push(node);
-                }
-                push_marker_card(player, slide, object, &mut nodes);
-                push_link_nodes(
-                    player,
-                    slide,
-                    items,
-                    &object.id,
-                    &format!("layer:{}:{}:{}", slide.id, layer_id, object.id),
-                    &mut nodes,
-                );
-            } else if content_object(&list, object) {
-                let key = format!("layer:{}:{}:{}", slide.id, layer_id, object.id);
-                if matches!(object.kind, ObjectKind::Table { .. }) {
-                    push_table_nodes(player, slide, items, object, &key, &mut nodes);
-                } else if let Some(node) = content_node(player, slide, items, object, key.clone()) {
-                    nodes.push(node);
-                }
-                push_link_nodes(player, slide, items, &object.id, &key, &mut nodes);
-            }
-        }
-    }
+    push_layer_nodes(player, frame, items, slide, &list, &mut nodes);
 
     // 7. Chrome, in focus order. The notice's dismiss button was read with the
     // notice text instead, first in the focus order.
@@ -252,6 +225,66 @@ pub fn build_access_tree(
     }
 
     AccessTree { title, nodes }
+}
+
+/// Read visible slide layers from bottom to top, each in composition order.
+fn push_layer_nodes(
+    player: &Player<'_>,
+    frame: &PlayerFrame,
+    items: &[DrawItem],
+    slide: &Slide,
+    list: &[FocusTarget],
+    nodes: &mut Vec<AccessNode>,
+) {
+    for layer_id in &player.state().visible_layers {
+        let Some(layer) = slide.layer(layer_id) else {
+            continue;
+        };
+        let mut seen_groups = BTreeSet::new();
+        for object in &layer.objects {
+            if let Some((group, _)) = slide.interactive_group_of_object(&object.id) {
+                if seen_groups.insert(group.id.as_str()) {
+                    let target = FocusTarget::Object(group.id.clone());
+                    if group.focus_order.is_none()
+                        && list.contains(&target)
+                        && let Some(node) = target_node(player, frame, items, slide, &target)
+                    {
+                        nodes.push(node);
+                    }
+                }
+                continue;
+            }
+            if !player.object_in_panel_viewport(&object.id) {
+                continue;
+            }
+            let target = FocusTarget::Object(object.id.clone());
+            if object.focus_order.is_some() && list.contains(&target) {
+                continue;
+            }
+            if list.contains(&target) {
+                if let Some(node) = target_node(player, frame, items, slide, &target) {
+                    nodes.push(node);
+                }
+                push_marker_card(player, slide, object, nodes);
+                push_link_nodes(
+                    player,
+                    slide,
+                    items,
+                    &object.id,
+                    &format!("layer:{}:{}:{}", slide.id, layer_id, object.id),
+                    nodes,
+                );
+            } else if content_object(slide, list, object) {
+                let key = format!("layer:{}:{}:{}", slide.id, layer_id, object.id);
+                if matches!(object.kind, ObjectKind::Table { .. }) {
+                    push_table_nodes(player, slide, items, object, &key, nodes);
+                } else if let Some(node) = content_node(player, slide, items, object, key.clone()) {
+                    nodes.push(node);
+                }
+                push_link_nodes(player, slide, items, &object.id, &key, nodes);
+            }
+        }
+    }
 }
 
 /// Read the slide's base content, question and interactive base objects.
@@ -277,7 +310,7 @@ fn push_base_nodes(
         if !player.object_in_panel_viewport(&object.id) {
             continue;
         }
-        if content_object(list, object) {
+        if content_object(slide, list, object) {
             let key = format!("object:{}:{}", slide.id, object.id);
             if matches!(object.kind, ObjectKind::Table { .. }) {
                 push_table_nodes(player, slide, items, object, &key, nodes);
@@ -314,8 +347,21 @@ fn push_base_nodes(
         }
     }
 
-    // Interactive base objects without an author focus order.
+    // Interactive base objects and interactive groups without an author focus order.
+    let mut seen_groups = BTreeSet::new();
     for object in &slide.objects {
+        if let Some((group, _)) = slide.interactive_group_of_object(&object.id) {
+            if seen_groups.insert(group.id.as_str()) {
+                let target = FocusTarget::Object(group.id.clone());
+                if group.focus_order.is_none()
+                    && list.contains(&target)
+                    && let Some(node) = target_node(player, frame, items, slide, &target)
+                {
+                    nodes.push(node);
+                }
+            }
+            continue;
+        }
         if !player.object_in_panel_viewport(&object.id) {
             continue;
         }
@@ -614,8 +660,8 @@ fn is_question_control(target: &FocusTarget) -> bool {
 }
 
 /// Is this object non-interactive content on this frame?
-fn content_object(list: &[FocusTarget], object: &Object) -> bool {
-    if object.decorative {
+fn content_object(slide: &Slide, list: &[FocusTarget], object: &Object) -> bool {
+    if object.decorative || slide.interactive_group_of_object(&object.id).is_some() {
         return false;
     }
     let target = FocusTarget::Object(object.id.clone());
@@ -629,7 +675,7 @@ fn content_node(
     object: &Object,
     key: String,
 ) -> Option<AccessNode> {
-    if object.decorative {
+    if object.decorative || slide.interactive_group_of_object(&object.id).is_some() {
         return None;
     }
     let item = object_item(items, object).or_else(|| {
@@ -1104,7 +1150,14 @@ fn target_node(
                     .map(|link| link_rect(item.rect, link))
                     .unwrap_or(item.rect)
             } else {
-                slide.object(object).map(|(obj, _)| object_rect(obj))?
+                slide
+                    .object(object)
+                    .map(|(obj, _)| object_rect(obj))
+                    .or_else(|| {
+                        slide
+                            .interactive_group(object)
+                            .and_then(|_| interactive_group_rect(items, slide, object))
+                    })?
             };
             Some(AccessNode {
                 key: format!("link:{}:{}:{}", slide.id, object, index),
@@ -1122,6 +1175,32 @@ fn target_node(
             })
         }
         FocusTarget::Object(id) => {
+            if let Some((group, _)) = slide.interactive_group(id) {
+                let has_selected = slide
+                    .group_members(&group.id)
+                    .into_iter()
+                    .any(|member| member.states.iter().any(|s| s.name == "selected"));
+                let checked = has_selected.then(|| {
+                    player
+                        .object_state(&group.id)
+                        .unwrap_or(&group.initial_state)
+                        == "selected"
+                });
+                return Some(AccessNode {
+                    key: format!("group:{}:{}", slide.id, group.id),
+                    role: AccessRole::Button,
+                    label: interactive_group_label(player, slide, group),
+                    value: None,
+                    options: Vec::new(),
+                    checked,
+                    pressed: None,
+                    expanded: None,
+                    hint: None,
+                    target: Some(FocusTarget::Object(group.id.clone())),
+                    rect: interactive_group_rect(items, slide, &group.id).unwrap_or(Rect::NOTHING),
+                    screen: false,
+                });
+            }
             let (object, _) = slide.object(id)?;
             if object.kind.input_kind().is_some() {
                 return input_access_node(player, slide, items, object, target);
@@ -1933,6 +2012,11 @@ fn push_link_nodes(
     let fallback = item
         .map(|item| item.rect)
         .or_else(|| slide.object(object_id).map(|(obj, _)| object_rect(obj)))
+        .or_else(|| {
+            slide
+                .interactive_group(object_id)
+                .and_then(|_| interactive_group_rect(items, slide, object_id))
+        })
         .unwrap_or(Rect::NOTHING);
     for (index, link) in links.into_iter().enumerate() {
         let rect = item
@@ -2103,7 +2187,172 @@ fn input_node_label(player: &Player<'_>, object: &Object, fallback: &str) -> Str
         .unwrap_or_else(|| fallback.to_owned())
 }
 
+fn interactive_group_rect(items: &[DrawItem], slide: &Slide, group_id: &str) -> Option<Rect> {
+    let mut union: Option<Rect> = None;
+    for item in items {
+        if item.is_state_extra {
+            continue;
+        }
+        if matches!(&item.hit, Hit::Object(hit) if hit == group_id) {
+            let bounds = crate::compose::item_bounds(item);
+            if bounds.is_finite() {
+                union = Some(match union {
+                    Some(acc) => acc.union(bounds),
+                    None => bounds,
+                });
+            }
+        }
+    }
+    if union.is_some() {
+        return union;
+    }
+    for member in slide.group_members(group_id) {
+        if let Some(bounds) = validate_frame(&member.frame) {
+            union = Some(match union {
+                Some(acc) => acc.union(bounds),
+                None => bounds,
+            });
+        }
+    }
+    union
+}
+
+fn interactive_group_label(player: &Player<'_>, slide: &Slide, group: &Group) -> String {
+    if let Some(desc) = group.description.as_deref() {
+        let resolved = player.display_text(desc);
+        let trimmed = resolved.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
+        }
+    }
+    let name = player.display_text(&group.name);
+    let name = name.trim();
+    if !name.is_empty() {
+        return name.to_owned();
+    }
+    let state_name = player
+        .object_state(&group.id)
+        .unwrap_or(&group.initial_state);
+    let mut parts = Vec::new();
+    for member in slide.group_members(&group.id) {
+        if member.decorative {
+            continue;
+        }
+        if let Some(part) = member_text_or_alt(player, member, state_name) {
+            parts.push(part);
+        }
+    }
+    if !parts.is_empty() {
+        return parts.join(" ");
+    }
+    group.id.clone()
+}
+
+fn member_text_or_alt(player: &Player<'_>, member: &Object, state_name: &str) -> Option<String> {
+    let state_override_text = (state_name != "normal")
+        .then(|| member.states.iter().find(|s| s.name == state_name))
+        .flatten()
+        .and_then(|s| {
+            s.runs
+                .as_ref()
+                .filter(|runs| !runs.is_empty())
+                .map(|runs| runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                .or_else(|| s.text.clone())
+        });
+    let raw = match &member.kind {
+        ObjectKind::Text { text, runs, .. } => state_override_text
+            .or_else(|| {
+                let joined: String = if runs.is_empty() {
+                    text.clone()
+                } else {
+                    runs.iter().map(|r| r.text.as_str()).collect()
+                };
+                (!joined.trim().is_empty()).then_some(joined)
+            })
+            .or_else(|| {
+                member
+                    .description
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_owned)
+            }),
+        ObjectKind::Button { label, .. } => state_override_text
+            .or_else(|| (!label.trim().is_empty()).then(|| label.clone()))
+            .or_else(|| {
+                member
+                    .description
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_owned)
+            }),
+        ObjectKind::Image { alt, .. } => member
+            .description
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+            .or_else(|| (!alt.trim().is_empty()).then(|| alt.clone())),
+        ObjectKind::Shape { text, .. } => member
+            .description
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+            .or(state_override_text)
+            .or_else(|| {
+                let shape_text = text.as_ref()?;
+                let joined: String = if shape_text.runs.is_empty() {
+                    shape_text.text.clone()
+                } else {
+                    shape_text.runs.iter().map(|r| r.text.as_str()).collect()
+                };
+                (!joined.trim().is_empty()).then_some(joined)
+            }),
+        ObjectKind::Table { rows, .. } => {
+            let mut cells = Vec::new();
+            for row in rows {
+                for cell in &row.cells {
+                    let text: String = if cell.runs.is_empty() {
+                        cell.text.clone()
+                    } else {
+                        cell.runs.iter().map(|r| r.text.as_str()).collect()
+                    };
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        cells.push(trimmed.to_owned());
+                    }
+                }
+            }
+            (!cells.is_empty()).then(|| cells.join(" "))
+        }
+        ObjectKind::Checkbox { label, .. } => (!label.trim().is_empty()).then(|| label.clone()),
+        ObjectKind::Marker { title, .. } => (!title.trim().is_empty()).then(|| title.clone()),
+        ObjectKind::TextEntry { placeholder, .. } => {
+            (!placeholder.trim().is_empty()).then(|| placeholder.clone())
+        }
+        ObjectKind::Path { .. }
+        | ObjectKind::RadioGroup { .. }
+        | ObjectKind::Slider { .. }
+        | ObjectKind::Dial { .. }
+        | ObjectKind::Timer { .. }
+        | ObjectKind::ProgressMeter { .. }
+        | ObjectKind::Audio { .. }
+        | ObjectKind::Video { .. }
+        | ObjectKind::ScrollPanel { .. }
+        | ObjectKind::Web { .. }
+        | ObjectKind::Lottie { .. } => member
+            .description
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned),
+    }?;
+    let resolved = player.display_text(&raw);
+    let trimmed = resolved.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
 fn object_label(player: &Player<'_>, slide: &Slide, id: &str) -> Option<String> {
+    if let Some((group, _)) = slide.interactive_group(id) {
+        return Some(interactive_group_label(player, slide, group));
+    }
     let (object, _) = slide.object(id)?;
     let text = match &object.kind {
         ObjectKind::Text { text, runs, .. } => {

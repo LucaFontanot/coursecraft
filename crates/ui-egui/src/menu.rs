@@ -1708,6 +1708,18 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
     }
 }
 
+fn selected_group_interactive_info(editor: &Editor) -> Option<(String, String, bool)> {
+    if editor.ui.master_view || !editor.selection.is_one_group(&editor.session.course) {
+        return None;
+    }
+    let slide = editor.session.course.slide(&editor.selection.slide)?;
+    let primary = editor.selection.object.as_deref()?;
+    let (obj, _) = slide.object(primary)?;
+    let group_id = obj.group.clone()?;
+    let is_interactive = slide.interactive_group(&group_id).is_some();
+    Some((slide.id.clone(), group_id, is_interactive))
+}
+
 fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool) {
     let group_params = adapter(editor, "object.group");
     let group_sc = shortcuts
@@ -1745,6 +1757,25 @@ fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool)
             editor.run("object.ungroup", params);
         }
         ui.close();
+    }
+
+    if let Some((slide_id, group_id, is_interactive)) = selected_group_interactive_info(editor) {
+        let label = if is_interactive {
+            "Remove button behaviour"
+        } else {
+            "Make button from group"
+        };
+        if menu_button(ui, label, None, true, None).clicked() {
+            editor.run(
+                "group.set_interactive",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "group": group_id,
+                    "interactive": !is_interactive,
+                }),
+            );
+            ui.close();
+        }
     }
 }
 
@@ -2223,6 +2254,24 @@ fn render_arrange_extras(
     ui: &mut Ui,
     action_to_run: &mut Option<(&'static str, Json)>,
 ) {
+    if let Some((slide_id, group_id, is_interactive)) = selected_group_interactive_info(editor) {
+        let label = if is_interactive {
+            "Remove button behaviour"
+        } else {
+            "Make button from group"
+        };
+        if menu_button(ui, label, None, true, None).clicked() {
+            *action_to_run = Some((
+                "group.set_interactive",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "group": group_id,
+                    "interactive": !is_interactive,
+                }),
+            ));
+            ui.close();
+        }
+    }
     ui.separator();
     render_align_actions(editor, ui, action_to_run);
     ui.separator();

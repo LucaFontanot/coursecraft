@@ -17,7 +17,7 @@ mod interaction;
 use interaction::{interaction_button, interaction_text, interaction_trigger};
 mod layer;
 mod object;
-use object::{all_group_ids, find_object_mut, objects_param};
+use object::{all_group_ids, find_object_mut, objects_param, remove_empty_group_records};
 mod object_states;
 use object_states::remove_dangling_triggers;
 mod question;
@@ -826,6 +826,28 @@ static REGISTRY: &[Command] = &[
         scope: UndoScope::SingleSlide,
         slide_validation: true,
         run: object::object_ungroup,
+    },
+    Command {
+        id: "group.set_interactive",
+        label: "Toggle button group",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "group": id, "interactive": bool, "name"?: string}"#,
+        mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
+        run: object::group_set_interactive,
+    },
+    Command {
+        id: "group.update",
+        label: "Update group",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "group": id, "name"?: string, "initial_state"?: string, "focus_order"?: u32|null, "description"?: string|null}"#,
+        mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
+        run: object::group_update,
     },
     Command {
         id: "object.duplicate",

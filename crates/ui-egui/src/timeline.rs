@@ -2248,6 +2248,90 @@ fn handle_group_drag(editor: &mut Editor, ui: &Ui, duration_ms: u32, track_width
     editor.run_batch(&steps);
 }
 
+/// Paint a group folder row's label and optional quiet `"Button"` pill for interactive groups.
+#[allow(clippy::too_many_arguments)]
+fn paint_group_row_label(
+    painter: &egui::Painter,
+    p: &coursecraft_render::Palette,
+    header_row_rect: Rect,
+    text_x: f32,
+    max_right: f32,
+    is_selected: bool,
+    member_count: usize,
+    interactive_info: Option<(String, bool)>,
+) {
+    let is_interactive_group = interactive_info
+        .as_ref()
+        .is_some_and(|(_, interactive)| *interactive);
+    let name = match interactive_info
+        .as_ref()
+        .map(|(group_name, _)| group_name.trim())
+    {
+        Some(group_name) if !group_name.is_empty() => group_name.to_owned(),
+        _ => format!("Group ({member_count})"),
+    };
+    let text_color = if is_selected {
+        p.text
+    } else {
+        p.text_secondary
+    };
+    let badge_galley = is_interactive_group.then(|| {
+        painter.layout_no_wrap(
+            "Button".to_owned(),
+            FontId::proportional(coursecraft_render::SIZE_CAPTION),
+            p.text_secondary,
+        )
+    });
+    let badge_pad_x = 5.0;
+    let badge_pad_y = 2.0;
+    let badge_gap = 6.0;
+    let badge_w = badge_galley
+        .as_ref()
+        .map_or(0.0, |galley| galley.size().x + badge_pad_x * 2.0);
+    let show_badge = badge_galley.is_some() && (max_right - text_x) >= badge_w + badge_gap + 12.0;
+    let name_max_w = if show_badge {
+        (max_right - badge_w - badge_gap - text_x).max(0.0)
+    } else {
+        (max_right - text_x).max(0.0)
+    };
+    let mut name_job =
+        egui::text::LayoutJob::simple_singleline(name, FontId::proportional(13.0), text_color);
+    name_job.wrap = egui::text::TextWrapping::truncate_at_width(name_max_w);
+    let galley = painter.layout_job(name_job);
+    let name_w = galley.size().x;
+    painter.galley(
+        pos2(text_x, header_row_rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_color,
+    );
+    if show_badge && let Some(badge) = badge_galley {
+        let pill_h = (badge.size().y + badge_pad_y * 2.0).min(OBJECT_ROW_HEIGHT - 6.0);
+        let pill_x = (text_x + name_w + badge_gap).min(max_right - badge_w);
+        let pill_rect = Rect::from_min_size(
+            pos2(pill_x, header_row_rect.center().y - pill_h * 0.5),
+            vec2(badge_w, pill_h),
+        );
+        let pill_bg = if is_selected {
+            p.raised
+        } else {
+            p.accent_subtle
+        };
+        painter.rect_filled(
+            pill_rect,
+            CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+            pill_bg,
+        );
+        painter.galley(
+            pos2(
+                pill_rect.min.x + badge_pad_x,
+                pill_rect.center().y - badge.size().y * 0.5,
+            ),
+            badge,
+            p.text_secondary,
+        );
+    }
+}
+
 /// One group's folder row: expand/collapse arrow, name, eye and lock for all members,
 /// and a summary bar that moves every member's timing together.
 #[allow(clippy::too_many_arguments)]
@@ -2453,22 +2537,21 @@ fn render_group_row(
         phosphor.clone(),
         p.text_tertiary,
     );
-    let text_x = icon_x + 16.0;
-    let text_color = if is_selected {
-        p.text
-    } else {
-        p.text_secondary
-    };
-    let name = format!("Group ({})", member_ids.len());
-    let mut name_job =
-        egui::text::LayoutJob::simple_singleline(name, FontId::proportional(13.0), text_color);
-    name_job.wrap =
-        egui::text::TextWrapping::truncate_at_width((eye_rect.min.x - 6.0 - text_x).max(0.0));
-    let galley = painter.layout_job(name_job);
-    painter.galley(
-        pos2(text_x, header_row_rect.center().y - galley.size().y * 0.5),
-        galley,
-        text_color,
+    let interactive_group_info: Option<(String, bool)> = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .and_then(|slide| slide.interactive_group(group))
+        .map(|(g, _)| (g.name.clone(), g.interactive));
+    paint_group_row_label(
+        painter,
+        &p,
+        header_row_rect,
+        icon_x + 16.0,
+        eye_rect.min.x - 6.0,
+        is_selected,
+        member_ids.len(),
+        interactive_group_info,
     );
     for (rect, icon, on) in [
         (

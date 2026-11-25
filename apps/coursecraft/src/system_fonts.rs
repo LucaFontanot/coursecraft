@@ -146,7 +146,7 @@ pub fn scan(folders: &[PathBuf]) -> Vec<SystemFontFamily> {
 mod tests {
     use super::*;
 
-    const INTER_REGULAR: &[u8] = include_bytes!("../../../crates/render/fonts/Inter-Regular.ttf");
+    const INTER_REGULAR: &[u8] = include_bytes!("../../../crates/media/fonts/Inter-Regular.ttf");
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("coursecraft-system-fonts-{name}"));

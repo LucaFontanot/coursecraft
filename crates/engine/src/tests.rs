@@ -8495,6 +8495,7 @@ fn build_test_state_with_all_extras() -> coursecraft_course::StateDef {
                     paragraphs: base_paragraphs,
                     autofit: coursecraft_course::Autofit::None,
                     outline: Some(base_outline),
+                    point_text: false,
                 },
                 frame: coursecraft_course::Rect {
                     x: 0.0,
@@ -10731,7 +10732,7 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
     };
 
     let cmds = crate::registry();
-    assert_eq!(cmds.len(), 187, "unexpected registry command count");
+    assert_eq!(cmds.len(), 189, "unexpected registry command count");
 
     for cmd in cmds {
         check_phrase(cmd.label, &format!("label for {}", cmd.id));
@@ -12247,7 +12248,7 @@ fn r5_01_registry_golden_lock() {
     use crate::delta::UndoScope;
 
     let reg = registry();
-    assert_eq!(reg.len(), 187);
+    assert_eq!(reg.len(), 189);
 
     const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
         ("course.info", false, UndoScope::FullCourse, false),
@@ -12351,6 +12352,8 @@ fn r5_01_registry_golden_lock() {
         ("object.match_size", true, UndoScope::SingleSlide, true),
         ("object.group", true, UndoScope::SingleSlide, true),
         ("object.ungroup", true, UndoScope::SingleSlide, true),
+        ("group.set_interactive", true, UndoScope::SingleSlide, true),
+        ("group.update", true, UndoScope::SingleSlide, true),
         ("object.duplicate", true, UndoScope::SingleSlide, true),
         ("object.paste", true, UndoScope::SingleSlide, true),
         ("object.set_frame", true, UndoScope::SingleSlide, true),
@@ -12612,10 +12615,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 24_022, "registry golden table byte length");
+    assert_eq!(table.len(), 24_336, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        0x51c2_513b_3680_963a,
+        0xdc61_5cf1_56dd_4f3d,
         "registry golden table FNV-1a hash"
     );
 }
@@ -12880,4 +12883,2358 @@ fn transition_apply_to_all_sets_every_slide_in_one_undo_step() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn pt_03_headless_point_text_add_and_refit() {
+    use coursecraft_course::{Align, Autofit};
+
+    let mut s = Session::blank("Point Text");
+    let added = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": {
+                "type": "text",
+                "text": "Next",
+                "point_text": true,
+                "autofit": "shrink",
+                "style": { "wrap": true, "size": 20.0 }
+            },
+            "frame": { "x": 100.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    assert_eq!(added["id"], "lbl");
+
+    let (next_frame, next_point, next_wrap, next_autofit) = {
+        let slide = s.course.slide("slide1").expect("slide1");
+        let (obj, _) = slide.object("lbl").expect("lbl");
+        match &obj.kind {
+            ObjectKind::Text {
+                point_text,
+                style,
+                autofit,
+                ..
+            } => (obj.frame, *point_text, style.wrap, *autofit),
+            other => panic!("expected text, got {other:?}"),
+        }
+    };
+    assert!(next_point, "point_text must stay true on add");
+    assert!(!next_wrap, "point_text must force style.wrap = false");
+    assert_eq!(
+        next_autofit,
+        Autofit::None,
+        "point_text must force autofit = None"
+    );
+    assert_eq!(next_frame.x, 100.0, "initial add keeps x top-left anchor");
+    assert_eq!(next_frame.y, 100.0, "initial add keeps y top-left anchor");
+    assert!(
+        next_frame.w < 120.0 && next_frame.w >= 20.0,
+        "fitted 'Next' width ({}) must be much smaller than 300",
+        next_frame.w
+    );
+    assert!(
+        next_frame.h < 50.0 && next_frame.h >= 20.0,
+        "fitted 'Next' height ({}) must be smaller than 60",
+        next_frame.h
+    );
+
+    // Growing text widens frame.w on one line (same height).
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "lbl", "text": "Continue to Module 2" }),
+    );
+    let long_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        long_frame.w > next_frame.w * 2.0,
+        "longer text ({}) must widen box beyond 'Next' ({})",
+        long_frame.w,
+        next_frame.w
+    );
+    assert_eq!(
+        long_frame.h, next_frame.h,
+        "single-line text.set must keep height identical"
+    );
+
+    // Shrinking back to "Go" narrows frame.w.
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "lbl", "text": "Go" }),
+    );
+    let short_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        short_frame.w < next_frame.w,
+        "'Go' ({}) must be narrower than 'Next' ({})",
+        short_frame.w,
+        next_frame.w
+    );
+    assert_eq!(short_frame.h, next_frame.h);
+
+    // Align::Center preserves center X across text edits.
+    ok(
+        &mut s,
+        "text.set_paragraph",
+        json!({ "slide": "slide1", "object": "lbl", "align": "center" }),
+    );
+    let before_center = {
+        let f = s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object("lbl")
+            .unwrap()
+            .0
+            .frame;
+        assert_eq!(
+            match &s
+                .course
+                .slide("slide1")
+                .unwrap()
+                .object("lbl")
+                .unwrap()
+                .0
+                .kind
+            {
+                ObjectKind::Text { style, .. } => style.align,
+                _ => panic!("expected text"),
+            },
+            Align::Center
+        );
+        f.x + f.w * 0.5
+    };
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "lbl", "text": "Centered Heading Label" }),
+    );
+    let centered_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    let after_center = centered_frame.x + centered_frame.w * 0.5;
+    assert!(
+        (after_center - before_center).abs() <= 1.0,
+        "Align::Center must preserve center X: before={before_center}, after={after_center}"
+    );
+
+    // text.style_range increasing font size grows both width and height.
+    ok(
+        &mut s,
+        "text.style_range",
+        json!({
+            "slide": "slide1",
+            "object": "lbl",
+            "start": 0,
+            "end": 8,
+            "size": 44.0
+        }),
+    );
+    let big_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        big_frame.w > centered_frame.w && big_frame.h > centered_frame.h,
+        "text.style_range increasing size must grow frame: before={centered_frame:?}, after={big_frame:?}"
+    );
+}
+
+#[test]
+fn pt_03_paragraphs_apply_style_and_hostile_measured_size() {
+    let mut s = Session::blank("Point Text Refit");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": {
+                "type": "text",
+                "text": "Heading Label",
+                "point_text": true,
+                "style": { "size": 28.0 }
+            },
+            "frame": { "x": 100.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    let base_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+
+    // text.set_paragraphs increasing line_spacing and adding bullet indent grows frame.
+    ok(
+        &mut s,
+        "text.set_paragraphs",
+        json!({
+            "slide": "slide1",
+            "object": "lbl",
+            "list": "bullet",
+            "line_spacing": 2.0
+        }),
+    );
+    let para_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        para_frame.w > base_frame.w && para_frame.h > base_frame.h,
+        "text.set_paragraphs must refit point text: before={base_frame:?}, after={para_frame:?}"
+    );
+
+    // object.apply_style copies style and refits while keeping point_text = true, wrap = false.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "src_area",
+            "kind": {
+                "type": "text",
+                "text": "Source",
+                "style": { "size": 14.0, "wrap": true }
+            },
+            "frame": { "x": 10.0, "y": 10.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.apply_style",
+        json!({
+            "slide": "slide1",
+            "source_slide": "slide1",
+            "source": "src_area",
+            "object": "lbl"
+        }),
+    );
+    let (styled_frame, still_point, still_nowrap) = {
+        let (obj, _) = s.course.slide("slide1").unwrap().object("lbl").unwrap();
+        match &obj.kind {
+            ObjectKind::Text {
+                point_text, style, ..
+            } => (obj.frame, *point_text, !style.wrap),
+            _ => panic!("expected text"),
+        }
+    };
+    assert!(still_point && still_nowrap);
+    assert!(
+        styled_frame.h < para_frame.h,
+        "applying smaller text style must shrink fitted height"
+    );
+
+    // Hostile measured_size values never panic: invalid ones fall back to skrifa, huge ones clamp.
+    for hostile in [
+        json!({ "w": -10.0, "h": 20.0 }),
+        json!({ "w": 0.0, "h": 20.0 }),
+        json!({ "w": "bad", "h": 20.0 }),
+        json!(null),
+    ] {
+        ok(
+            &mut s,
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "lbl",
+                "text": "Safe",
+                "measured_size": hostile
+            }),
+        );
+        let f = s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object("lbl")
+            .unwrap()
+            .0
+            .frame;
+        assert!(f.w.is_finite() && (20.0..=10_000.0).contains(&f.w));
+        assert!(f.h.is_finite() && (1.0..=10_000.0).contains(&f.h));
+    }
+    ok(
+        &mut s,
+        "text.set",
+        json!({
+            "slide": "slide1",
+            "object": "lbl",
+            "text": "Clamped",
+            "measured_size": { "w": 999_999.0, "h": 999_999.0 }
+        }),
+    );
+    let clamped = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(clamped.w, 10_000.0);
+    assert_eq!(clamped.h, 10_000.0);
+}
+
+#[test]
+fn pt_04_point_text_converts_to_area_text() {
+    use coursecraft_course::Autofit;
+
+    let mut s = Session::blank("Convert Point Text");
+    for id in ["t_wrap", "t_resize", "t_shrink", "t_update"] {
+        ok(
+            &mut s,
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "id": id,
+                "kind": { "type": "text", "text": "Hello", "point_text": true },
+                "frame": { "x": 50.0, "y": 50.0, "w": 300.0, "h": 60.0 }
+            }),
+        );
+    }
+
+    // (a) text.set_paragraph { wrap: true } -> point_text = false, wrap = true, width preserved.
+    let wrap_before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_wrap")
+        .unwrap()
+        .0
+        .frame;
+    ok(
+        &mut s,
+        "text.set_paragraph",
+        json!({ "slide": "slide1", "object": "t_wrap", "wrap": true }),
+    );
+    let (obj_wrap, _) = s.course.slide("slide1").unwrap().object("t_wrap").unwrap();
+    assert_eq!(
+        obj_wrap.frame.w, wrap_before.w,
+        "wrap-on must preserve width"
+    );
+    match &obj_wrap.kind {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(!*point_text, "wrap=true must clear point_text");
+            assert!(style.wrap, "wrap must be true");
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // (b) object.set_frame changing w -> point_text = false, wrap = true.
+    let resize_before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_resize")
+        .unwrap()
+        .0
+        .frame;
+    let new_w = resize_before.w + 120.0;
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "t_resize",
+            "frame": {
+                "x": resize_before.x,
+                "y": resize_before.y,
+                "w": new_w,
+                "h": resize_before.h
+            }
+        }),
+    );
+    let (obj_resize, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_resize")
+        .unwrap();
+    assert_eq!(obj_resize.frame.w, new_w);
+    match &obj_resize.kind {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(!*point_text, "width resize must clear point_text");
+            assert!(style.wrap, "width resize must enable wrap");
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // (c) object.set_autofit { autofit: "shrink" } -> point_text = false.
+    ok(
+        &mut s,
+        "object.set_autofit",
+        json!({ "slide": "slide1", "object": "t_shrink", "autofit": "shrink" }),
+    );
+    let (obj_shrink, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_shrink")
+        .unwrap();
+    match &obj_shrink.kind {
+        ObjectKind::Text {
+            point_text,
+            autofit,
+            ..
+        } => {
+            assert!(!*point_text, "autofit=shrink must clear point_text");
+            assert_eq!(*autofit, Autofit::Shrink);
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // (d) object.update setting wrap: true clears point_text.
+    ok(
+        &mut s,
+        "object.update",
+        json!({
+            "slide": "slide1",
+            "object": "t_update",
+            "kind": {
+                "type": "text",
+                "text": "Hello",
+                "point_text": true,
+                "style": { "wrap": true }
+            }
+        }),
+    );
+    let (obj_upd, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_update")
+        .unwrap();
+    match &obj_upd.kind {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(
+                !*point_text,
+                "object.update with wrap=true must clear point_text"
+            );
+            assert!(style.wrap);
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+#[test]
+fn pt_05_move_align_distribute_preserve_point_text() {
+    let mut s = Session::blank("Move Align Distribute");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "btn",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+            "frame": { "x": 200.0, "y": 300.0, "w": 160.0, "h": 48.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "next_lbl",
+            "kind": { "type": "text", "text": "Next", "point_text": true },
+            "frame": { "x": 10.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "back_lbl",
+            "kind": { "type": "text", "text": "Back", "point_text": true },
+            "frame": { "x": 40.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "mid_lbl",
+            "kind": { "type": "text", "text": "Save", "point_text": true },
+            "frame": { "x": 500.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+
+    // 1. Pure move via object.set_frame preserves point_text = true and wrap = false.
+    let before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("next_lbl")
+        .unwrap()
+        .0
+        .frame;
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "next_lbl",
+            "frame": { "x": 220.0, "y": 310.0, "w": before.w, "h": before.h }
+        }),
+    );
+    let (moved_obj, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("next_lbl")
+        .unwrap();
+    assert_eq!(moved_obj.frame.x, 220.0);
+    assert_eq!(moved_obj.frame.y, 310.0);
+    assert!(matches!(
+        &moved_obj.kind,
+        ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // 2. Aligning "Next" and "Back" onto the button centers accurately and preserves point_text.
+    for lbl in ["next_lbl", "back_lbl"] {
+        ok(
+            &mut s,
+            "object.align",
+            json!({ "slide": "slide1", "objects": ["btn", lbl], "edge": "center" }),
+        );
+        ok(
+            &mut s,
+            "object.align",
+            json!({ "slide": "slide1", "objects": ["btn", lbl], "edge": "middle" }),
+        );
+        let btn_f = s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object("btn")
+            .unwrap()
+            .0
+            .frame;
+        let (lbl_obj, _) = s.course.slide("slide1").unwrap().object(lbl).unwrap();
+        let btn_cx = btn_f.x + btn_f.w * 0.5;
+        let btn_cy = btn_f.y + btn_f.h * 0.5;
+        let lbl_cx = lbl_obj.frame.x + lbl_obj.frame.w * 0.5;
+        let lbl_cy = lbl_obj.frame.y + lbl_obj.frame.h * 0.5;
+        assert!(
+            (lbl_cx - btn_cx).abs() < 1.0 && (lbl_cy - btn_cy).abs() < 1.0,
+            "{lbl} must center on btn: btn=({btn_cx}, {btn_cy}), lbl=({lbl_cx}, {lbl_cy})"
+        );
+        assert!(matches!(
+            &lbl_obj.kind,
+            ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+        ));
+    }
+
+    // 3. Distributing 3 point-text objects preserves point_text and wrap = false.
+    let back_f = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("back_lbl")
+        .unwrap()
+        .0
+        .frame;
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "back_lbl",
+            "frame": { "x": 40.0, "y": 100.0, "w": back_f.w, "h": back_f.h }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.distribute",
+        json!({
+            "slide": "slide1",
+            "objects": ["back_lbl", "next_lbl", "mid_lbl"],
+            "axis": "horizontal"
+        }),
+    );
+    for lbl in ["back_lbl", "next_lbl", "mid_lbl"] {
+        let (obj, _) = s.course.slide("slide1").unwrap().object(lbl).unwrap();
+        assert!(
+            matches!(
+                &obj.kind,
+                ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+            ),
+            "{lbl} must remain point text after distribute"
+        );
+    }
+}
+
+#[test]
+fn pt_06_state_extra_point_text_fits_and_converts() {
+    use coursecraft_course::{Autofit, StateExtraKind};
+
+    let mut s = Session::blank("State Extra Point Text");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "card",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#EEEEEE" },
+            "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 100.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": { "name": "hover" }
+        }),
+    );
+
+    // 1. Add point-text state extra: fits on insert and normalizes wrap=false, autofit=None.
+    let res = ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": {
+                "id": "badge_txt",
+                "name": "Badge",
+                "kind": {
+                    "type": "text",
+                    "text": "New",
+                    "point_text": true,
+                    "autofit": "shrink",
+                    "style": { "wrap": true, "size": 18.0 }
+                },
+                "frame": { "x": 10.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+            }
+        }),
+    );
+    assert_eq!(res["id"], "badge_txt");
+
+    let get_extra = |s: &Session, extra_id: &str| {
+        let (obj, _) = s.course.slide("slide1").unwrap().object("card").unwrap();
+        let st = obj.states.iter().find(|st| st.name == "hover").unwrap();
+        st.extras.iter().find(|e| e.id == extra_id).unwrap().clone()
+    };
+
+    let added_extra = get_extra(&s, "badge_txt");
+    assert!(added_extra.frame.w < 120.0 && added_extra.frame.w >= 20.0);
+    assert!(added_extra.frame.h < 50.0);
+    match &added_extra.kind {
+        StateExtraKind::Text {
+            point_text,
+            style,
+            autofit,
+            ..
+        } => {
+            assert!(*point_text);
+            assert!(!style.wrap);
+            assert_eq!(*autofit, Autofit::None);
+        }
+        other => panic!("expected text extra, got {other:?}"),
+    }
+
+    // 2. Update text on point-text extra refits its frame.
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "badge_txt",
+            "patch": {
+                "kind": {
+                    "type": "text",
+                    "text": "Featured Module",
+                    "point_text": true,
+                    "style": { "wrap": false, "size": 18.0 }
+                }
+            }
+        }),
+    );
+    let grown_extra = get_extra(&s, "badge_txt");
+    assert!(
+        grown_extra.frame.w > added_extra.frame.w * 2.0,
+        "updating extra text must widen fitted frame"
+    );
+    assert!(matches!(
+        &grown_extra.kind,
+        StateExtraKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // 3. Turning wrap on converts extra to area text at current width.
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "badge_txt",
+            "patch": {
+                "kind": {
+                    "type": "text",
+                    "text": "Featured Module",
+                    "point_text": true,
+                    "style": { "wrap": true, "size": 18.0 }
+                }
+            }
+        }),
+    );
+    let wrapped_extra = get_extra(&s, "badge_txt");
+    assert_eq!(wrapped_extra.frame.w, grown_extra.frame.w);
+    assert!(matches!(
+        &wrapped_extra.kind,
+        StateExtraKind::Text { point_text: false, style, .. } if style.wrap
+    ));
+
+    // 4. Second point-text extra converts on width resize (and preserves on pure move).
+    ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": {
+                "id": "resize_txt",
+                "name": "Tag",
+                "kind": {
+                    "type": "text",
+                    "text": "Tip",
+                    "point_text": true,
+                    "style": { "wrap": false, "size": 18.0 }
+                },
+                "frame": { "x": 10.0, "y": 40.0, "w": 300.0, "h": 60.0 }
+            }
+        }),
+    );
+    let before_move = get_extra(&s, "resize_txt");
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "resize_txt",
+            "patch": {
+                "frame": {
+                    "x": 25.0,
+                    "y": 45.0,
+                    "w": before_move.frame.w,
+                    "h": before_move.frame.h
+                }
+            }
+        }),
+    );
+    let after_move = get_extra(&s, "resize_txt");
+    assert_eq!(after_move.frame.x, 25.0);
+    assert!(matches!(
+        &after_move.kind,
+        StateExtraKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    let resized_w = after_move.frame.w + 90.0;
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "resize_txt",
+            "patch": {
+                "frame": {
+                    "x": after_move.frame.x,
+                    "y": after_move.frame.y,
+                    "w": resized_w,
+                    "h": after_move.frame.h
+                }
+            }
+        }),
+    );
+    let after_resize = get_extra(&s, "resize_txt");
+    assert_eq!(after_resize.frame.w, resized_w);
+    assert!(matches!(
+        &after_resize.kind,
+        StateExtraKind::Text { point_text: false, style, .. } if style.wrap
+    ));
+}
+
+fn pt_11_text_info(
+    s: &Session,
+    slide_id: &str,
+    obj_id: &str,
+) -> (coursecraft_course::Rect, bool, bool, f32, Option<String>) {
+    let (obj, _) = s.course.slide(slide_id).unwrap().object(obj_id).unwrap();
+    match &obj.kind {
+        ObjectKind::Text {
+            style,
+            point_text,
+            text_style,
+            ..
+        } => (
+            obj.frame,
+            *point_text,
+            style.wrap,
+            style.size,
+            text_style.clone(),
+        ),
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+fn pt_11_verify_apply_bigger_font(s: &mut Session) -> (String, f32, f32) {
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "pt_center",
+            "kind": {
+                "type": "text",
+                "text": "Heading",
+                "point_text": true,
+                "style": { "size": 16.0, "wrap": false, "align": "center", "valign": "middle" }
+            },
+            "frame": { "x": 200.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+
+    let (before_frame, before_pt, before_wrap, before_size, _) =
+        pt_11_text_info(s, "slide1", "pt_center");
+    assert!(before_pt);
+    assert!(!before_wrap);
+    assert_eq!(before_size, 16.0);
+    let before_cx = before_frame.x + before_frame.w * 0.5;
+    let before_cy = before_frame.y + before_frame.h * 0.5;
+
+    let big_id = ok(
+        s,
+        "text_style.create",
+        json!({
+            "name": "Big Display",
+            "style": {
+                "size": 36.0,
+                "bold": true,
+                "wrap": false,
+                "align": "center",
+                "valign": "middle"
+            }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide1", "objects": ["pt_center"] }),
+    );
+    let (grown_frame, grown_pt, grown_wrap, grown_size, grown_link) =
+        pt_11_text_info(s, "slide1", "pt_center");
+    assert!(grown_pt);
+    assert!(!grown_wrap);
+    assert_eq!(grown_size, 36.0);
+    assert_eq!(grown_link.as_deref(), Some(big_id.as_str()));
+    assert!(grown_frame.w > before_frame.w);
+    assert!(grown_frame.h > before_frame.h);
+    let after_cx = grown_frame.x + grown_frame.w * 0.5;
+    let after_cy = grown_frame.y + grown_frame.h * 0.5;
+    assert!((after_cx - before_cx).abs() <= 1.0);
+    assert!((after_cy - before_cy).abs() <= 1.0);
+
+    // Single-step undo reverts both style and refitted frame.
+    s.undo().unwrap();
+    let (undone_frame, undone_pt, undone_wrap, undone_size, undone_link) =
+        pt_11_text_info(s, "slide1", "pt_center");
+    assert_eq!(undone_frame, before_frame);
+    assert!(undone_pt);
+    assert!(!undone_wrap);
+    assert_eq!(undone_size, 16.0);
+    assert_eq!(undone_link, None);
+    s.redo().unwrap();
+    assert_eq!(pt_11_text_info(s, "slide1", "pt_center").0, grown_frame);
+
+    (big_id, before_cx, before_cy)
+}
+
+fn pt_11_verify_apply_wrap_converts(s: &mut Session) {
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "pt_wrap",
+            "kind": {
+                "type": "text",
+                "text": "Convert Me",
+                "point_text": true,
+                "style": { "size": 18.0, "wrap": false }
+            },
+            "frame": { "x": 40.0, "y": 200.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    let wrap_before = pt_11_text_info(s, "slide1", "pt_wrap").0;
+    let body_id = ok(
+        s,
+        "text_style.create",
+        json!({
+            "name": "Body Wrapped",
+            "style": { "size": 32.0, "wrap": true }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": body_id, "slide": "slide1", "objects": ["pt_wrap"] }),
+    );
+    let (conv_frame, conv_pt, conv_wrap, conv_size, conv_link) =
+        pt_11_text_info(s, "slide1", "pt_wrap");
+    assert!(!conv_pt);
+    assert!(conv_wrap);
+    assert_eq!(conv_size, 32.0);
+    assert_eq!(conv_link.as_deref(), Some(body_id.as_str()));
+    assert_eq!(conv_frame, wrap_before);
+
+    // Single-step undo restores point text and unlinks style.
+    s.undo().unwrap();
+    let (u_frame, u_pt, u_wrap, u_size, u_link) = pt_11_text_info(s, "slide1", "pt_wrap");
+    assert_eq!(u_frame, wrap_before);
+    assert!(u_pt);
+    assert!(!u_wrap);
+    assert_eq!(u_size, 18.0);
+    assert_eq!(u_link, None);
+}
+
+fn pt_11_setup_multi_slide_and_extra(
+    s: &mut Session,
+    big_id: &str,
+) -> (coursecraft_course::Rect, coursecraft_course::StateExtra) {
+    let area_orig = coursecraft_course::Rect {
+        x: 50.0,
+        y: 280.0,
+        w: 220.0,
+        h: 80.0,
+    };
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "area_box",
+            "kind": {
+                "type": "text",
+                "text": "Fixed Box",
+                "style": { "size": 16.0, "wrap": true }
+            },
+            "frame": area_orig
+        }),
+    );
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide1", "objects": ["area_box"] }),
+    );
+    let (area_frame, area_pt, area_wrap, area_size, _) = pt_11_text_info(s, "slide1", "area_box");
+    assert!(!area_pt);
+    assert!(!area_wrap);
+    assert_eq!(area_size, 36.0);
+    assert_eq!(area_frame, area_orig);
+
+    ok(
+        s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "lay1", "name": "Overlay" }),
+    );
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "lay1",
+            "id": "pt_layer",
+            "kind": {
+                "type": "text",
+                "text": "Layer Title",
+                "point_text": true,
+                "style": { "size": 16.0, "wrap": false }
+            },
+            "frame": { "x": 80.0, "y": 40.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide1", "objects": ["pt_layer"] }),
+    );
+    ok(s, "slide.add", json!({ "id": "slide2", "title": "S2" }));
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide2",
+            "id": "pt_slide2",
+            "kind": {
+                "type": "text",
+                "text": "Slide Two",
+                "point_text": true,
+                "style": { "size": 16.0, "wrap": false }
+            },
+            "frame": { "x": 120.0, "y": 60.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide2", "objects": ["pt_slide2"] }),
+    );
+
+    // StateExtraKind::Text has no named-style link in the course model; attach one to
+    // pt_center to confirm it stays valid and untouched during text_style.update.
+    ok(
+        s,
+        "object.add_state",
+        json!({ "slide": "slide1", "object": "pt_center", "state": { "name": "hover" } }),
+    );
+    ok(
+        s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "pt_center",
+            "state": "hover",
+            "extra": {
+                "id": "badge",
+                "name": "Badge",
+                "kind": {
+                    "type": "text",
+                    "text": "New",
+                    "point_text": true,
+                    "style": { "size": 14.0, "wrap": false }
+                },
+                "frame": { "x": 0.0, "y": -20.0, "w": 120.0, "h": 30.0 }
+            }
+        }),
+    );
+    let extra_before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt_center")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .find(|st| st.name == "hover")
+        .unwrap()
+        .extras[0]
+        .clone();
+    (area_orig, extra_before)
+}
+
+fn pt_11_verify_update_wrap_converts(
+    s: &mut Session,
+    big_id: &str,
+    expected_pt: &[(&str, &str, coursecraft_course::Rect)],
+    area_orig: coursecraft_course::Rect,
+) {
+    ok(
+        s,
+        "text_style.update",
+        json!({ "id": big_id, "style": { "wrap": true } }),
+    );
+    for &(sid, oid, expected_frame) in expected_pt {
+        let (frame, pt, wrap, _, _) = pt_11_text_info(s, sid, oid);
+        assert!(!pt);
+        assert!(wrap);
+        assert_eq!(frame, expected_frame);
+    }
+    let (area_frame, area_pt, area_wrap, _, _) = pt_11_text_info(s, "slide1", "area_box");
+    assert!(!area_pt);
+    assert!(area_wrap);
+    assert_eq!(area_frame, area_orig);
+
+    s.undo().unwrap();
+    for &(sid, oid, expected_frame) in expected_pt {
+        let (frame, pt, wrap, _, _) = pt_11_text_info(s, sid, oid);
+        assert!(pt);
+        assert!(!wrap);
+        assert_eq!(frame, expected_frame);
+    }
+}
+
+#[test]
+fn pt_11_named_style_refits_or_converts_point_text() {
+    use coursecraft_course::StateExtraKind;
+
+    let mut s = Session::blank("Named Style Point Text");
+    let (big_id, before_cx, before_cy) = pt_11_verify_apply_bigger_font(&mut s);
+    pt_11_verify_apply_wrap_converts(&mut s);
+    let (area_orig, extra_before) = pt_11_setup_multi_slide_and_extra(&mut s, &big_id);
+
+    let pt_center_36 = pt_11_text_info(&s, "slide1", "pt_center").0;
+    let pt_layer_36 = pt_11_text_info(&s, "slide1", "pt_layer").0;
+    let pt_slide2_36 = pt_11_text_info(&s, "slide2", "pt_slide2").0;
+
+    let upd = ok(
+        &mut s,
+        "text_style.update",
+        json!({ "id": big_id, "style": { "size": 54.0, "wrap": false } }),
+    );
+    assert_eq!(upd["updated"], 4);
+
+    let (pt_center_54, c_pt, c_wrap, c_size, _) = pt_11_text_info(&s, "slide1", "pt_center");
+    let (pt_layer_54, l_pt, l_wrap, l_size, _) = pt_11_text_info(&s, "slide1", "pt_layer");
+    let (pt_slide2_54, s2_pt, s2_wrap, s2_size, _) = pt_11_text_info(&s, "slide2", "pt_slide2");
+    let (area_54, a_pt, _, a_size, _) = pt_11_text_info(&s, "slide1", "area_box");
+
+    assert_eq!((c_pt, c_wrap, c_size), (true, false, 54.0));
+    assert_eq!((l_pt, l_wrap, l_size), (true, false, 54.0));
+    assert_eq!((s2_pt, s2_wrap, s2_size), (true, false, 54.0));
+    assert!(pt_center_54.w > pt_center_36.w);
+    assert!(pt_center_54.h > pt_center_36.h);
+    assert!(pt_layer_54.w > pt_layer_36.w);
+    assert!(pt_layer_54.h > pt_layer_36.h);
+    assert!(pt_slide2_54.w > pt_slide2_36.w);
+    assert!(pt_slide2_54.h > pt_slide2_36.h);
+    let cx_54 = pt_center_54.x + pt_center_54.w * 0.5;
+    let cy_54 = pt_center_54.y + pt_center_54.h * 0.5;
+    assert!((cx_54 - before_cx).abs() <= 1.0);
+    assert!((cy_54 - before_cy).abs() <= 1.0);
+    assert_eq!((a_pt, a_size, area_54), (false, 54.0, area_orig));
+
+    let extra_after = &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt_center")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .find(|st| st.name == "hover")
+        .unwrap()
+        .extras[0];
+    assert_eq!(extra_after.frame, extra_before.frame);
+    assert!(matches!(
+        &extra_after.kind,
+        StateExtraKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // Single-step undo reverts all 4 objects and the style definition.
+    s.undo().unwrap();
+    assert_eq!(pt_11_text_info(&s, "slide1", "pt_center").0, pt_center_36);
+    assert_eq!(pt_11_text_info(&s, "slide1", "pt_layer").0, pt_layer_36);
+    assert_eq!(pt_11_text_info(&s, "slide2", "pt_slide2").0, pt_slide2_36);
+    assert_eq!(pt_11_text_info(&s, "slide1", "area_box").3, 36.0);
+    assert_eq!(pt_11_text_info(&s, "slide1", "area_box").0, area_orig);
+
+    // Redo, then update style to wrap: true -> converts all linked point-text users to area text.
+    s.redo().unwrap();
+    pt_11_verify_update_wrap_converts(
+        &mut s,
+        &big_id,
+        &[
+            ("slide1", "pt_center", pt_center_54),
+            ("slide1", "pt_layer", pt_layer_54),
+            ("slide2", "pt_slide2", pt_slide2_54),
+        ],
+        area_orig,
+    );
+}
+
+#[test]
+fn gb_12_group_set_interactive_no_silent_migration_and_opt_out_guard() {
+    let mut s = Session::blank("Interactive Group No Migration");
+    ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "l1", "name": "Overlay" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+            "frame": { "x": 100.0, "y": 100.0, "w": 180.0, "h": 56.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": { "type": "text", "text": "  Continue  " },
+            "frame": { "x": 120.0, "y": 112.0, "w": 140.0, "h": 32.0 }
+        }),
+    );
+    let grp_res = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["bg", "lbl"] }),
+    );
+    let gid = grp_res["group"].as_str().unwrap().to_owned();
+
+    // Add member triggers BEFORE making the group interactive.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "bg" },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "hover_start", "object": "lbl" },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+
+    let plain_json = s.course.to_json().unwrap();
+    let member_triggers_before = s.course.slide("slide1").unwrap().triggers.clone();
+
+    // Turn interactive ON: must create Group record with derived name and NOT migrate member triggers.
+    let res = ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": gid, "interactive": true }),
+    );
+    assert_eq!(res["group"].as_str(), Some(gid.as_str()));
+    let slide = s.course.slide("slide1").unwrap();
+    assert_eq!(slide.groups.len(), 1);
+    assert_eq!(slide.groups[0].id, gid);
+    assert_eq!(slide.groups[0].name, "Continue");
+    assert!(slide.groups[0].interactive);
+    assert_eq!(slide.groups[0].initial_state, "normal");
+    assert_eq!(
+        slide.triggers, member_triggers_before,
+        "existing member triggers must remain completely untouched (no silent migration)"
+    );
+
+    // 1. Group Click trigger blocks opt-out without mutating the slide.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": gid },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    let before_blocked = s.course.clone();
+    let err = s
+        .execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": gid, "interactive": false }),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Cannot remove button behaviour while triggers reference this group"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(s.course, before_blocked);
+    ok(
+        &mut s,
+        "trigger.delete",
+        json!({ "slide": "slide1", "index": 2 }),
+    );
+
+    // 2. Action targeting group blocks opt-out.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "timeline_starts" },
+                "action": { "action": "change_state", "object": gid, "state": "disabled" }
+            }
+        }),
+    );
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": gid, "interactive": false }),
+        )
+        .is_err()
+    );
+    ok(
+        &mut s,
+        "trigger.delete",
+        json!({ "slide": "slide1", "index": 2 }),
+    );
+
+    // 3. Condition referencing group on a layer trigger blocks opt-out.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "trigger": {
+                "when": { "event": "timeline_starts", "layer": "l1" },
+                "condition": { "object_state": { "object": gid, "state": "normal", "is": true } },
+                "action": { "action": "resume_timeline" }
+            }
+        }),
+    );
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": gid, "interactive": false }),
+        )
+        .is_err()
+    );
+    ok(
+        &mut s,
+        "trigger.delete",
+        json!({ "slide": "slide1", "layer": "l1", "index": 0 }),
+    );
+
+    // 4. With all group triggers deleted, opt-out succeeds and matches plain group JSON byte-for-byte.
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": gid, "interactive": false }),
+    );
+    assert!(s.course.slide("slide1").unwrap().groups.is_empty());
+    assert_eq!(
+        s.course.slide("slide1").unwrap().triggers,
+        member_triggers_before
+    );
+    let after_opt_out_json = s.course.to_json().unwrap();
+    assert_eq!(
+        after_opt_out_json, plain_json,
+        "opting out must return the course JSON to byte-identical plain group"
+    );
+}
+
+#[test]
+fn gb_12_group_set_interactive_collision_safe_id_and_rejections() {
+    let mut s = Session::blank("Interactive Group Safety");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box2",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#223344" },
+            "frame": { "x": 20.0, "y": 15.0, "w": 20.0, "h": 20.0 }
+        }),
+    );
+    // Simulate a legacy course whose group ID collides with an object ID (`box1`).
+    {
+        let slide = s.course.slide_mut("slide1").unwrap();
+        slide.objects[0].group = Some("box1".to_owned());
+        slide.objects[1].group = Some("box1".to_owned());
+    }
+    let res = ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": "box1", "interactive": true }),
+    );
+    let fresh_gid = res["group"].as_str().unwrap().to_owned();
+    assert_ne!(fresh_gid, "box1", "colliding group id must be remapped");
+    let slide = s.course.slide("slide1").unwrap();
+    assert_eq!(slide.objects[0].group.as_deref(), Some(fresh_gid.as_str()));
+    assert_eq!(slide.objects[1].group.as_deref(), Some(fresh_gid.as_str()));
+    assert_eq!(slide.groups.len(), 1);
+    assert_eq!(slide.groups[0].id, fresh_gid);
+    assert_eq!(slide.groups[0].name, "Button group");
+    assert!(s.course.first_error().is_none());
+
+    // Reject < 2 members.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "solo",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#334455" },
+            "frame": { "x": 200.0, "y": 10.0, "w": 60.0, "h": 40.0 }
+        }),
+    );
+    s.course.slide_mut("slide1").unwrap().objects[2].group = Some("solo_grp".to_owned());
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": "solo_grp", "interactive": true }),
+        )
+        .is_err()
+    );
+
+    // Reject members split across layers.
+    ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "layer1", "name": "L1" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "layer1",
+            "id": "layer_member",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+            "frame": { "x": 200.0, "y": 10.0, "w": 60.0, "h": 40.0 }
+        }),
+    );
+    s.course
+        .slide_mut("slide1")
+        .unwrap()
+        .layer_mut("layer1")
+        .unwrap()
+        .objects[0]
+        .group = Some("solo_grp".to_owned());
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": "solo_grp", "interactive": true }),
+        )
+        .is_err()
+    );
+
+    // Reject master slide.
+    let mres = ok(&mut s, "master.add", json!({ "title": "Main Master" }));
+    let mid = mres["id"].as_str().unwrap().to_owned();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": mid,
+            "id": "m1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": mid,
+            "id": "m2",
+            "kind": { "type": "text", "text": "Header" },
+            "frame": { "x": 70.0, "y": 10.0, "w": 80.0, "h": 30.0 }
+        }),
+    );
+    let mgrp = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": mid, "objects": ["m1", "m2"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": mid, "group": mgrp, "interactive": true }),
+        )
+        .is_err()
+    );
+
+    // Reject disallowed member kinds (TextEntry, ScrollPanel, Web).
+    ok(
+        &mut s,
+        "variable.add",
+        json!({ "name": "txt_var", "value": "" }),
+    );
+    let disallowed_kinds = [
+        json!({ "type": "text_entry", "variable": "txt_var" }),
+        json!({ "type": "scroll_panel", "content_height": 300.0 }),
+        json!({ "type": "web", "source": { "type": "url", "url": "https://example.com" } }),
+    ];
+    for (idx, kind) in disallowed_kinds.into_iter().enumerate() {
+        let base_id = format!("dis_base_{idx}");
+        let bad_id = format!("dis_bad_{idx}");
+        ok(
+            &mut s,
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "id": base_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                "frame": { "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+            }),
+        );
+        ok(
+            &mut s,
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "id": bad_id,
+                "kind": kind,
+                "frame": { "x": 100.0, "y": 100.0, "w": 120.0, "h": 80.0 }
+            }),
+        );
+        let dgrp = ok(
+            &mut s,
+            "object.group",
+            json!({ "slide": "slide1", "objects": [base_id, bad_id] }),
+        )["group"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            s.execute(
+                "group.set_interactive",
+                &json!({ "slide": "slide1", "group": dgrp, "interactive": true }),
+            )
+            .is_err(),
+            "disallowed kind index {idx} must be rejected"
+        );
+    }
+
+    // Layer interactive group works cleanly.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "layer1",
+            "id": "la",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "layer1",
+            "id": "lb",
+            "kind": { "type": "button", "label": "Close" },
+            "frame": { "x": 15.0, "y": 15.0, "w": 90.0, "h": 30.0 }
+        }),
+    );
+    let lgrp = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["la", "lb"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": lgrp, "interactive": true }),
+    );
+    let layer = s.course.slide("slide1").unwrap().layer("layer1").unwrap();
+    assert_eq!(layer.groups.len(), 1);
+    assert_eq!(layer.groups[0].id, lgrp);
+    assert_eq!(layer.groups[0].name, "Close");
+    assert!(s.course.first_error().is_none());
+}
+
+fn gb_12_setup_interactive_group_session() -> (Session, String) {
+    let mut s = Session::blank("Interactive Group Update and Lifecycle");
+    ok(
+        &mut s,
+        "slide.add",
+        json!({ "id": "slide2", "title": "S2" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "a",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+            "frame": { "x": 40.0, "y": 40.0, "w": 160.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "b",
+            "kind": { "type": "text", "text": "Next" },
+            "frame": { "x": 60.0, "y": 50.0, "w": 80.0, "h": 30.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "a",
+            "state": { "name": "selected", "fill": "#1E40AF" }
+        }),
+    );
+    let gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["a", "b"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": gid, "interactive": true }),
+    );
+    (s, gid)
+}
+
+fn gb_12_assert_duplicate_and_paste(s: &mut Session, gid: &str) -> (Vec<String>, String) {
+    let dup = ok(
+        s,
+        "object.duplicate",
+        json!({ "slide": "slide1", "objects": ["a", "b"] }),
+    );
+    let dup_ids: Vec<String> = dup["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(dup_ids.len(), 2);
+    let dup_gid = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object(&dup_ids[0])
+        .unwrap()
+        .0
+        .group
+        .clone()
+        .unwrap();
+    assert_ne!(dup_gid, gid);
+    let dup_group = s.course.slide("slide1").unwrap().group(&dup_gid).unwrap().0;
+    assert!(dup_group.interactive);
+    assert_eq!(dup_group.name, "Next slide button");
+    assert_eq!(dup_group.initial_state, "selected");
+    assert!(s.course.first_error().is_none());
+
+    let paste_objs: Vec<Json> = ["a", "b"]
+        .iter()
+        .map(|id| {
+            serde_json::to_value(s.course.slide("slide1").unwrap().object(id).unwrap().0).unwrap()
+        })
+        .collect();
+    let paste_triggers: Vec<Json> = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .triggers
+        .iter()
+        .map(|t| serde_json::to_value(t).unwrap())
+        .collect();
+    let pasted = ok(
+        s,
+        "object.paste",
+        json!({
+            "slide": "slide2",
+            "source_slide": "slide1",
+            "objects": paste_objs,
+            "triggers": paste_triggers
+        }),
+    );
+    let pasted_id = pasted["id"].as_str().unwrap().to_owned();
+    let slide2 = s.course.slide("slide2").unwrap();
+    let pasted_gid = slide2.object(&pasted_id).unwrap().0.group.clone().unwrap();
+    assert_eq!(slide2.groups.len(), 1);
+    assert_eq!(slide2.groups[0].id, pasted_gid);
+    assert!(slide2.groups[0].interactive);
+    assert_eq!(slide2.groups[0].name, "Next slide button");
+    assert_eq!(slide2.triggers.len(), 1);
+    assert!(matches!(
+        &slide2.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == &pasted_gid
+    ));
+    assert!(s.course.first_error().is_none());
+
+    ok(
+        s,
+        "object.ungroup",
+        json!({ "slide": "slide2", "objects": [pasted_id] }),
+    );
+    let slide2 = s.course.slide("slide2").unwrap();
+    assert!(slide2.groups.is_empty());
+    assert!(slide2.triggers.is_empty());
+    assert!(s.course.first_error().is_none());
+
+    (dup_ids, dup_gid)
+}
+
+#[test]
+fn gb_12_group_update_and_lifecycle_cleanup() {
+    let (mut s, gid) = gb_12_setup_interactive_group_session();
+
+    // 1. group.update updates all fields, rejects unknown state, and clears nullable fields.
+    ok(
+        &mut s,
+        "group.update",
+        json!({
+            "slide": "slide1",
+            "group": gid,
+            "name": "Next slide button",
+            "initial_state": "selected",
+            "focus_order": 3,
+            "description": "Advances to slide 2"
+        }),
+    );
+    let g = &s.course.slide("slide1").unwrap().groups[0];
+    assert_eq!(g.name, "Next slide button");
+    assert_eq!(g.initial_state, "selected");
+    assert_eq!(g.focus_order, Some(3));
+    assert_eq!(g.description.as_deref(), Some("Advances to slide 2"));
+
+    assert!(
+        s.execute(
+            "group.update",
+            &json!({ "slide": "slide1", "group": gid, "initial_state": "nonexistent" }),
+        )
+        .is_err()
+    );
+
+    ok(
+        &mut s,
+        "group.update",
+        json!({
+            "slide": "slide1",
+            "group": gid,
+            "focus_order": null,
+            "description": null
+        }),
+    );
+    let g = &s.course.slide("slide1").unwrap().groups[0];
+    assert_eq!(g.focus_order, None);
+    assert_eq!(g.description, None);
+
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": gid },
+                "action": { "action": "jump_to_slide", "target": { "id": "slide2" } }
+            }
+        }),
+    );
+
+    // 2-4. object.duplicate, object.paste, and object.ungroup lifecycle checks.
+    let (dup_ids, dup_gid) = gb_12_assert_duplicate_and_paste(&mut s, &gid);
+
+    // 5. object.group merging an interactive group with another shape removes old Group + trigger.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "c",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#999999" },
+            "frame": { "x": 220.0, "y": 40.0, "w": 30.0, "h": 30.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["a", "c"] }),
+    );
+    let slide1 = s.course.slide("slide1").unwrap();
+    assert!(slide1.group(&gid).is_none());
+    assert!(slide1.triggers.is_empty());
+    assert!(s.course.first_error().is_none());
+
+    // 6. object.delete on duplicated interactive group: 1st member keeps Group, last removes Group + trigger.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": dup_gid },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.delete",
+        json!({ "slide": "slide1", "object": dup_ids[1] }),
+    );
+    assert!(s.course.slide("slide1").unwrap().group(&dup_gid).is_some());
+    assert_eq!(s.course.slide("slide1").unwrap().triggers.len(), 1);
+    let del_res = ok(
+        &mut s,
+        "object.delete",
+        json!({ "slide": "slide1", "object": dup_ids[0] }),
+    );
+    assert_eq!(del_res["removed_triggers"], 1);
+    assert!(s.course.slide("slide1").unwrap().group(&dup_gid).is_none());
+    assert!(s.course.slide("slide1").unwrap().triggers.is_empty());
+    assert!(s.course.first_error().is_none());
+}
+
+#[test]
+fn gb_12_opt_out_plain_colliding_group_and_hostile_paste_groups() {
+    let mut s = Session::blank("Plain Group Colliding ID & Paste Bounds");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box2",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#223344" },
+            "frame": { "x": 20.0, "y": 15.0, "w": 20.0, "h": 20.0 }
+        }),
+    );
+    // Legacy plain group whose group ID matches object ID "box1", while object "box1" has a trigger.
+    {
+        let slide = s.course.slide_mut("slide1").unwrap();
+        slide.objects[0].group = Some("box1".to_owned());
+        slide.objects[1].group = Some("box1".to_owned());
+    }
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "box1" },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+    // Opting out a plain group with no Group record must be a clean no-op, not blocked by the object's trigger.
+    let undo_before = s.undo_len();
+    let res = ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": "box1", "interactive": false }),
+    );
+    assert_eq!(res["group"], "box1");
+    assert_eq!(s.undo_len(), undo_before);
+
+    // Hostile object.paste with >500 groups or oversized group name must be rejected.
+    let obj_val = serde_json::to_value(&s.course.slide("slide1").unwrap().objects[0]).unwrap();
+    let too_many_groups: Vec<Json> = (0..501)
+        .map(|i| json!({ "id": format!("g{i}"), "interactive": true }))
+        .collect();
+    assert!(
+        s.execute(
+            "object.paste",
+            &json!({
+                "slide": "slide1",
+                "objects": [obj_val.clone()],
+                "groups": too_many_groups
+            }),
+        )
+        .is_err()
+    );
+    let huge_name = "x".repeat(200_000);
+    assert!(
+        s.execute(
+            "object.paste",
+            &json!({
+                "slide": "slide1",
+                "objects": [obj_val],
+                "groups": [{ "id": "box1", "name": huge_name, "interactive": true }]
+            }),
+        )
+        .is_err()
+    );
+}
+
+fn gb_15_setup_slide_with_interactive_groups() -> (Session, String, String, String) {
+    let mut s = Session::blank("Slide Duplicate Interactive Groups");
+    ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "l1", "name": "Overlay" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+            "frame": { "x": 40.0, "y": 40.0, "w": 160.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": { "type": "text", "text": "Submit" },
+            "frame": { "x": 60.0, "y": 50.0, "w": 100.0, "h": 30.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "bg",
+            "state": { "name": "selected", "fill": "#1E40AF" }
+        }),
+    );
+    let base_gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["bg", "lbl"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": base_gid, "interactive": true }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "disable_btn",
+            "kind": { "type": "button", "label": "Disable" },
+            "frame": { "x": 240.0, "y": 40.0, "w": 120.0, "h": 44.0 }
+        }),
+    );
+    // Coexisting plain (non-interactive) group on base slide must keep its JSON shape.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "plain_a",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#64748B" },
+            "frame": { "x": 40.0, "y": 140.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "plain_b",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#94A3B8" },
+            "frame": { "x": 100.0, "y": 140.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+    let plain_gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["plain_a", "plain_b"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "id": "l_bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#0F766E" },
+            "frame": { "x": 80.0, "y": 80.0, "w": 140.0, "h": 44.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "id": "l_lbl",
+            "kind": { "type": "text", "text": "Close" },
+            "frame": { "x": 100.0, "y": 90.0, "w": 100.0, "h": 24.0 }
+        }),
+    );
+    let layer_gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["l_bg", "l_lbl"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": layer_gid, "interactive": true }),
+    );
+    (s, base_gid, plain_gid, layer_gid)
+}
+
+fn gb_15_add_group_triggers(s: &mut Session, base_gid: &str, layer_gid: &str) {
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": base_gid },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "disable_btn" },
+                "condition": { "object_state": { "object": base_gid, "state": "normal", "is": true } },
+                "action": { "action": "change_state", "object": base_gid, "state": "disabled" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "state_changes", "object": base_gid, "to": "disabled" },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "trigger": {
+                "when": { "event": "click", "object": layer_gid },
+                "action": { "action": "hide_layer" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "trigger": {
+                "when": { "event": "timeline_starts", "layer": "l1" },
+                "condition": { "object_state": { "object": layer_gid, "state": "normal", "is": true } },
+                "action": { "action": "change_state", "object": base_gid, "state": "selected" }
+            }
+        }),
+    );
+}
+
+fn gb_15_assert_copied_groups(
+    copy: &coursecraft_course::Slide,
+    base_gid: &str,
+    plain_gid: &str,
+    layer_gid: &str,
+) -> (String, String) {
+    assert_eq!(copy.groups.len(), 1);
+    let new_base_gid = copy.groups[0].id.clone();
+    assert_ne!(new_base_gid, base_gid);
+    assert!(new_base_gid.starts_with("grp-"));
+    assert!(copy.groups[0].interactive);
+    assert_eq!(copy.groups[0].name, "Submit");
+    assert_eq!(copy.group_members(&new_base_gid).len(), 2);
+    assert!(
+        copy.group_members(&new_base_gid)
+            .iter()
+            .all(|o| o.id != "bg" && o.id != "lbl")
+    );
+    assert!(copy.group(plain_gid).is_none());
+    assert_eq!(copy.group_members(plain_gid).len(), 2);
+
+    assert_eq!(copy.layers.len(), 1);
+    let copy_layer = &copy.layers[0];
+    assert_ne!(copy_layer.id, "l1");
+    assert_eq!(copy_layer.groups.len(), 1);
+    let new_layer_gid = copy_layer.groups[0].id.clone();
+    assert_ne!(new_layer_gid, layer_gid);
+    assert_ne!(new_layer_gid, new_base_gid);
+    assert!(new_layer_gid.starts_with("grp-"));
+    assert!(copy_layer.groups[0].interactive);
+    assert_eq!(copy_layer.groups[0].name, "Close");
+    assert_eq!(copy.group_members(&new_layer_gid).len(), 2);
+    assert!(
+        copy.group_members(&new_layer_gid)
+            .iter()
+            .all(|o| o.id != "l_bg" && o.id != "l_lbl")
+    );
+    (new_base_gid, new_layer_gid)
+}
+
+fn gb_15_assert_copied_base_triggers(
+    copy: &coursecraft_course::Slide,
+    orig: &coursecraft_course::Slide,
+    new_base_gid: &str,
+) {
+    let copy_layer_id = &copy.layers[0].id;
+    assert_eq!(copy.triggers.len(), orig.triggers.len());
+    assert!(matches!(
+        &copy.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == new_base_gid
+    ));
+    assert!(matches!(
+        &copy.triggers[0].action,
+        coursecraft_course::Action::ShowLayer { layer } if layer == copy_layer_id
+    ));
+    let copy_disable_btn = copy
+        .objects
+        .iter()
+        .find(|o| matches!(&o.kind, coursecraft_course::ObjectKind::Button { label, .. } if label == "Disable"))
+        .expect("copied disable button")
+        .id
+        .clone();
+    assert_ne!(copy_disable_btn, "disable_btn");
+    assert!(matches!(
+        &copy.triggers[1].when,
+        coursecraft_course::Event::Click { object } if object == &copy_disable_btn
+    ));
+    assert!(matches!(
+        &copy.triggers[1].condition,
+        Some(coursecraft_course::Condition::ObjectState { object, state, is: true })
+            if object == new_base_gid && state == "normal"
+    ));
+    assert!(matches!(
+        &copy.triggers[1].action,
+        coursecraft_course::Action::ChangeState { object, state }
+            if object == new_base_gid && state == "disabled"
+    ));
+    assert!(matches!(
+        &copy.triggers[2].when,
+        coursecraft_course::Event::StateChanges { object, to }
+            if object == new_base_gid && to.as_deref() == Some("disabled")
+    ));
+}
+
+fn gb_15_assert_copied_layer_triggers(
+    copy_layer: &coursecraft_course::Layer,
+    orig_layer: &coursecraft_course::Layer,
+    new_base_gid: &str,
+    new_layer_gid: &str,
+) {
+    assert_eq!(copy_layer.triggers.len(), orig_layer.triggers.len());
+    assert!(matches!(
+        &copy_layer.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == new_layer_gid
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[0].action,
+        coursecraft_course::Action::HideLayer { layer: None }
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[1].when,
+        coursecraft_course::Event::TimelineStarts { layer: Some(l) } if l == &copy_layer.id
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[1].condition,
+        Some(coursecraft_course::Condition::ObjectState { object, state, is: true })
+            if object == new_layer_gid && state == "normal"
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[1].action,
+        coursecraft_course::Action::ChangeState { object, state }
+            if object == new_base_gid && state == "selected"
+    ));
+}
+
+fn gb_15_assert_no_group_slide_duplicate_identical() {
+    let mut no_grp = Session::blank("No Groups");
+    ok(
+        &mut no_grp,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "l1", "name": "L1" }),
+    );
+    ok(
+        &mut no_grp,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "btn1",
+            "kind": { "type": "button", "label": "Go" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut no_grp,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "id": "sh1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 20.0, "y": 20.0, "w": 60.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut no_grp,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "btn1" },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    let no_grp_before = no_grp.course.clone();
+    let res = ok(&mut no_grp, "slide.duplicate", json!({ "slide": "slide1" }));
+    assert_eq!(res["id"], "slide2");
+    assert_eq!(res["skipped"], 0);
+    let copied = no_grp.course.slide("slide2").unwrap();
+    assert_eq!(copied.objects.len(), 1);
+    assert_eq!(copied.objects[0].id, "button1");
+    assert!(copied.objects[0].group.is_none());
+    assert_eq!(copied.layers.len(), 1);
+    assert_eq!(copied.layers[0].id, "layer1");
+    assert_eq!(copied.layers[0].objects[0].id, "shape1");
+    assert!(copied.groups.is_empty());
+    assert!(copied.layers[0].groups.is_empty());
+    assert_eq!(copied.triggers.len(), 1);
+    assert!(matches!(
+        &copied.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == "button1"
+    ));
+    assert!(matches!(
+        &copied.triggers[0].action,
+        coursecraft_course::Action::ShowLayer { layer } if layer == "layer1"
+    ));
+    let serialized = no_grp.course.to_json().unwrap();
+    assert!(!serialized.contains("\"groups\""));
+    assert!(no_grp.course.first_error().is_none());
+    ok(&mut no_grp, "edit.undo", json!({}));
+    assert_eq!(no_grp.course, no_grp_before);
+}
+
+#[test]
+fn gb_15_slide_duplicate_remaps_interactive_group_triggers() {
+    let (mut s, base_gid, plain_gid, layer_gid) = gb_15_setup_slide_with_interactive_groups();
+    gb_15_add_group_triggers(&mut s, &base_gid, &layer_gid);
+
+    let before_course = s.course.clone();
+    let before_slide1 = s.course.slide("slide1").unwrap().clone();
+    let undo_before = s.undo_len();
+
+    let dup = ok(&mut s, "slide.duplicate", json!({ "slide": "slide1" }));
+    assert_eq!(dup["skipped"], 0, "no interactive group triggers dropped");
+    let copy_id = dup["id"].as_str().unwrap().to_owned();
+    assert_ne!(copy_id, "slide1");
+
+    // Original slide is untouched.
+    assert_eq!(s.course.slide("slide1").unwrap(), &before_slide1);
+
+    let copy = s.course.slide(&copy_id).unwrap();
+    let (new_base_gid, new_layer_gid) =
+        gb_15_assert_copied_groups(copy, &base_gid, &plain_gid, &layer_gid);
+    gb_15_assert_copied_base_triggers(copy, &before_slide1, &new_base_gid);
+    gb_15_assert_copied_layer_triggers(
+        &copy.layers[0],
+        &before_slide1.layers[0],
+        &new_base_gid,
+        &new_layer_gid,
+    );
+
+    assert!(
+        s.course.first_error().is_none(),
+        "course with duplicated interactive groups must validate: {:?}",
+        s.course.first_error()
+    );
+
+    // Single undo step restores the course exactly.
+    assert_eq!(s.undo_len(), undo_before + 1);
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.course, before_course);
+
+    gb_15_assert_no_group_slide_duplicate_identical();
 }

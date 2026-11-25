@@ -661,7 +661,7 @@ pub struct PlayerState {
     /// Used by `revisit: resume`; never encoded in `suspend_data`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub saved_slides: BTreeMap<String, SavedSlide>,
-    /// slide id -> object id -> state. Kept across visits ("resume saved state").
+    /// slide id -> object (or interactive group) id -> state. Kept across visits ("resume saved state").
     pub object_states: BTreeMap<String, BTreeMap<String, String>>,
     pub visited: BTreeSet<String>,
     /// Runtime-only: playback speed in quarters (`2..=8`); `0` means 1x. Never in
@@ -1605,14 +1605,45 @@ impl<'c> Player<'c> {
         a.correct || (q.attempts != 0 && a.attempts >= q.attempts)
     }
 
+    /// If `object_id` belongs to an interactive group on the current slide,
+    /// returns that group's id.
+    #[must_use]
+    pub fn interactive_group_of(&self, object_id: &str) -> Option<&'c str> {
+        let slide = self.current_slide()?;
+        slide
+            .interactive_group_of_object(object_id)
+            .map(|(g, _)| g.id.as_str())
+    }
+
+    /// Whether `id` names an interactive group on the current slide.
+    #[must_use]
+    pub fn is_interactive_group(&self, id: &str) -> bool {
+        self.current_slide()
+            .is_some_and(|slide| slide.interactive_group(id).is_some())
+    }
+
+    /// Member objects of `group_id` on the current slide.
+    #[must_use]
+    pub fn group_members(&self, group_id: &str) -> Vec<&'c coursecraft_course::Object> {
+        self.current_slide()
+            .map(|slide| slide.group_members(group_id))
+            .unwrap_or_default()
+    }
+
     #[must_use]
     pub fn object_state(&self, object: &str) -> Option<&str> {
         let slide = self.current_slide()?;
-        self.st
-            .object_states
-            .get(&slide.id)?
-            .get(object)
-            .map(String::as_str)
+        let states = self.st.object_states.get(&slide.id)?;
+        if let Some((group, _)) = slide
+            .interactive_group(object)
+            .or_else(|| slide.interactive_group_of_object(object))
+        {
+            return states
+                .get(&group.id)
+                .map(String::as_str)
+                .or(Some(group.initial_state.as_str()));
+        }
+        states.get(object).map(String::as_str)
     }
 
     #[must_use]

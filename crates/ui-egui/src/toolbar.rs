@@ -331,13 +331,18 @@ pub fn insert_trigger(editor: &mut Editor) {
     if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
         let slide_clone = slide.clone();
         let selected_layer = editor.selection.layer.clone();
+        let default_target = crate::triggers::default_trigger_target(
+            &editor.selection,
+            &editor.session.course,
+            &slide_clone,
+        );
         editor.ui.trigger_form = Some(
             crate::triggers::TriggerFormState::new_for_owner(
                 &slide_clone,
                 selected_layer.as_deref(),
                 &editor.session.course,
             )
-            .with_selected_object(&slide_clone, editor.selection.object.as_deref()),
+            .with_selected_object(&slide_clone, default_target.as_deref()),
         );
     }
 }

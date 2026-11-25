@@ -62,12 +62,9 @@ impl SystemFontProvider for IndexFontProvider {
     }
 }
 
-const INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
+use coursecraft_media::text_metrics::{INTER_BOLD, INTER_BOLD_ITALIC, INTER_ITALIC, INTER_REGULAR};
 const INTER_MEDIUM: &[u8] = include_bytes!("../fonts/Inter-Medium.ttf");
 const INTER_SEMIBOLD: &[u8] = include_bytes!("../fonts/Inter-SemiBold.ttf");
-const INTER_BOLD: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
-const INTER_ITALIC: &[u8] = include_bytes!("../fonts/Inter-Italic.ttf");
-const INTER_BOLD_ITALIC: &[u8] = include_bytes!("../fonts/Inter-BoldItalic.ttf");
 const PHOSPHOR_REGULAR: &[u8] = include_bytes!("../fonts/Phosphor.ttf");
 const PHOSPHOR_FILL: &[u8] = include_bytes!("../fonts/Phosphor-Fill.ttf");
 

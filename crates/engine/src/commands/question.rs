@@ -206,6 +206,7 @@ pub(super) fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, the
                         autofit: Autofit::None,
                         text_style: None,
                         outline: None,
+                        point_text: false,
                     },
                     frame: Rect {
                         x: target_frame.x + 40.0,
@@ -478,6 +479,7 @@ pub(super) fn add_feedback_layers(
                     autofit: Autofit::None,
                     text_style: None,
                     outline: None,
+                    point_text: false,
                 },
                 frame,
                 timing: Timing::default(),
@@ -510,6 +512,7 @@ pub(super) fn add_feedback_layers(
             allow_seek: SeekMode::Auto,
             revisit: RevisitMode::Auto,
             cue_points: Vec::new(),
+            groups: Vec::new(),
         });
         layer_id
     };
@@ -556,6 +559,7 @@ fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> St
                 autofit: Autofit::None,
                 text_style: None,
                 outline: None,
+                point_text: false,
             },
             frame: text_frame,
             timing: Timing::default(),
@@ -606,6 +610,7 @@ fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> St
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     });
     if let Some(question) = slide.question.as_mut() {
         question.try_again_layer = Some(layer_id.clone());

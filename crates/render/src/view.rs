@@ -1438,6 +1438,29 @@ fn is_object_clickable(player: &Player<'_>, id: &str) -> bool {
     let Some(slide) = player.current_slide() else {
         return false;
     };
+    if let Some((_group, owner)) = slide.interactive_group(id) {
+        if is_object_disabled_or_hidden(player, id) {
+            return false;
+        }
+        if let Some(layer_id) = owner {
+            if !player
+                .state()
+                .visible_layers
+                .iter()
+                .any(|lid| lid == layer_id)
+            {
+                return false;
+            }
+        } else if player
+            .state()
+            .visible_layers
+            .iter()
+            .any(|lid| slide.layer(lid).is_some_and(|l| l.prevent_base_clicks))
+        {
+            return false;
+        }
+        return true;
+    }
     let master = slide
         .master
         .as_deref()
@@ -1914,6 +1937,192 @@ fn show_matching(
                 left: id.clone(),
                 right,
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coursecraft_course::Course;
+    use egui::{CursorIcon, Modifiers, RawInput, vec2};
+
+    fn run_frame(
+        ctx: &egui::Context,
+        view: &mut SlideView,
+        player: &Player<'_>,
+        events: Vec<Event>,
+        time: f64,
+    ) -> (Vec<Input>, CursorIcon) {
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0))),
+            events,
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut inputs = Vec::new();
+        let mut out = ctx.run_ui(raw, |ui| {
+            inputs = view.show(ui, player, None);
+        });
+        out.textures_delta.clear();
+        (inputs, out.platform_output.cursor_icon)
+    }
+
+    #[test]
+    fn gb_07_interactive_group_hit_hover_stability_and_cursor() {
+        let raw = serde_json::json!({
+            "schema_version": 1,
+            "id": "c-gb-07",
+            "title": "GB-07 Hit Hover Stability & Cursor",
+            "slide_size": { "w": 1280, "h": 720 },
+            "scenes": [{
+                "id": "scene-1",
+                "title": "Scene 1",
+                "slides": [{
+                    "id": "s1",
+                    "title": "Slide 1",
+                    "groups": [{
+                        "id": "g-btn",
+                        "name": "Next Card",
+                        "interactive": true
+                    }],
+                    "objects": [
+                        {
+                            "id": "m-a",
+                            "name": "Member A",
+                            "group": "g-btn",
+                            "frame": { "x": 100, "y": 100, "w": 100, "h": 80 },
+                            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224488" }
+                        },
+                        {
+                            "id": "m-b",
+                            "name": "Member B",
+                            "group": "g-btn",
+                            "frame": { "x": 200, "y": 100, "w": 100, "h": 80 },
+                            "kind": { "type": "shape", "shape": "rectangle", "fill": "#3366AA" }
+                        },
+                        {
+                            "id": "m-c",
+                            "name": "Member C",
+                            "group": "g-btn",
+                            "frame": { "x": 300, "y": 100, "w": 100, "h": 80 },
+                            "kind": { "type": "shape", "shape": "rectangle", "fill": "#4488CC" }
+                        },
+                        {
+                            "id": "btn-disable",
+                            "name": "Disable",
+                            "frame": { "x": 100, "y": 300, "w": 120, "h": 50 },
+                            "kind": { "type": "button", "label": "Disable" }
+                        }
+                    ],
+                    "triggers": [
+                        {
+                            "when": { "event": "click", "object": "btn-disable" },
+                            "action": { "action": "change_state", "object": "g-btn", "state": "disabled" }
+                        }
+                    ]
+                }]
+            }]
+        });
+        let course: Course = serde_json::from_value(raw).expect("valid course");
+        let mut player = Player::new(&course).expect("player");
+        player.handle(&Input::Start);
+
+        let ctx = egui::Context::default();
+        let mut view = SlideView::new();
+
+        // Moving pointer onto A -> B -> C emits exactly ONE HoverStart and ZERO intermediate HoverEnd/HoverStart.
+        let (in_a, cur_a) = run_frame(
+            &ctx,
+            &mut view,
+            &player,
+            vec![Event::PointerMoved(egui::pos2(150.0, 140.0))],
+            0.1,
+        );
+        assert_eq!(
+            in_a,
+            vec![Input::HoverStart {
+                object: "g-btn".to_owned()
+            }]
+        );
+        assert_eq!(cur_a, CursorIcon::PointingHand);
+
+        let (in_b, cur_b) = run_frame(
+            &ctx,
+            &mut view,
+            &player,
+            vec![Event::PointerMoved(egui::pos2(250.0, 140.0))],
+            0.2,
+        );
+        assert!(
+            in_b.is_empty(),
+            "moving member A -> B must not flicker hover events: {in_b:?}"
+        );
+        assert_eq!(cur_b, CursorIcon::PointingHand);
+
+        let (in_c, cur_c) = run_frame(
+            &ctx,
+            &mut view,
+            &player,
+            vec![Event::PointerMoved(egui::pos2(350.0, 140.0))],
+            0.3,
+        );
+        assert!(
+            in_c.is_empty(),
+            "moving member B -> C must not flicker hover events: {in_c:?}"
+        );
+        assert_eq!(cur_c, CursorIcon::PointingHand);
+
+        // Press on member A and release on member C emits ONE Click { object: "g-btn" }.
+        let (in_press_release, _) = run_frame(
+            &ctx,
+            &mut view,
+            &player,
+            vec![
+                Event::PointerMoved(egui::pos2(150.0, 140.0)),
+                Event::PointerButton {
+                    pos: egui::pos2(150.0, 140.0),
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::PointerMoved(egui::pos2(350.0, 140.0)),
+                Event::PointerButton {
+                    pos: egui::pos2(350.0, 140.0),
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+            0.4,
+        );
+        assert_eq!(
+            in_press_release,
+            vec![Input::Click {
+                object: "g-btn".to_owned()
+            }]
+        );
+
+        // Direct hover_cursor_icon checks over all 3 members while enabled.
+        let items = crate::compose::compose(&player);
+        for x in [150.0, 250.0, 350.0] {
+            assert_eq!(
+                hover_cursor_icon(&player, &items, &[], egui::pos2(x, 140.0)),
+                Some(CursorIcon::PointingHand)
+            );
+        }
+
+        // Disabled group yields None (default cursor) over every member.
+        player.handle(&Input::Click {
+            object: "btn-disable".to_owned(),
+        });
+        assert_eq!(player.object_state("g-btn"), Some("disabled"));
+        let disabled_items = crate::compose::compose(&player);
+        for x in [150.0, 250.0, 350.0] {
+            assert_eq!(
+                hover_cursor_icon(&player, &disabled_items, &[], egui::pos2(x, 140.0)),
+                None
+            );
         }
     }
 }

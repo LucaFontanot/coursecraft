@@ -432,6 +432,7 @@ fn a11_6_arming_paint_while_inline_edit_open_commits_text() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
         ..template
     });

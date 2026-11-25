@@ -78,6 +78,7 @@ fn link_clicks_run_open_url_and_slide_jumps_without_firing_object_clicks() {
             autofit: Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         };
         slide.triggers.push(Trigger {
             action: Action::SetVariable {
@@ -3657,6 +3658,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                         autofit: coursecraft_course::Autofit::None,
                         text_style: None,
                         outline: None,
+                        point_text: false,
                     },
                     frame: Rect {
                         x: 80.0,
@@ -3694,6 +3696,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                 allow_seek: coursecraft_course::SeekMode::Auto,
                 revisit: coursecraft_course::RevisitMode::Auto,
                 cue_points: Vec::new(),
+                groups: Vec::new(),
             });
         }
         let question = slide.question.as_mut().expect("question");
@@ -3760,6 +3763,7 @@ fn freeform_course(attempts: u32) -> Course {
             allow_seek: coursecraft_course::SeekMode::Auto,
             revisit: RevisitMode::Auto,
             cue_points: Vec::new(),
+            groups: Vec::new(),
         });
     }
     slide.question = Some(
@@ -10176,6 +10180,7 @@ fn hello_with_try_again() -> Course {
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     });
     let q = slide.question.as_mut().expect("question");
     q.attempts = 2;
@@ -11808,4 +11813,1084 @@ fn w01_next_wake_ms_scales_with_playback_speed() {
 
     p.handle(&Input::SetSpeed { rate: 1.5 });
     assert_eq!(p.next_wake_ms(), Some(667));
+}
+
+#[test]
+fn m37_golden_suspend_data_resume() {
+    let c = course();
+    let mut p = Player::new(&c).expect("player");
+    to_quiz(&mut p);
+
+    // Record a graded quiz answer on s-quiz so slide, visited slides, modified
+    // object states (tab1/tab2/tab3 visited, btn-next normal), modified variable
+    // (tabs_seen = 3), and quiz answers are all exercised in the golden payload.
+    p.handle(&Input::SelectChoice { choice: "b".into() });
+    let fx = p.handle(&click("btn-submit"));
+    assert!(has(
+        &fx,
+        &Effect::QuestionAnswered {
+            slide: "s-quiz".into(),
+            correct: true,
+            points: 10,
+            attempts_left: Some(1),
+        }
+    ));
+
+    const GOLDEN_SUSPEND: &str = "cc1:AAIDAAECAQEEAAMBAwIDAwABAAEAAAAAAAAIQAECAQEK";
+    let encoded = encode_suspend(&c, p.state());
+    assert_eq!(
+        encoded, GOLDEN_SUSPEND,
+        "pre-M37 suspend_data changed: got {encoded:?}"
+    );
+
+    let decoded = decode_suspend(&c, GOLDEN_SUSPEND).expect("decode golden suspend_data");
+    assert_eq!(decoded.slide, p.state().slide);
+    assert_eq!(decoded.visited, p.state().visited);
+    assert_eq!(decoded.object_states, p.state().object_states);
+    assert_eq!(decoded.variables, p.state().variables);
+    assert_eq!(decoded.answers, p.state().answers);
+
+    let mut resumed = Player::resume(&c, decoded).expect("resume from golden suspend_data");
+    let start_fx = resumed.handle(&Input::Start);
+    assert_eq!(start_fx.first(), Some(&slide_entered("s-quiz")));
+    assert_eq!(
+        resumed.current_slide().map(|s| s.id.as_str()),
+        Some("s-quiz")
+    );
+    assert_eq!(resumed.state().visited, p.state().visited);
+    assert_eq!(resumed.state().object_states, p.state().object_states);
+    assert_eq!(resumed.variable("tabs_seen"), Some(&Value::Number(3.0)));
+    assert_eq!(resumed.state().answers, p.state().answers);
+    assert_eq!(encode_suspend(&c, resumed.state()), GOLDEN_SUSPEND);
+}
+
+fn gb_03_course() -> Course {
+    use coursecraft_course::{
+        Color, Condition, Group, Layer, Rect, Scene, ShapeKind, StateDef, TextStyle, Timing,
+    };
+
+    let make_obj = |id: &str, group: Option<&str>, states: Vec<StateDef>| Object {
+        id: id.into(),
+        name: id.into(),
+        kind: ObjectKind::Shape {
+            shape: ShapeKind::Rectangle,
+            fill: Color("#2F6FEB".into()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        },
+        frame: Rect {
+            x: 100.0,
+            y: 100.0,
+            w: 160.0,
+            h: 48.0,
+        },
+        timing: Timing::default(),
+        states,
+        initial_state: "normal".into(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: group.map(str::to_owned),
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    };
+
+    let mut label = make_obj("m-label", Some("g-btn"), Vec::new());
+    label.kind = ObjectKind::Text {
+        text: "Back".into(),
+        style: TextStyle::default(),
+        runs: Vec::new(),
+        paragraphs: Vec::new(),
+        autofit: coursecraft_course::Autofit::None,
+        text_style: None,
+        outline: None,
+        point_text: false,
+    };
+
+    let state = |name: &str| StateDef {
+        name: name.into(),
+        ..StateDef::default()
+    };
+
+    let slide = Slide {
+        id: "s1".into(),
+        title: "Interactive groups".into(),
+        duration_ms: 5000,
+        background: None,
+        objects: vec![
+            make_obj(
+                "m-bg",
+                Some("g-btn"),
+                vec![
+                    state("hover"),
+                    state("down"),
+                    state("selected"),
+                    state("custom_lit"),
+                ],
+            ),
+            make_obj("m-icon", Some("g-btn"), vec![state("hover")]),
+            label,
+            make_obj("v-bg", Some("g-visit"), vec![state("visited")]),
+            make_obj("v-txt", Some("g-visit"), Vec::new()),
+            make_obj("btn-disable", None, Vec::new()),
+            make_obj("btn-hide", None, Vec::new()),
+            make_obj("btn-check-cond", None, Vec::new()),
+        ],
+        layers: Vec::<Layer>::new(),
+        groups: vec![
+            Group {
+                id: "g-btn".into(),
+                name: "Back button".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            },
+            Group {
+                id: "g-visit".into(),
+                name: "Visit button".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            },
+        ],
+        triggers: vec![
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "group_clicks".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::Click {
+                    object: "g-btn".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "member_clicks".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::Click {
+                    object: "m-icon".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "hover_starts".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::HoverStart {
+                    object: "g-btn".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "hover_ends".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::HoverEnd {
+                    object: "g-btn".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "member_hovers".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::HoverStart {
+                    object: "m-bg".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "state_events".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::StateChanges {
+                    object: "g-btn".into(),
+                    to: None,
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ChangeState {
+                    object: "g-btn".into(),
+                    state: "disabled".into(),
+                },
+                when: Event::Click {
+                    object: "btn-disable".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ChangeState {
+                    object: "m-label".into(),
+                    state: "hidden".into(),
+                },
+                when: Event::Click {
+                    object: "btn-hide".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "cond_hit".into(),
+                    op: VarOp::Assign,
+                    value: Some(Value::Bool(true).into()),
+                },
+                when: Event::Click {
+                    object: "btn-check-cond".into(),
+                },
+                condition: Some(Condition::All(vec![
+                    Condition::ObjectState {
+                        object: "g-btn".into(),
+                        state: "selected".into(),
+                        is: true,
+                    },
+                    Condition::ObjectState {
+                        object: "m-bg".into(),
+                        state: "selected".into(),
+                        is: true,
+                    },
+                ])),
+                disabled: false,
+            },
+        ],
+        cue_points: Vec::new(),
+        question: None,
+        draw: None,
+        transition: None,
+        notes: String::new(),
+        master: None,
+        revisit: RevisitMode::Auto,
+        player: None,
+    };
+
+    Course {
+        schema_version: 1,
+        id: "gb03".into(),
+        title: "GB-03".into(),
+        slide_size: coursecraft_course::Size::default(),
+        variables: vec![
+            VariableDef {
+                name: "group_clicks".into(),
+                value: Value::Number(0.0),
+            },
+            VariableDef {
+                name: "member_clicks".into(),
+                value: Value::Number(0.0),
+            },
+            VariableDef {
+                name: "hover_starts".into(),
+                value: Value::Number(0.0),
+            },
+            VariableDef {
+                name: "hover_ends".into(),
+                value: Value::Number(0.0),
+            },
+            VariableDef {
+                name: "member_hovers".into(),
+                value: Value::Number(0.0),
+            },
+            VariableDef {
+                name: "state_events".into(),
+                value: Value::Number(0.0),
+            },
+            VariableDef {
+                name: "cond_hit".into(),
+                value: Value::Bool(false),
+            },
+        ],
+        scenes: vec![Scene {
+            id: "sc1".into(),
+            title: "Scene 1".into(),
+            slides: vec![slide],
+        }],
+        masters: Vec::new(),
+        templates: Vec::new(),
+        banks: Vec::new(),
+        start_slide: None,
+        quiz: None,
+        player: coursecraft_course::PlayerSettings::default(),
+        theme: coursecraft_course::Theme::default(),
+        language: None,
+        strings: std::collections::BTreeMap::new(),
+        fonts: Vec::new(),
+        background_audio: None,
+        text_styles: Vec::new(),
+        resources: Vec::new(),
+        glossary: Vec::new(),
+        editor: coursecraft_course::EditorSettings::default(),
+    }
+}
+
+fn assert_shared_state(p: &Player<'_>, ids: &[&str], expected: &str) {
+    for id in ids {
+        assert_eq!(p.object_state(id), Some(expected), "state for {id}");
+    }
+}
+
+fn gb_03_verify_hover_disabled_and_hidden(p: &mut Player<'_>, all_btn: &[&str]) {
+    // HoverStart / HoverEnd fire once for the group and keep existing member hover trigger working
+    let fx = p.handle(&Input::HoverStart {
+        object: "g-btn".into(),
+    });
+    assert!(!warned(&fx));
+    assert_eq!(p.variable("hover_starts"), Some(&Value::Number(1.0)));
+    assert_eq!(p.variable("member_hovers"), Some(&Value::Number(1.0)));
+    let fx = p.handle(&Input::HoverEnd {
+        object: "m-label".into(),
+    });
+    assert!(!warned(&fx));
+    assert_eq!(p.variable("hover_ends"), Some(&Value::Number(1.0)));
+
+    // ChangeState("disabled") disables all members and swallows clicks silently
+    let fx = p.handle(&click("btn-disable"));
+    assert!(has(
+        &fx,
+        &Effect::StateChanged {
+            object: "g-btn".into(),
+            state: "disabled".into(),
+        }
+    ));
+    assert_shared_state(p, all_btn, "disabled");
+    let clicks_before = p.variable("group_clicks").cloned();
+    assert!(p.handle(&click("g-btn")).is_empty());
+    assert!(p.handle(&click("m-icon")).is_empty());
+    assert_eq!(p.variable("group_clicks"), clicks_before.as_ref());
+
+    // ChangeState via member id to "hidden" hides all members; subsequent click/hover warns
+    let fx = p.handle(&click("btn-hide"));
+    assert!(has(
+        &fx,
+        &Effect::StateChanged {
+            object: "g-btn".into(),
+            state: "hidden".into(),
+        }
+    ));
+    assert_shared_state(p, all_btn, "hidden");
+    assert!(warned(&p.handle(&click("g-btn"))));
+    assert!(warned(&p.handle(&Input::HoverStart {
+        object: "m-bg".into(),
+    })));
+}
+
+#[test]
+fn gb_03_interactive_group_states_triggers_and_member_triggers() {
+    let c = gb_03_course();
+    let mut p = Player::new(&c).expect("valid interactive group course");
+    p.handle(&Input::Start);
+
+    let all_btn = ["g-btn", "m-bg", "m-icon", "m-label"];
+    assert!(p.is_interactive_group("g-btn"));
+    assert!(!p.is_interactive_group("m-bg"));
+    assert_eq!(p.interactive_group_of("m-bg"), Some("g-btn"));
+    assert_eq!(p.interactive_group_of("m-icon"), Some("g-btn"));
+    assert_eq!(p.interactive_group_of("m-label"), Some("g-btn"));
+    assert_eq!(p.interactive_group_of("btn-disable"), None);
+    assert_eq!(p.group_members("g-btn").len(), 3);
+    assert_shared_state(&p, &all_btn, "normal");
+
+    // Clicking group ID fires group click once, keeps existing member click working,
+    // and toggles built-in "selected" once across all members.
+    let fx = p.handle(&click("g-btn"));
+    assert_eq!(p.variable("group_clicks"), Some(&Value::Number(1.0)));
+    assert_eq!(p.variable("member_clicks"), Some(&Value::Number(1.0)));
+    assert_eq!(p.variable("state_events"), Some(&Value::Number(1.0)));
+    let state_fx: Vec<_> = fx
+        .iter()
+        .filter(|e| matches!(e, Effect::StateChanged { .. }))
+        .collect();
+    assert_eq!(
+        state_fx,
+        vec![&Effect::StateChanged {
+            object: "g-btn".into(),
+            state: "selected".into(),
+        }]
+    );
+    assert_shared_state(&p, &all_btn, "selected");
+
+    // Condition::ObjectState matches both group id and member id
+    p.handle(&click("btn-check-cond"));
+    assert_eq!(p.variable("cond_hit"), Some(&Value::Bool(true)));
+
+    // Clicking a member without its own trigger fires group click once and toggles back to normal
+    let fx = p.handle(&click("m-bg"));
+    assert_eq!(p.variable("group_clicks"), Some(&Value::Number(2.0)));
+    assert_eq!(p.variable("member_clicks"), Some(&Value::Number(1.0)));
+    assert!(has(
+        &fx,
+        &Effect::StateChanged {
+            object: "g-btn".into(),
+            state: "normal".into(),
+        }
+    ));
+    assert_shared_state(&p, &all_btn, "normal");
+
+    // Clicking member "m-icon" directly fires group click once AND m-icon's click trigger once
+    p.handle(&click("m-icon"));
+    assert_eq!(p.variable("group_clicks"), Some(&Value::Number(3.0)));
+    assert_eq!(p.variable("member_clicks"), Some(&Value::Number(2.0)));
+    assert_eq!(p.object_state("g-btn"), Some("selected"));
+
+    // Built-in "visited" applies once across all members
+    let fx = p.handle(&click("v-txt"));
+    assert!(has(
+        &fx,
+        &Effect::StateChanged {
+            object: "g-visit".into(),
+            state: "visited".into(),
+        }
+    ));
+    assert_shared_state(&p, &["g-visit", "v-bg", "v-txt"], "visited");
+    let fx2 = p.handle(&click("g-visit"));
+    assert!(!fx2.iter().any(|e| matches!(e, Effect::StateChanged { .. })));
+
+    gb_03_verify_hover_disabled_and_hidden(&mut p, &all_btn);
+}
+
+#[test]
+fn gb_04_interactive_group_keyboard_objects_and_focus() {
+    use coursecraft_course::{
+        Color, Group, Layer, Rect, Scene, ScrollBar, ShapeKind, StateDef, Timing,
+    };
+
+    let shape = |id: &str, group: Option<&str>, y: f32, panel: Option<&str>| Object {
+        id: id.into(),
+        name: id.into(),
+        kind: ObjectKind::Shape {
+            shape: ShapeKind::Rectangle,
+            fill: Color("#2F6FEB".into()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        },
+        frame: Rect {
+            x: 80.0,
+            y,
+            w: 140.0,
+            h: 44.0,
+        },
+        timing: Timing::default(),
+        states: vec![StateDef {
+            name: "selected".into(),
+            ..StateDef::default()
+        }],
+        initial_state: "normal".into(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: group.map(str::to_owned),
+        panel: panel.map(str::to_owned),
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    };
+
+    let mut btn_before = shape("btn-before", None, 20.0, None);
+    btn_before.kind = ObjectKind::Button {
+        label: "Before".into(),
+        fill: Color("#2F6FEB".into()),
+        fill_style: None,
+    };
+
+    // Even a Button member inside an interactive group must be omitted individually.
+    let mut member_btn = shape("m-btn", Some("g-btn"), 80.0, None);
+    member_btn.kind = ObjectKind::Button {
+        label: "Inside".into(),
+        fill: Color("#2F6FEB".into()),
+        fill_style: None,
+    };
+
+    let mut scroll_panel = shape("panel", None, 200.0, None);
+    scroll_panel.frame = Rect {
+        x: 40.0,
+        y: 200.0,
+        w: 300.0,
+        h: 150.0,
+    };
+    scroll_panel.kind = ObjectKind::ScrollPanel {
+        content_height: 800.0,
+        bar: ScrollBar::Visible,
+    };
+
+    let slide = Slide {
+        id: "s1".into(),
+        title: "Keyboard order".into(),
+        duration_ms: 5000,
+        background: None,
+        objects: vec![
+            btn_before,
+            member_btn,
+            shape("m-icon", Some("g-btn"), 80.0, None),
+            shape("m-lbl", Some("g-btn"), 80.0, None),
+            scroll_panel,
+            // Inside scroll panel, initially below viewport (y = 650 > 200 + 150)
+            shape("sp-a", Some("g-scrolled"), 650.0, Some("panel")),
+            shape("sp-b", Some("g-scrolled"), 660.0, Some("panel")),
+            shape("ctl-show-prevent", None, 10.0, None),
+            shape("ctl-show-hide", None, 10.0, None),
+            shape("ctl-hide-layers", None, 10.0, None),
+            shape("ctl-disable-group", None, 10.0, None),
+            shape("ctl-hide-group", None, 10.0, None),
+        ],
+        layers: vec![
+            Layer {
+                id: "l-prevent".into(),
+                name: "Prevent".into(),
+                duration_ms: 5000,
+                objects: Vec::new(),
+                triggers: Vec::new(),
+                hide_other_layers: true,
+                pause_base_timeline: false,
+                prevent_base_clicks: true,
+                hide_base_objects: false,
+                hide_when_timeline_ends: false,
+                allow_seek: coursecraft_course::SeekMode::Auto,
+                revisit: RevisitMode::Auto,
+                cue_points: Vec::new(),
+                groups: Vec::new(),
+            },
+            Layer {
+                id: "l-hide".into(),
+                name: "Hide base".into(),
+                duration_ms: 5000,
+                objects: vec![
+                    shape("lg-a", Some("g-layer"), 120.0, None),
+                    shape("lg-b", Some("g-layer"), 120.0, None),
+                ],
+                triggers: Vec::new(),
+                hide_other_layers: true,
+                pause_base_timeline: false,
+                prevent_base_clicks: false,
+                hide_base_objects: true,
+                hide_when_timeline_ends: false,
+                allow_seek: coursecraft_course::SeekMode::Auto,
+                revisit: RevisitMode::Auto,
+                cue_points: Vec::new(),
+                groups: vec![Group {
+                    id: "g-layer".into(),
+                    name: "Layer button".into(),
+                    interactive: true,
+                    initial_state: "normal".into(),
+                    focus_order: None,
+                    description: None,
+                }],
+            },
+        ],
+        groups: vec![
+            Group {
+                id: "g-btn".into(),
+                name: "Main button".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            },
+            Group {
+                id: "g-scrolled".into(),
+                name: "Scrolled button".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            },
+        ],
+        triggers: vec![
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "group_key".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::KeyPressed {
+                    key: "k".into(),
+                    object: Some("g-btn".into()),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::SetVariable {
+                    variable: "space_key".into(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0).into()),
+                },
+                when: Event::KeyPressed {
+                    key: "space".into(),
+                    object: None,
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ShowLayer {
+                    layer: "l-prevent".into(),
+                },
+                when: Event::Click {
+                    object: "ctl-show-prevent".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ShowLayer {
+                    layer: "l-hide".into(),
+                },
+                when: Event::Click {
+                    object: "ctl-show-hide".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::HideLayer {
+                    layer: Some("l-prevent".into()),
+                },
+                when: Event::KeyPressed {
+                    key: "h".into(),
+                    object: None,
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::HideLayer {
+                    layer: Some("l-hide".into()),
+                },
+                when: Event::KeyPressed {
+                    key: "h".into(),
+                    object: None,
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ChangeState {
+                    object: "g-btn".into(),
+                    state: "disabled".into(),
+                },
+                when: Event::Click {
+                    object: "ctl-disable-group".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ChangeState {
+                    object: "g-btn".into(),
+                    state: "hidden".into(),
+                },
+                when: Event::Click {
+                    object: "ctl-hide-group".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+        ],
+        cue_points: Vec::new(),
+        question: None,
+        draw: None,
+        transition: None,
+        notes: String::new(),
+        master: None,
+        revisit: RevisitMode::Auto,
+        player: None,
+    };
+
+    let c = Course {
+        schema_version: 1,
+        id: "gb04".into(),
+        title: "GB-04".into(),
+        slide_size: coursecraft_course::Size::default(),
+        variables: vec![
+            VariableDef {
+                name: "group_key".into(),
+                value: Value::Number(0.0),
+            },
+            VariableDef {
+                name: "space_key".into(),
+                value: Value::Number(0.0),
+            },
+        ],
+        scenes: vec![Scene {
+            id: "sc1".into(),
+            title: "Scene 1".into(),
+            slides: vec![slide],
+        }],
+        masters: Vec::new(),
+        templates: Vec::new(),
+        banks: Vec::new(),
+        start_slide: None,
+        quiz: None,
+        player: coursecraft_course::PlayerSettings::default(),
+        theme: coursecraft_course::Theme::default(),
+        language: None,
+        strings: std::collections::BTreeMap::new(),
+        fonts: Vec::new(),
+        background_audio: None,
+        text_styles: Vec::new(),
+        resources: Vec::new(),
+        glossary: Vec::new(),
+        editor: coursecraft_course::EditorSettings::default(),
+    };
+
+    let mut p = Player::new(&c).expect("valid course");
+    p.handle(&Input::Start);
+
+    // Base keyboard order: g-btn appears once at its first member's position;
+    // members m-btn/m-icon/m-lbl are omitted; g-scrolled is outside viewport.
+    let kb = p.keyboard_objects();
+    assert_eq!(kb.iter().filter(|id| id.as_str() == "g-btn").count(), 1);
+    assert!(
+        kb.iter()
+            .position(|id| id == "btn-before")
+            .zip(kb.iter().position(|id| id == "g-btn"))
+            .is_some_and(|(a, b)| a < b),
+        "g-btn must appear at its first member's position after btn-before"
+    );
+    for omitted in ["m-btn", "m-icon", "m-lbl", "sp-a", "sp-b", "g-scrolled"] {
+        assert!(
+            !kb.iter().any(|id| id == omitted),
+            "{omitted} must not be in keyboard_objects"
+        );
+    }
+
+    // Scrolling panel into view adds g-scrolled once (still omitting sp-a/sp-b)
+    p.handle(&Input::PanelScrolled {
+        object: "panel".into(),
+        offset: 400.0,
+    });
+    let kb_scrolled = p.keyboard_objects();
+    assert_eq!(
+        kb_scrolled
+            .iter()
+            .filter(|id| id.as_str() == "g-scrolled")
+            .count(),
+        1
+    );
+    assert!(!kb_scrolled.iter().any(|id| id == "sp-a" || id == "sp-b"));
+
+    // FocusChanged accepts interactive group ID and enables KeyPressed { object: Some(group_id) }
+    p.handle(&Input::FocusChanged { object: None });
+    p.handle(&Input::KeyPressed { key: "k".into() });
+    assert_eq!(p.variable("group_key"), Some(&Value::Number(0.0)));
+
+    p.handle(&Input::FocusChanged {
+        object: Some("g-btn".into()),
+    });
+    p.handle(&Input::KeyPressed { key: "k".into() });
+    assert_eq!(p.variable("group_key"), Some(&Value::Number(1.0)));
+
+    // Space is owned by focused interactive group (like a Button)
+    p.handle(&Input::KeyPressed {
+        key: "space".into(),
+    });
+    assert_eq!(p.variable("space_key"), Some(&Value::Number(0.0)));
+
+    // prevent_base_clicks excludes base interactive groups
+    p.handle(&click("ctl-show-prevent"));
+    assert!(!p.keyboard_objects().iter().any(|id| id == "g-btn"));
+
+    // hide_base_objects excludes base groups and includes visible layer's interactive group once
+    p.handle(&Input::KeyPressed { key: "h".into() });
+    p.handle(&click("ctl-show-hide"));
+    let kb_layer = p.keyboard_objects();
+    assert_eq!(kb_layer, vec!["g-layer".to_owned()]);
+
+    // Hide l-hide, then test disabled and hidden states on g-btn
+    p.handle(&Input::KeyPressed { key: "h".into() });
+    assert!(p.keyboard_objects().iter().any(|id| id == "g-btn"));
+    p.handle(&click("ctl-disable-group"));
+    assert!(!p.keyboard_objects().iter().any(|id| id == "g-btn"));
+    p.handle(&click("ctl-hide-group"));
+    assert!(!p.keyboard_objects().iter().any(|id| id == "g-btn"));
+}
+
+#[test]
+fn gb_05_suspend_data_interactive_groups_and_golden_compat() {
+    use coursecraft_course::{Color, Group, Layer, Rect, Scene, ShapeKind, StateDef, Timing};
+
+    // 1. Pre-M37 golden compatibility: course with zero interactive groups is byte-identical.
+    let hello = course();
+    let mut hp = Player::new(&hello).expect("hello player");
+    to_quiz(&mut hp);
+    hp.handle(&Input::SelectChoice { choice: "b".into() });
+    hp.handle(&click("btn-submit"));
+    const GOLDEN_SUSPEND: &str = "cc1:AAIDAAECAQEEAAMBAwIDAwABAAEAAAAAAAAIQAECAQEK";
+    assert_eq!(encode_suspend(&hello, hp.state()), GOLDEN_SUSPEND);
+
+    // 2. Interactive group states (selected, visited, disabled, custom) round-trip cleanly.
+    let make_obj = |id: &str, group: Option<&str>, states: Vec<StateDef>| Object {
+        id: id.into(),
+        name: id.into(),
+        kind: ObjectKind::Shape {
+            shape: ShapeKind::Rectangle,
+            fill: Color("#2F6FEB".into()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        },
+        frame: Rect {
+            x: 50.0,
+            y: 50.0,
+            w: 120.0,
+            h: 40.0,
+        },
+        timing: Timing::default(),
+        states,
+        initial_state: "normal".into(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: group.map(str::to_owned),
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    };
+    let st = |name: &str| StateDef {
+        name: name.into(),
+        ..StateDef::default()
+    };
+
+    let slide = Slide {
+        id: "s1".into(),
+        title: "Suspend groups".into(),
+        duration_ms: 5000,
+        background: None,
+        objects: vec![
+            make_obj("a1", Some("g-sel"), vec![st("selected"), st("custom_gold")]),
+            make_obj("a2", Some("g-sel"), vec![st("hover")]),
+            make_obj("b1", Some("g-vis"), vec![st("visited")]),
+            make_obj("b2", Some("g-vis"), Vec::new()),
+            make_obj("c1", Some("g-dis"), Vec::new()),
+            make_obj("c2", Some("g-dis"), Vec::new()),
+            make_obj("btn-custom", None, Vec::new()),
+            make_obj("btn-disable", None, Vec::new()),
+            make_obj("btn-layer", None, Vec::new()),
+        ],
+        layers: vec![Layer {
+            id: "l1".into(),
+            name: "Layer 1".into(),
+            duration_ms: 5000,
+            objects: vec![
+                make_obj("la", Some("g-layer"), vec![st("custom_done")]),
+                make_obj("lb", Some("g-layer"), Vec::new()),
+            ],
+            triggers: vec![Trigger {
+                action: Action::ChangeState {
+                    object: "g-layer".into(),
+                    state: "custom_done".into(),
+                },
+                when: Event::Click {
+                    object: "g-layer".into(),
+                },
+                condition: None,
+                disabled: false,
+            }],
+            hide_other_layers: true,
+            pause_base_timeline: false,
+            prevent_base_clicks: false,
+            hide_base_objects: false,
+            hide_when_timeline_ends: false,
+            allow_seek: coursecraft_course::SeekMode::Auto,
+            revisit: RevisitMode::Auto,
+            cue_points: Vec::new(),
+            groups: vec![Group {
+                id: "g-layer".into(),
+                name: "Layer button".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            }],
+        }],
+        groups: vec![
+            Group {
+                id: "g-sel".into(),
+                name: "Selectable".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            },
+            Group {
+                id: "g-vis".into(),
+                name: "Visitable".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            },
+            Group {
+                id: "g-dis".into(),
+                name: "Disableable".into(),
+                interactive: true,
+                initial_state: "normal".into(),
+                focus_order: None,
+                description: None,
+            },
+        ],
+        triggers: vec![
+            Trigger {
+                action: Action::ChangeState {
+                    object: "g-sel".into(),
+                    state: "custom_gold".into(),
+                },
+                when: Event::Click {
+                    object: "btn-custom".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ChangeState {
+                    object: "g-dis".into(),
+                    state: "disabled".into(),
+                },
+                when: Event::Click {
+                    object: "btn-disable".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+            Trigger {
+                action: Action::ShowLayer { layer: "l1".into() },
+                when: Event::Click {
+                    object: "btn-layer".into(),
+                },
+                condition: None,
+                disabled: false,
+            },
+        ],
+        cue_points: Vec::new(),
+        question: None,
+        draw: None,
+        transition: None,
+        notes: String::new(),
+        master: None,
+        revisit: RevisitMode::Auto,
+        player: None,
+    };
+
+    let c = Course {
+        schema_version: 1,
+        id: "gb05".into(),
+        title: "GB-05".into(),
+        slide_size: coursecraft_course::Size::default(),
+        variables: Vec::new(),
+        scenes: vec![Scene {
+            id: "sc1".into(),
+            title: "Scene 1".into(),
+            slides: vec![slide],
+        }],
+        masters: Vec::new(),
+        templates: Vec::new(),
+        banks: Vec::new(),
+        start_slide: None,
+        quiz: None,
+        player: coursecraft_course::PlayerSettings::default(),
+        theme: coursecraft_course::Theme::default(),
+        language: None,
+        strings: std::collections::BTreeMap::new(),
+        fonts: Vec::new(),
+        background_audio: None,
+        text_styles: Vec::new(),
+        resources: Vec::new(),
+        glossary: Vec::new(),
+        editor: coursecraft_course::EditorSettings::default(),
+    };
+
+    // Case A: selected + visited + disabled + layer custom state
+    let mut p = Player::new(&c).expect("valid course");
+    p.handle(&Input::Start);
+    p.handle(&click("g-sel")); // -> selected
+    p.handle(&click("g-vis")); // -> visited
+    p.handle(&click("btn-disable")); // -> disabled
+    p.handle(&click("btn-layer"));
+    p.handle(&click("g-layer")); // -> custom_done
+
+    let encoded = encode_suspend(&c, p.state());
+    let decoded = decode_suspend(&c, &encoded).expect("decode interactive group suspend");
+    assert_eq!(decoded.object_states, p.state().object_states);
+
+    let mut resumed = Player::resume(&c, decoded).expect("resume player");
+    resumed.handle(&Input::Start);
+    assert_eq!(resumed.object_state("g-sel"), Some("selected"));
+    assert_eq!(resumed.object_state("a1"), Some("selected"));
+    assert_eq!(resumed.object_state("a2"), Some("selected"));
+    assert_eq!(resumed.object_state("g-vis"), Some("visited"));
+    assert_eq!(resumed.object_state("b1"), Some("visited"));
+    assert_eq!(resumed.object_state("b2"), Some("visited"));
+    assert_eq!(resumed.object_state("g-dis"), Some("disabled"));
+    assert_eq!(resumed.object_state("c1"), Some("disabled"));
+    assert_eq!(resumed.object_state("c2"), Some("disabled"));
+    assert_eq!(resumed.object_state("g-layer"), Some("custom_done"));
+    assert_eq!(resumed.object_state("la"), Some("custom_done"));
+    assert_eq!(resumed.object_state("lb"), Some("custom_done"));
+    assert_eq!(encode_suspend(&c, resumed.state()), encoded);
+
+    // Case B: custom state on base group also round-trips cleanly
+    resumed.handle(&click("btn-custom"));
+    assert_eq!(resumed.object_state("g-sel"), Some("custom_gold"));
+    let encoded_custom = encode_suspend(&c, resumed.state());
+    let decoded_custom = decode_suspend(&c, &encoded_custom).expect("decode custom group state");
+    let mut resumed2 = Player::resume(&c, decoded_custom).expect("resume player 2");
+    resumed2.handle(&Input::Start);
+    assert_eq!(resumed2.object_state("g-sel"), Some("custom_gold"));
+    assert_eq!(resumed2.object_state("a1"), Some("custom_gold"));
+    assert_eq!(resumed2.object_state("a2"), Some("custom_gold"));
 }
