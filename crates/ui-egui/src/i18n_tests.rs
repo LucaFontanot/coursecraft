@@ -98,3 +98,98 @@ fn choosing_a_language_saves_it_and_applies_without_restart() {
     h.editor.set_language("pseudo");
     assert!(h.find_text("⟦Language⟧").is_some());
 }
+
+#[test]
+fn tr_16_tracking_ui_draws_every_string_through_tl() {
+    let mut h = TestHarness::new_with_size(Session::blank("Course").course, (1280.0, 1200.0));
+    h.editor.run(
+        "course.set_tracking",
+        serde_json::json!({
+            "slides_viewed": { "mode": "at_least", "count": 3 },
+            "quiz": {}
+        }),
+    );
+    h.editor.set_language("pseudo");
+
+    // 1. Course Settings + Course Inspector
+    h.editor.ui.inspector_tab = crate::InspectorTab::Course;
+    h.editor.ui.show_course_settings_window = true;
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    if let Some(pos) = h.find_text_last("⟦Tracking⟧") {
+        h.scroll_over(pos, -250.0);
+        h.idle_frame();
+    }
+
+    for text in [
+        "Tracking",
+        "Report completion to the LMS when any selected option is met.",
+        "Slides viewed",
+        "All slides (1)",
+        "At least",
+        "slides",
+        "Exceeds course slide count (1); completes when all slides are viewed.",
+        "Quiz result",
+        "Results slide",
+        "Course quiz (all graded questions)",
+        "No passing score is set in Quiz settings.",
+        "This course has no graded questions or results slide.",
+        "Completion triggers are always active",
+    ] {
+        assert!(
+            h.find_text(&format!("⟦{text}⟧")).is_some(),
+            "{text:?} is not drawn through tl! in Course Settings / Inspector"
+        );
+        assert!(
+            h.find_text(text).is_none(),
+            "{text:?} is drawn without tl! in Course Settings / Inspector"
+        );
+    }
+    assert!(
+        h.find_text("⟦Slides viewed (3)⟧, ⟦Quiz result⟧, ⟦Triggers⟧")
+            .is_some(),
+        "tracking_summary is not drawn through tl! in Course Inspector"
+    );
+    assert!(
+        h.find_text("Slides viewed (3), Quiz result, Triggers")
+            .is_none(),
+        "tracking_summary is drawn without tl! in Course Inspector"
+    );
+
+    // 2. Publish dialog (LMS standard)
+    h.editor.ui.show_course_settings_window = false;
+    h.editor.open_publish_dialog();
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+
+    for text in [
+        "Tracking",
+        "Slides viewed",
+        "Quiz result",
+        "Completion triggers are always active",
+    ] {
+        assert!(
+            h.find_text(&format!("⟦{text}⟧")).is_some(),
+            "{text:?} is not drawn through tl! in Publish dialog"
+        );
+        assert!(
+            h.find_text(text).is_none(),
+            "{text:?} is drawn without tl! in Publish dialog"
+        );
+    }
+
+    // 3. Publish dialog (Web standard)
+    h.editor.ui.publish.standard = crate::publish::PublishStandard::Web;
+    h.idle_frame();
+    let web_note = "Web packages do not report completion to an LMS.";
+    assert!(
+        h.find_text(&format!("⟦{web_note}⟧")).is_some(),
+        "{web_note:?} is not drawn through tl! in Publish Web"
+    );
+    assert!(
+        h.find_text(web_note).is_none(),
+        "{web_note:?} is drawn without tl! in Publish Web"
+    );
+}

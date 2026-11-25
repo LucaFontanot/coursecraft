@@ -4606,6 +4606,10 @@ fn course_settings_background_audio_choose_pick_and_remove() {
     for _ in 0..5 {
         harness.idle_frame();
     }
+    if let Some(pos) = harness.find_text("Course title") {
+        harness.scroll_over(pos, -300.0);
+        harness.idle_frame();
+    }
 
     assert!(harness.find_text("Background audio").is_some());
     let choose = harness.find_text("Choose…").expect("Choose button");
@@ -4654,6 +4658,10 @@ fn course_settings_background_volume_and_loop_commit() {
     // The Navigation row made the window taller; give it room so nothing scrolls.
     harness.screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 1100.0));
     for _ in 0..8 {
+        harness.idle_frame();
+    }
+    if let Some(pos) = harness.find_text("Course title") {
+        harness.scroll_over(pos, -300.0);
         harness.idle_frame();
     }
 
@@ -21081,4 +21089,237 @@ fn gb_13_layer_group_labels_and_toolbar_insert_trigger() {
         .as_ref()
         .expect("trigger form opened via toolbar::insert_trigger");
     assert_eq!(form.event_object, group_id);
+}
+
+#[test]
+fn tr_15_tracking_ui_course_settings_and_inspector() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking};
+
+    let mut session = Session::blank("Course");
+    let scene_id = session.course.scenes[0].id.clone();
+    session
+        .execute(
+            "slide.add",
+            &serde_json::json!({ "scene": scene_id, "title": "Slide 2" }),
+        )
+        .expect("add slide 2");
+    let mut h = TestHarness::new_with_size(session.course, (1280.0, 1200.0));
+
+    // 1. Course Settings: initially no tracking and no triggers -> banner is visible.
+    h.editor.ui.show_course_settings_window = true;
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    assert!(
+        h.find_text(
+            "this course never reports a result to the LMS: add a Finish button on the last slide"
+        )
+        .is_some(),
+        "missing-result banner should be visible initially"
+    );
+
+    let pos = h.find_text("Course title").expect("Course title");
+    h.scroll_over(pos, -250.0);
+    h.idle_frame();
+
+    // Toggle Slides viewed on -> defaults to All, clears the banner.
+    let sv_pos = h
+        .find_text_last("Slides viewed")
+        .expect("Slides viewed checkbox");
+    h.click_at(sv_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.session.course.tracking.slides_viewed,
+        Some(SlidesViewedTracking::All)
+    );
+    let pos = h.find_text("Slides viewed").expect("Slides viewed");
+    h.scroll_over(pos, 250.0);
+    h.idle_frame();
+    assert!(
+        h.find_text(
+            "this course never reports a result to the LMS: add a Finish button on the last slide"
+        )
+        .is_none(),
+        "banner must clear once valid Slides viewed tracking is enabled"
+    );
+    let pos = h.find_text("Course title").expect("Course title");
+    h.scroll_over(pos, -250.0);
+    h.idle_frame();
+
+    // Switch to At least N, then set N > slide_count -> inline warning renders cleanly.
+    let at_least_pos = h.find_text_last("At least").expect("At least radio");
+    h.click_at(at_least_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.session.course.tracking.slides_viewed,
+        Some(SlidesViewedTracking::AtLeast { count: 2 })
+    );
+    h.editor.run(
+        "course.set_tracking",
+        serde_json::json!({ "slides_viewed": { "mode": "at_least", "count": 5 } }),
+    );
+    h.idle_frame();
+    assert!(
+        h.find_text("Exceeds course slide count (2); completes when all slides are viewed.")
+            .is_some(),
+        "warning must render when N > slide_count"
+    );
+
+    // Toggle Quiz result on -> no passing score & no graded questions/results slide warnings render.
+    let qr_pos = h
+        .find_text_last("Quiz result")
+        .expect("Quiz result checkbox");
+    h.click_at(qr_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.session.course.tracking.quiz,
+        Some(QuizTracking { slide: None })
+    );
+    let pos = h.find_text("Quiz result").expect("Quiz result");
+    h.scroll_over(pos, -150.0);
+    h.idle_frame();
+    assert!(
+        h.find_text("No passing score is set in Quiz settings.")
+            .is_some(),
+        "warning must render when no passing score is set"
+    );
+    assert!(
+        h.find_text("This course has no graded questions or results slide.")
+            .is_some(),
+        "warning must render when no graded questions or results slide exists"
+    );
+
+    // 2. Course Inspector reflects the exact same live state.
+    h.editor.ui.show_course_settings_window = false;
+    h.editor.ui.inspector_tab = crate::InspectorTab::Course;
+    h.idle_frame();
+    assert!(
+        h.find_text("Slides viewed (5), Quiz result, Triggers")
+            .is_some(),
+        "Course Inspector must display live tracking summary"
+    );
+}
+
+#[test]
+fn tr_15_tracking_ui_results_combo_publish_undo_and_web() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking};
+
+    let mut session = Session::blank("Course");
+    let first_slide_id = session.course.scenes[0].slides[0].id.clone();
+    session
+        .execute(
+            "question.insert",
+            &serde_json::json!({ "slide": first_slide_id }),
+        )
+        .expect("insert question");
+    let res = session
+        .execute("results.insert", &serde_json::json!({}))
+        .expect("insert results slide");
+    let res_id = res
+        .get("slide")
+        .and_then(|v| v.as_str())
+        .expect("results slide id")
+        .to_owned();
+    let mut h = TestHarness::new_with_size(session.course, (1280.0, 1200.0));
+    let res_title = h
+        .editor
+        .session
+        .course
+        .results_slides()
+        .find(|s| s.id == res_id)
+        .map(|s| s.title.clone())
+        .expect("results slide");
+
+    // 1. Toggle Quiz result on in Course Settings -> automatically picks the first results slide.
+    h.editor.ui.show_course_settings_window = true;
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    let pos = h.find_text("Course title").expect("Course title");
+    h.scroll_over(pos, -250.0);
+    h.idle_frame();
+
+    let qr_pos = h
+        .find_text_last("Quiz result")
+        .expect("Quiz result checkbox");
+    h.click_at(qr_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.session.course.tracking.quiz,
+        Some(QuizTracking {
+            slide: Some(res_id.clone())
+        })
+    );
+
+    // Switch combo back to "Course quiz (all graded questions)".
+    let combo_pos = h.find_text_last(&res_title).expect("Results slide combo");
+    h.click_at(combo_pos);
+    h.idle_frame();
+    let course_quiz_opt = h
+        .find_text_last("Course quiz (all graded questions)")
+        .expect("Course quiz option");
+    h.click_at(course_quiz_opt);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.session.course.tracking.quiz,
+        Some(QuizTracking { slide: None })
+    );
+
+    // 2. Publish window reflects the same state, edits directly, and undoes/redoes in 1 step.
+    h.editor.ui.show_course_settings_window = false;
+    h.editor.open_publish_dialog();
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    let total_slides = h.editor.session.course.play_slide_count();
+    let all_label = format!("All slides ({total_slides})");
+    let pos = h.find_text("SCORM 1.2").expect("SCORM 1.2");
+    h.scroll_over(pos, -200.0);
+    h.idle_frame();
+
+    let sv_pos = h
+        .find_text_last("Slides viewed")
+        .expect("Slides viewed checkbox");
+    h.click_at(sv_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.session.course.tracking.slides_viewed,
+        Some(SlidesViewedTracking::All)
+    );
+
+    // 1-step Ctrl+Z undo & Ctrl+Shift+Z redo.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    assert_eq!(h.editor.session.course.tracking.slides_viewed, None);
+    h.press(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.session.course.tracking.slides_viewed,
+        Some(SlidesViewedTracking::All)
+    );
+
+    // 3. Web standard shows quiet note instead of LMS tracking checkboxes.
+    let pos = h.find_text(&all_label).expect("All slides radio");
+    h.scroll_over(pos, 200.0);
+    h.idle_frame();
+    let web_pos = h
+        .find_text_last("Web (any website, no LMS)")
+        .expect("Web standard radio");
+    h.click_at(web_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.ui.publish.standard,
+        crate::publish::PublishStandard::Web
+    );
+    let pos = h
+        .find_text("Web (any website, no LMS)")
+        .expect("Web standard radio");
+    h.scroll_over(pos, -200.0);
+    h.idle_frame();
+    assert!(
+        h.find_text("Web packages do not report completion to an LMS.")
+            .is_some()
+    );
+    assert!(h.find_text("Slides viewed").is_none());
+    assert!(h.find_text("Quiz result").is_none());
 }

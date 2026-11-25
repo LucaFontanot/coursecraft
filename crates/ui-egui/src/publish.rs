@@ -263,7 +263,7 @@ pub fn show_publish_dialog(
         let available = editor.publish_available;
         let missing_media = editor.missing_media();
         dialog.body(|ui| {
-            ui.set_max_width(430.0);
+            ui.set_max_width(390.0);
             ui.label(
                 small(editor.session.course.title.clone())
                     .size(SIZE_BODY)
@@ -277,6 +277,23 @@ pub fn show_publish_dialog(
             }
 
             show_standards(editor, ui, busy);
+
+            ui.separator();
+            ui.add_space(SPACE_SM);
+            if editor.ui.publish.standard == PublishStandard::Web {
+                ui.label(
+                    small(tl!("Web packages do not report completion to an LMS."))
+                        .color(p.text_secondary),
+                );
+            } else {
+                ui.label(
+                    RichText::new(tl!("Tracking"))
+                        .size(SIZE_BODY)
+                        .strong()
+                        .color(p.text),
+                );
+                crate::tracking_ui::show_tracking_controls(editor, ui, !busy, "publish_tracking");
+            }
 
             let warnings = editor.ui.validation_warnings;
             let audit_errors = editor
