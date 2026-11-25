@@ -181,8 +181,78 @@ fn a8_3_release_yml_and_iss_defines_parity() {
             "iss missing #ifndef {key}"
         );
     }
-    assert!(yml.contains("-windows-x64-portable"));
-    assert!(yml.contains("-setup"));
+    assert!(yml.contains("-windows-x64-setup"));
+    assert!(
+        !yml.contains("-windows-x64-portable"),
+        "release.yml must not build a portable Windows package"
+    );
+    assert!(
+        !yml.contains("portable.txt"),
+        "release.yml must not create portable.txt"
+    );
+}
+
+#[test]
+fn release_workflow_builds_dmg_setup_tarball_appimage_and_no_portable() {
+    let root = repo_root();
+    let yml =
+        std::fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release.yml");
+    let mac =
+        std::fs::read_to_string(root.join("scripts/package-macos.sh")).expect("package-macos.sh");
+    let desktop = std::fs::read_to_string(root.join("packaging/linux/coursecraft.desktop"))
+        .expect("coursecraft.desktop");
+
+    // macOS .dmg
+    assert!(yml.contains("scripts/package-macos.sh"));
+    assert!(mac.contains("coursecraft-$version-macos-$arch.dmg"));
+
+    // Windows Inno Setup -setup.exe only (no portable package)
+    assert!(yml.contains("coursecraft-$ver-windows-x64-setup"));
+    assert!(yml.contains("packaging/windows/coursecraft.iss"));
+    for forbidden in ["portable", "Portable", "portable.txt"] {
+        assert!(
+            !yml.contains(forbidden),
+            "release.yml must not mention or build portable Windows packages ({forbidden})"
+        );
+    }
+
+    // Linux .tar.gz and .AppImage
+    assert!(yml.contains("dist/$name.tar.gz"));
+    assert!(yml.contains("dist/coursecraft-$ver-linux-x86_64.AppImage"));
+    // Pinned, checksummed appimagetool (not floating `continuous`)
+    assert!(
+        yml.contains(
+            "AppImage/appimagetool/releases/download/$tool_ver/appimagetool-x86_64.AppImage"
+        ) && !yml.contains("/download/continuous/"),
+        "appimagetool must be pinned to a versioned release, not continuous"
+    );
+    assert!(
+        yml.contains("sha256sum -c -"),
+        "appimagetool must be checksummed"
+    );
+    assert!(yml.contains("packaging/linux/coursecraft.desktop"));
+    assert!(yml.contains("apps/coursecraft/icons/coursecraft-1024.png"));
+    assert!(yml.contains(
+        "LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md \"$appdir/usr/share/doc/coursecraft/\""
+    ));
+
+    // SHA256SUMS.txt covers all coursecraft-* artifacts (including .AppImage)
+    assert!(yml.contains("sha256sum coursecraft-* > SHA256SUMS.txt"));
+
+    // Valid .desktop entry and 1024 px PNG icon on disk
+    for key in [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=CourseCraft",
+        "Exec=coursecraft",
+        "Icon=coursecraft",
+        "Terminal=false",
+        "Categories=",
+    ] {
+        assert!(desktop.contains(key), "coursecraft.desktop missing {key}");
+    }
+    let png = std::fs::read(root.join("apps/coursecraft/icons/coursecraft-1024.png")).expect("png");
+    assert!(png.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]));
 }
 
 #[test]
@@ -296,10 +366,16 @@ fn cc_3_published_web_zip_preserves_course_and_media() {
 // ============================================================================
 
 #[test]
-fn a8_5_docs_explain_windows_installer_vs_portable() {
+fn a8_5_docs_explain_release_downloads_without_windows_portable() {
     let root = repo_root();
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
-    assert!(readme.contains("-setup.exe") && readme.contains("-portable.zip"));
+    for required in [".dmg", "-setup.exe", ".AppImage", ".tar.gz"] {
+        assert!(readme.contains(required), "README.md missing {required}");
+    }
+    assert!(
+        !readme.contains("-portable.zip") && !readme.contains("portable.txt"),
+        "README.md should no longer advertise Windows portable zips"
+    );
     let pkg_readme =
         std::fs::read_to_string(root.join("packaging/windows/README.md")).expect("pkg README");
     assert!(pkg_readme.contains("Inno Setup") && pkg_readme.contains("release.yml"));

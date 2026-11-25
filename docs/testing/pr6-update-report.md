@@ -130,3 +130,62 @@ Per the task instructions, the items below are **flagged for review without modi
 3. **Competitor-referencing prose in docs & release checklist:**
    - `docs/release-checklist.md:187` references *"the two tutorial courses' first slides"* (referring to the two Storyline 360 YouTube tutorials cited in `docs/ui/README.md`).
    - `docs/contributing.md:26` was edited by PR #6 to say *"in the place the tutorials show (`docs/ui/storyline-observed.md`)"*, which sits in tension with the clean-room rule on line 41 of the same file (*"Design our own look and layout from `DESIGN.md`"*).
+
+---
+
+## 8. Release Packaging for 0.5.0
+
+### What Changed
+- **`.github/workflows/release.yml`:**
+  - **macOS:** unchanged (`scripts/package-macos.sh` → `coursecraft-<ver>-macos-<arch>.dmg`).
+  - **Windows:** removed the `Package for Windows (portable)` step (`-windows-x64-portable.zip` and `portable.txt`); only `Build Windows installer` remains, producing `coursecraft-<ver>-windows-x64-setup.exe` via Inno Setup (`packaging/windows/coursecraft.iss`).
+  - **Linux:** kept `Package for Linux` (`coursecraft-<ver>-linux-x86_64.tar.gz`) and added `Package for Linux (AppImage)` producing `coursecraft-<ver>-linux-x86_64.AppImage`. Installed `desktop-file-utils` in `Install Linux libraries` so `desktop-file-validate` checks the `.desktop` entry during the build.
+  - **Checksums:** `sha256sum coursecraft-* > SHA256SUMS.txt` in the `release` job covers all four release artifacts (`.dmg`, `-setup.exe`, `.tar.gz`, and `.AppImage`).
+- **Linux desktop metadata (`packaging/linux/coursecraft.desktop`, `packaging/linux/README.md`):** added a freedesktop `.desktop` entry (`Type=Application`, `Name=CourseCraft`, `Comment=eLearning authoring`, `Exec=coursecraft %F`, `Icon=coursecraft`, `Terminal=false`, `Categories=Education;Office;`, `StartupWMClass=coursecraft`).
+- **In-app updates (`apps/coursecraft/src/updates.rs`):** audited `craft-update` (`storytold/craft-libs` rev `63196e66`) and added a minimal Windows wrapper in CourseCraft (no edits to `craft-libs`) plus Linux/Windows asset-selection tests.
+- **Docs & Changelog:**
+  - `README.md`: updated **Get CourseCraft**, **Linux** first-launch steps, the in-app update summary, and **Install on Windows** to remove portable Windows `.zip` instructions and document `.AppImage`.
+  - `docs/maintaining.md`: updated the **Releasing a version** artifacts list (`.dmg`, `-setup.exe`, `.AppImage`, `.tar.gz`, `SHA256SUMS.txt`) and in-app update description.
+  - `CHANGELOG.md`: added `## 0.5.0 (unreleased)` noting that Windows portable builds stop and Linux gains an `.AppImage` (verified with `./scripts/release-notes.sh 0.5.0`).
+- **Packaging tests (`apps/coursecraft-cli/tests/bughunt_m26_cli_and_packaging.rs`, `apps/coursecraft/src/updates.rs`):** updated existing tests to remove portable assertions and added `release_workflow_builds_dmg_setup_tarball_appimage_and_no_portable` asserting `.dmg`, `-setup.exe`, `.tar.gz`, `.AppImage`, pinned/checksummed `appimagetool`, `.desktop` + 1024 px icon + licences, `SHA256SUMS.txt`, and no portable Windows package.
+
+### How the Linux AppImage Is Built
+- **Tool:** `AppImage/appimagetool` pinned to immutable release **`1.9.1`** (`appimagetool-x86_64.AppImage`, published 2025-11-18).
+- **Download URL:** `https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage`
+- **SHA-256 checksum (verified via `sha256sum -c -` before executing):**
+  `ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0`
+- **AppDir layout (`stage/CourseCraft.AppDir`):**
+  - `AppRun` (mode `0755`, POSIX `/bin/sh` wrapper exec'ing `$HERE/usr/bin/coursecraft "$@"`)
+  - `usr/bin/coursecraft` (release binary, mode `0755`)
+  - `coursecraft.desktop` and `usr/share/applications/coursecraft.desktop` (from `packaging/linux/coursecraft.desktop`, validated with `desktop-file-validate`)
+  - `coursecraft.png`, `.DirIcon` (symlink to `coursecraft.png`), and `usr/share/icons/hicolor/1024x1024/apps/coursecraft.png` (from `apps/coursecraft/icons/coursecraft-1024.png`)
+  - `usr/share/doc/coursecraft/{LICENSE-MIT,LICENSE-APACHE,ATTRIBUTION.md}`
+- **Execution in CI:** `ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$tool" "$appdir" "$out"` so `appimagetool` runs cleanly on `ubuntu-24.04` runners without requiring FUSE2. Output is written to `dist/coursecraft-$ver-linux-x86_64.AppImage` (mode `0755`).
+
+### Update-Selection Behaviour by OS
+- **macOS (`InstallMode::CraftUpdate`):** delegated directly to `craft-update`. Picks `coursecraft-<ver>-macos-arm64.dmg` (or `x86_64`), verifies SHA-256 against `SHA256SUMS.txt` / GitHub digest, and offers **Update and Restart** when the `.app` bundle is writable (otherwise **Download** opens the release page). Never installs or restarts silently.
+- **Linux (`InstallMode::CraftUpdate`):** audited `craft-update/src/self_update.rs` (`detect` lines 594–601, `Install::kind` lines 64–75, `prepare_update` lines 823–904):
+  - When `$APPIMAGE` is set, `craft-update` detects `Install::AppImage(path)` → `PackageKind::AppImage` → selects `coursecraft-<ver>-linux-x86_64.AppImage`, verifies SHA-256, atomically swaps the AppImage with mode `0755`, and relaunches after exit.
+  - When `$APPIMAGE` is unset (e.g. unpacked `.tar.gz`), `craft-update` detects `Install::Standalone(exe)` → `PackageKind::TarGz` → selects `coursecraft-<ver>-linux-x86_64.tar.gz`, verifies SHA-256, unpacks and atomically replaces `bin/coursecraft`, and relaunches after exit.
+  - No edits to `craft-libs` were needed; CourseCraft adds unit tests verifying asset selection for `$APPIMAGE` set, unset, empty, and architecture mismatch.
+- **Windows (`InstallMode::WindowsSetup` / `InstallMode::WindowsLegacyPortable`):**
+  - `craft-update` has no `PackageKind` for Inno Setup (`-setup.exe`) and maps both `Install::Portable` and Windows `Install::Standalone` to `PackageKind::PortableZip`, which would fail with `"has no Portable (.zip) for Windows x64"` if self-update were ever enabled (e.g. signed binaries or `CRAFT_UPDATE_DEV=1`) and would only open the generic release HTML page otherwise.
+  - CourseCraft's minimal wrapper in `apps/coursecraft/src/updates.rs` detects Windows copies (marking copies with a sibling `portable.txt` as `WindowsLegacyPortable`, others as `WindowsSetup`), intercepts discovered releases from `Updater`'s background check thread while preserving `Status::Checking` / `UpToDate` / `Failed` / `Managed` handling, and opens `craft-update`'s `StartupPrompt` with `is_self_updating = false` (manual **Download** / **Later** only; never returns `Action::Close`, never installs or restarts silently).
+  - Clicking **Download** opens the verified direct URL to `coursecraft-<ver>-windows-x64-setup.exe` (bound to the release tag and repository via `expected_download_url` + `safe_web_link`, falling back cleanly to `release.html_url` / `releases_url()` if absent or invalid; never selecting `-portable.zip`).
+  - On `WindowsLegacyPortable`, the prompt displays a translated notice: *"The portable Windows version is no longer published. Download the Windows installer (-setup.exe) to update."*
+
+### Validation & Test Results
+- **Workflow YAML validation:** `actionlint` is not installed in this environment; `.github/workflows/release.yml` was parsed with Ruby's `YAML.load_file` (valid YAML, 2 jobs: `build` with 12 steps and `release` with 5 steps) and carefully reviewed line by line (indentation, shell quoting, heredoc indentation, matrix `if:` conditions, artifact paths, and `SHA256SUMS.txt` glob).
+- **Changelog extraction:** `./scripts/release-notes.sh 0.5.0` exited 0 and printed the `0.5.0 (unreleased)` notes cleanly.
+- **`cargo xtask ci`: PASS**
+  - `cargo fmt --all --check`: PASS
+  - `cargo clippy --workspace --all-targets -- -D warnings`: PASS (0 warnings)
+  - `cargo test --workspace`: **4,101 passed; 0 failed; 17 ignored** (including 10 `updates::tests::*` tests and 12 `bughunt_m26_cli_and_packaging` tests)
+  - `cargo xtask layers`: `layers: ok`
+  - `cargo check --target wasm32-unknown-unknown` (all 17 WASM crates): PASS
+- **`cargo xtask build-player`: PASS** (`trunk build --release` succeeded; written to `target/player-dist`).
+
+### What Can Only Be Verified by a Real Tagged Release (or `workflow_dispatch` Run)
+- **End-to-end GitHub Actions execution on `ubuntu-24.04`, `windows-2022`, and `macos-15`:** confirming `appimagetool 1.9.1` downloads cleanly, passes the pinned SHA-256 check, validates `coursecraft.desktop`, and builds a working squashfs AppImage under `APPIMAGE_EXTRACT_AND_RUN=1`; confirming the Windows job produces only `coursecraft-<ver>-windows-x64-setup.exe` and no portable zip; confirming `SHA256SUMS.txt` lists all four `coursecraft-*` files.
+- **Launching the built `.AppImage` on real Linux desktops** (Ubuntu/Fedora/Wayland/X11) to verify GTK 3 runtime linking, desktop icon/window-class matching, and in-place self-update from an older `.AppImage` (`$APPIMAGE` set) and from an unpacked `.tar.gz` (`$APPIMAGE` unset) against a live GitHub release.
+- **Live Windows update check on an old portable copy (`portable.txt` beside `coursecraft.exe`)** against a tagged `v0.5.0` release to verify the prompt notice and browser download of `coursecraft-0.5.0-windows-x64-setup.exe`.

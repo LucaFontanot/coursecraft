@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CourseCraft
+Comment=eLearning authoring
+Exec=coursecraft %F
+Icon=coursecraft
+Terminal=false
+Categories=Education;Office;
+StartupWMClass=coursecraft

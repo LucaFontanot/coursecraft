@@ -2,6 +2,12 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.5.0 (unreleased)
+
+**Release packaging:**
+- **Windows:** releases now ship the Inno Setup installer (`-setup.exe`) only; portable Windows `.zip` builds are no longer published. Existing portable copies are offered the `-setup.exe` installer on update checks with a short notice.
+- **Linux:** releases now include an x86-64 `.AppImage` alongside the `.tar.gz` archive (both covered by `SHA256SUMS.txt`). In-app updates pick `.AppImage` when running from an AppImage and `.tar.gz` otherwise.
+
 ## 0.4.6
 
 Text boxes fit their text, and a group can work as one button.
