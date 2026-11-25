@@ -775,6 +775,27 @@ XLIFF 1.2 export uses the stable ids documented in `docs/spec/course-model.md`; 
 
 **Limits.** The bundled font covers Latin, Greek and Cyrillic only. CJK, Arabic, Hebrew, Indic and similar scripts are reported by validation and still applied; right-to-left layout and complex shaping are not supported. String variables are not exported because triggers may compare them.
 
+## Tracking
+
+Course-level LMS completion tracking (`course.tracking`) lets authors choose how `coursecraft-logic` reports completion in addition to explicit triggers. Completion is reported when **any** enabled option is met:
+
+1. **Slides viewed (`tracking.slides_viewed`):**
+   - `all`: completes once the learner has entered every slide in the expanded play order (`self.slides.len()`).
+   - `at_least { count }`: completes once the learner has entered at least `count.clamp(1, total)` distinct slides in play order.
+   - **Play-order counting:** scene slides and expanded question bank draws count toward both `total` and `visited`; masters, templates, and undrawn bank slides never count; unreachable scene slides still count toward `total`; lightboxed scene slides count once entered (`visited` records them).
+   - **End-of-input evaluation:** evaluated at the end of every input after event processing finishes (excluding review mode and partial-slide previews where `preview_subset.is_some()`). When the threshold is reached for the first time (`!slides_tracking_reported`), `slides_tracking_reported` is set to `true` and `Effect::Completion { status: Completed }` is emitted unless the same input already emitted `Effect::Completion { status: Passed | Completed }`. It never emits `Effect::Exit`.
+2. **Quiz result (`tracking.quiz`):**
+   - Evaluates **on submit** using `Player::results` (`score_points_and_max()`, `course.quiz.passing_percent`, incrementing `quiz_attempts`, emitting `Effect::Score` and `Effect::Completion`).
+   - If `Action::SubmitResults` already ran during the same input (`quiz_attempts` increased), it is never duplicated.
+   - When `quiz.slide` is `Some(id)`: if that slide already has an enabled `submit_results` trigger, that trigger owns submission; if it is a question slide without such a trigger, it submits when `Effect::QuestionAnswered` locks that question; otherwise (a custom summary slide) it submits when the slide is entered (`SlideEntered` or `LightboxOpened`).
+   - When `quiz.slide` is `None` (course quiz): submits when an `Effect::QuestionAnswered` occurs in the input and every graded question (`max_points() > 0`) in play order is locked (`question_locked_on_slide`). If `course.quiz` is `None` (e.g., survey-only), `results` safely reports `Completed` without panicking.
+   - `retry_quiz` clears `answers` (unlocking questions), so a subsequent submit or results-slide entry re-evaluates and emits updated `Score` and `Completion` effects.
+3. **Completion triggers (always active):** explicit `complete_course` and `submit_results` triggers always work both alone and alongside `slides_viewed` / `quiz`.
+
+**Combined options:** if a single input both fails a quiz on a results slide and crosses the `slides_viewed` threshold (for example, entering the last slide when it is also a failed results slide), the runtime emits `Score(Failed)`, `Completion(Failed)`, and then `Completion(Completed)` so LMS bridges record the failed quiz score/status while still reporting course completion.
+
+**Suspend and resume:** `slides_tracking_reported` is runtime-only and is never written to `cc1:` `suspend_data`. On `Player::finish_resume`, if `slides_viewed` is active (`preview_subset.is_none()`) and the restored `visited` set already meets the threshold, `slides_tracking_reported` is initialized to `true` so relaunching does not emit a duplicate `Effect::Completion`.
+
 ## Effects
 
 The renderer and LMS bridge consume these: `slide_entered`, `layer_shown`, `layer_hidden`, `state_changed`, `variable_changed`, `media`, `media_seek`, `timeline_paused/resumed`, `choice_selected`, `text_entry_changed`, `sequence_changed`, `match_changed`, `hotspot_marked`, `item_dropped`, `object_moved`, `object_dropped`, `answer_required`, `question_answered`, `score`, `completion`, `open_url`, `run_javascript`, `lightbox_opened`, `lightbox_closed`, `review_changed`, `print`, `exit` and `warning`.

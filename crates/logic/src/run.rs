@@ -229,13 +229,20 @@ impl<'c> Player<'c> {
             warn(out, "send `start` first");
             return;
         }
+        if self.st.started && *input == Input::Start {
+            warn(out, "already started");
+            return;
+        }
+        let out_start = out.len();
+        let attempts_before = self.st.quiz_attempts;
+        self.handle_into_inner(input, out);
+        self.evaluate_tracking(out_start, attempts_before, out);
+    }
+
+    fn handle_into_inner(&mut self, input: &Input, out: &mut Vec<Effect>) {
         let mut q = Queue::new();
         match input {
             Input::Start => {
-                if self.st.started {
-                    warn(out, "already started");
-                    return;
-                }
                 self.st.started = true;
                 self.enter_slide_inner(self.st.slide, false, &mut q, out);
                 self.start_background(out);
@@ -500,6 +507,86 @@ impl<'c> Player<'c> {
             Input::ExitReview => self.exit_review(&mut q, out),
         }
         self.process(&mut q, out);
+    }
+
+    fn evaluate_tracking(&mut self, out_start: usize, attempts_before: u32, out: &mut Vec<Effect>) {
+        if !self.st.started || self.st.reviewing_from.is_some() {
+            return;
+        }
+
+        // Option 2 — Quiz result (on submit, never duplicating SubmitResults).
+        if let Some(qt) = self.course.tracking.quiz.clone()
+            && self.st.quiz_attempts == attempts_before
+        {
+            let slice = out.get(out_start..).unwrap_or(&[]);
+            if let Some(target_id) = qt.slide.as_deref() {
+                if let Some(target_slide) = self.slides.iter().find(|s| s.id == target_id) {
+                    if target_slide.has_submit_results_trigger() {
+                        // Its own SubmitResults trigger owns submission.
+                    } else if target_slide.question.is_some() {
+                        let answered = slice.iter().any(|e| {
+                            matches!(e, Effect::QuestionAnswered { slide, .. } if slide == target_id)
+                        });
+                        if answered && self.question_locked_on_slide(target_slide) {
+                            self.results(out);
+                        }
+                    } else {
+                        let entered = slice.iter().any(|e| {
+                            matches!(
+                                e,
+                                Effect::SlideEntered { slide } | Effect::LightboxOpened { slide }
+                                    if slide == target_id
+                            )
+                        });
+                        if entered {
+                            self.results(out);
+                        }
+                    }
+                }
+            } else {
+                let any_answered = slice
+                    .iter()
+                    .any(|e| matches!(e, Effect::QuestionAnswered { .. }));
+                if any_answered {
+                    let mut has_graded = false;
+                    let mut all_locked = true;
+                    for s in &self.slides {
+                        if s.question.as_ref().is_some_and(|q| q.max_points() > 0) {
+                            has_graded = true;
+                            if !self.question_locked_on_slide(s) {
+                                all_locked = false;
+                                break;
+                            }
+                        }
+                    }
+                    if has_graded && all_locked {
+                        self.results(out);
+                    }
+                }
+            }
+        }
+
+        // Option 1 — Slides viewed.
+        if !self.st.slides_tracking_reported
+            && let Some(threshold) = self.slides_viewed_threshold()
+            && self.visited_play_slides() >= threshold
+        {
+            self.st.slides_tracking_reported = true;
+            let slice = out.get(out_start..).unwrap_or(&[]);
+            let already_completed = slice.iter().any(|e| {
+                matches!(
+                    e,
+                    Effect::Completion {
+                        status: CompletionStatus::Passed | CompletionStatus::Completed
+                    }
+                )
+            });
+            if !already_completed {
+                out.push(Effect::Completion {
+                    status: CompletionStatus::Completed,
+                });
+            }
+        }
     }
 
     /// Open a resource: an external link, or a packaged file under `media/`.
