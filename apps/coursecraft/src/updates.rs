@@ -200,6 +200,7 @@ mod tests {
             "coursecraft-${GITHUB_REF_NAME#v}-linux-x86_64",
             "$root/bin/coursecraft",
             "portable.txt",
+            "sha256sum coursecraft-* > SHA256SUMS.txt",
         ] {
             assert!(yml.contains(part), "release.yml lacks {part}");
         }
@@ -220,6 +221,8 @@ mod tests {
             .textures_delta
             .clear();
         assert!(rt.updater.prompt_open());
+        // Offering an update never silently installs or closes the app.
+        assert_eq!(rt.updater.status(), &Status::Idle);
     }
 
     #[test]

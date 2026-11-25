@@ -115,7 +115,7 @@ Choose Help > Report a Problem to tell us what went wrong, or Help > Suggest a F
 - **What is shared.** Your two answers, plus (if you leave "Include technical details" on) the CourseCraft version, your OS and CPU, whether this is the desktop or web app, the last 20 status messages from this session, and a note about the last crash if there was one. All of it is shown in the window before you send anything.
 - **What is never shared.** Course content, file names, file paths, user names, AI keys and settings. Paths and file names in messages are replaced with `<path>` and `<file>`.
 - **After a crash.** The desktop app writes a short `last-crash.txt` (time, version, OS, panic message and location, paths removed) to its settings folder. On the next start it asks whether to report it, and deletes the file once you report or dismiss it.
-- Help > Check for Updates only opens the releases page. CourseCraft makes no network calls to look for updates.
+- **Updates.** The desktop app checks GitHub Releases for a newer version at start (which you can turn off in Preferences) or when you choose Help > Check for Updates. Downloads are verified against the release's `SHA256SUMS.txt`, and nothing installs or restarts without your confirmation.
 
 ## Workspace
 
