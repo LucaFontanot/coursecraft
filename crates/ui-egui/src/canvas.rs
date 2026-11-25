@@ -796,16 +796,17 @@ fn commit_state_extra_inline_edit(
     };
     let live_plain: String = edit.live_runs.iter().map(|r| r.text.as_str()).collect();
     let mut updated_kind = extra.kind.clone();
-    let mut is_point_text_extra = false;
+    let mut pass_measured_size = false;
     match &mut updated_kind {
         coursecraft_course::StateExtraKind::Text {
             text,
             runs,
             paragraphs,
+            autofit,
             point_text,
             ..
         } => {
-            is_point_text_extra = *point_text;
+            pass_measured_size = *point_text || *autofit == coursecraft_course::Autofit::Grow;
             if !edit.live_runs.is_empty() && live_plain == edit.buffer {
                 *runs = coursecraft_course::normalize_runs(&edit.live_runs);
                 *paragraphs = edit.live_paragraphs;
@@ -867,7 +868,7 @@ fn commit_state_extra_inline_edit(
         "extra": extra_id,
         "patch": { "kind": updated_kind },
     });
-    if is_point_text_extra && let Some((w, h)) = measured_size {
+    if pass_measured_size && let Some((w, h)) = measured_size {
         params["measured_size"] = serde_json::json!({ "w": w, "h": h });
     }
     editor.run("object.state_update_extra", params);
@@ -972,7 +973,11 @@ pub(crate) fn commit_inline_edit(editor: &mut Editor) {
         return;
     }
     match &object.kind {
-        coursecraft_course::ObjectKind::Text { point_text, .. } => {
+        coursecraft_course::ObjectKind::Text {
+            point_text,
+            autofit,
+            ..
+        } => {
             let mut params = serde_json::json!({
                 "slide": edit.slide,
                 "object": edit.object,
@@ -984,7 +989,9 @@ pub(crate) fn commit_inline_edit(editor: &mut Editor) {
                 params["paragraphs"] =
                     serde_json::to_value(&edit.live_paragraphs).unwrap_or_default();
             }
-            if *point_text && let Some((w, h)) = measured_size {
+            if (*point_text || *autofit == coursecraft_course::Autofit::Grow)
+                && let Some((w, h)) = measured_size
+            {
                 params["measured_size"] = serde_json::json!({ "w": w, "h": h });
             }
             editor.run("text.set", params);
@@ -1515,15 +1522,26 @@ fn selection_handle_avoid_zones(
         return (None, Vec::new());
     };
     let screen_rect = t.to_screen_rect(bbox);
-    let single_item = if editor.selection.is_multi() {
+    let single_item_live: Option<DrawItem> = if editor.selection.is_multi() {
         None
+    } else if let Some(id) = editor.selection.object.as_ref()
+        && let Some(item) = items
+            .iter()
+            .find(|item| item.hit == Hit::Object(id.clone()))
+    {
+        let mut live = item.clone();
+        if let Some(live_rect) = editor.ui.inline_edit_live_rect
+            && editor.ui.inline_edit.as_ref().is_some_and(|edit| {
+                edit.object == *id && edit.extra_id.is_none() && edit.cell.is_none()
+            })
+        {
+            live.rect = live_rect;
+        }
+        Some(live)
     } else {
-        editor.selection.object.as_ref().and_then(|id| {
-            items
-                .iter()
-                .find(|item| item.hit == Hit::Object(id.clone()))
-        })
+        None
     };
+    let single_item = single_item_live.as_ref();
     let mut centers: Vec<Pos2> = match single_item {
         Some(item) => rotated_handle_centers(t.to_screen_rect(item.rect), item.rotation)
             .into_iter()
@@ -1983,6 +2001,7 @@ fn placement_kind_and_size(editor: &Editor, tool: &PlacementTool) -> (Json, (f32
             serde_json::json!({
                 "type": "text",
                 "text": "Text",
+                "autofit": "grow",
                 "style": {
                     "color": editor.session.course.theme.text.0,
                 }
@@ -2500,6 +2519,255 @@ fn anchor_point_text_rect(
     Rect::from_min_size(pos2(fx, fy), vec2(fw, fh))
 }
 
+/// Measure the fitted slide-space height of wrapped `Autofit::Grow` text using
+/// egui's active font layout at the fixed box width (minus horizontal insets),
+/// plus vertical padding and insets. Never smaller than one line.
+fn measure_grow_text_box_height(
+    ctx: &egui::Context,
+    text: &str,
+    style: &coursecraft_course::TextStyle,
+    runs: &[coursecraft_course::TextRun],
+    paragraphs: &[coursecraft_course::Paragraph],
+    theme_font: &str,
+    box_width: f32,
+) -> f32 {
+    let text_color = coursecraft_render::parse_color(&style.color)
+        .unwrap_or_else(|| coursecraft_render::palette(ctx).text);
+    let probe_text = if text.is_empty() { " " } else { text };
+    let probe_runs: &[coursecraft_course::TextRun] = if text.is_empty() { &[] } else { runs };
+    let resolved = coursecraft_render::resolve_text_runs(
+        probe_text,
+        style,
+        probe_runs,
+        None,
+        text_color,
+        text_color,
+        Some(theme_font),
+    );
+    let box_w = if box_width.is_finite() && box_width > 0.0 {
+        box_width.clamp(1.0, coursecraft_media::text_metrics::POINT_TEXT_MAX_DIM)
+    } else {
+        coursecraft_media::text_metrics::POINT_TEXT_MIN_W
+    };
+    let insets = style.insets.map_or(
+        coursecraft_media::text_metrics::TextBoxInsets::ZERO,
+        |ins| coursecraft_media::text_metrics::TextBoxInsets {
+            left: ins.left,
+            top: ins.top,
+            right: ins.right,
+            bottom: ins.bottom,
+        },
+    );
+    let left_ins = if insets.left.is_finite() {
+        insets.left.max(0.0).min(box_w * 0.45)
+    } else {
+        0.0
+    };
+    let right_ins = if insets.right.is_finite() {
+        insets.right.max(0.0).min(box_w * 0.45)
+    } else {
+        0.0
+    };
+    let inner_w = (box_w - left_ins - right_ins).max(1.0);
+    let probe = Rect::from_min_size(
+        pos2(0.0, 0.0),
+        vec2(inner_w, coursecraft_media::text_metrics::POINT_TEXT_MAX_DIM),
+    );
+    let laid = coursecraft_render::layout_text_with_wrap(
+        ctx,
+        probe,
+        1.0,
+        &resolved,
+        paragraphs,
+        style.align,
+        coursecraft_course::VAlign::Top,
+        coursecraft_course::Autofit::None,
+        style.wrap,
+    );
+    coursecraft_media::text_metrics::grow_text_box_height(laid.height, insets)
+}
+
+/// Anchor a refitted `Autofit::Grow` box vertically relative to `base`
+/// according to `valign`, keeping `x` and `width` fixed. Matches
+/// `coursecraft_engine`'s `fit_grow_text_frame`.
+fn anchor_grow_text_rect(base: Rect, new_h: f32, valign: coursecraft_course::VAlign) -> Rect {
+    let old_x = if base.min.x.is_finite() {
+        base.min.x
+    } else {
+        0.0
+    };
+    let old_y = if base.min.y.is_finite() {
+        base.min.y
+    } else {
+        0.0
+    };
+    let old_w = if base.width().is_finite() && base.width() > 0.0 {
+        base.width()
+    } else {
+        coursecraft_media::text_metrics::POINT_TEXT_MIN_W
+    };
+    let old_h = if base.height().is_finite() && base.height() > 0.0 {
+        base.height()
+    } else {
+        new_h
+    };
+    let y = match valign {
+        coursecraft_course::VAlign::Top => old_y,
+        coursecraft_course::VAlign::Middle => old_y + (old_h - new_h) * 0.5,
+        coursecraft_course::VAlign::Bottom => old_y + (old_h - new_h),
+    };
+    let fy = if y.is_finite() { y.round() } else { 0.0 };
+    let fh = new_h
+        .round()
+        .clamp(1.0, coursecraft_media::text_metrics::POINT_TEXT_MAX_DIM);
+    Rect::from_min_size(pos2(old_x, fy), vec2(old_w, fh))
+}
+
+/// Compute live `(slide_rect, measured_size)` for an actively edited point-text
+/// or `Autofit::Grow` text box. Returns `None` for fixed-size (`None`/`Shrink`)
+/// boxes, shapes, buttons, and table cells.
+#[allow(clippy::too_many_arguments)]
+fn inline_edit_live_bounds_for(
+    ctx: &egui::Context,
+    base_slide_rect: Rect,
+    text: &str,
+    original: &str,
+    style: &coursecraft_course::TextStyle,
+    runs: &[coursecraft_course::TextRun],
+    paragraphs: &[coursecraft_course::Paragraph],
+    theme_font: &str,
+    point_text: bool,
+    grow_text: bool,
+) -> Option<(Rect, (f32, f32))> {
+    if point_text {
+        let (fitted_w, fitted_h) =
+            measure_point_text_box_size(ctx, text, style, runs, paragraphs, theme_font);
+        let live_rect = anchor_point_text_rect(
+            base_slide_rect,
+            fitted_w,
+            fitted_h,
+            style.align,
+            style.valign,
+        );
+        Some((live_rect, (fitted_w, fitted_h)))
+    } else if grow_text {
+        let fitted_h = measure_grow_text_box_height(
+            ctx,
+            text,
+            style,
+            runs,
+            paragraphs,
+            theme_font,
+            base_slide_rect.width(),
+        );
+        // Before the author types or deletes anything (e.g. immediately after
+        // dragging out a taller area text box), preserve the dragged height
+        // while still expanding if the existing text overflows.
+        let display_h = if text == original {
+            fitted_h.max(base_slide_rect.height())
+        } else {
+            fitted_h
+        };
+        let live_rect = anchor_grow_text_rect(base_slide_rect, display_h, style.valign);
+        Some((live_rect, (live_rect.width(), display_h)))
+    } else {
+        None
+    }
+}
+
+/// Keep `inline_edit_live_rect` current BEFORE painting the slide and selection
+/// handles, so entry frames and external style/text changes never lag by a frame.
+fn sync_inline_edit_live_rect_before_paint(editor: &mut Editor, ctx: &egui::Context) {
+    let Some(edit) = editor.ui.inline_edit.as_ref() else {
+        editor.ui.inline_edit_live_rect = None;
+        return;
+    };
+    if edit.slide != editor.selection.slide {
+        return;
+    }
+    let Some(slide) = editor.session.course.slide(&edit.slide) else {
+        return;
+    };
+    let Some((object, _)) = slide.object(&edit.object) else {
+        return;
+    };
+    let Some(base_slide_rect) = inline_edit_slide_rect(object, edit) else {
+        return;
+    };
+    let Some(props) = inline_edit_text_props(
+        object,
+        edit.cell,
+        edit.state_name.as_deref(),
+        edit.extra_id.as_deref(),
+    ) else {
+        return;
+    };
+    if !props.point_text && !props.grow_text {
+        editor.ui.inline_edit_live_rect = None;
+        return;
+    }
+    let (synced_runs, synced_paragraphs, _) =
+        sync_inline_edit_runs(object, edit, editor.session.revision);
+    let theme_font = editor.session.course.theme.font.as_str();
+    if let Some((live_rect, measured)) = inline_edit_live_bounds_for(
+        ctx,
+        base_slide_rect,
+        &edit.buffer,
+        &edit.original,
+        &props.style,
+        &synced_runs,
+        &synced_paragraphs,
+        theme_font,
+        props.point_text,
+        props.grow_text,
+    ) {
+        editor.ui.inline_edit_live_rect = Some(live_rect);
+        editor.ui.inline_edit_measured_size = Some((edit.buffer.clone(), measured));
+    }
+}
+
+/// Substitute `inline_edit_live_rect` into the edited object's `DrawItem` so
+/// painted text-box borders/outlines, selection outlines, and all 8 resize
+/// handles stay locked to the live bounds every frame.
+fn apply_inline_edit_live_rect(editor: &Editor, items: &[DrawItem]) -> Option<Vec<DrawItem>> {
+    let live_rect = editor.ui.inline_edit_live_rect?;
+    let edit = editor.ui.inline_edit.as_ref()?;
+    if edit.cell.is_some() {
+        return None;
+    }
+    let editing_extra = edit.extra_id.is_some();
+    let expected_base = if editing_extra {
+        editor
+            .session
+            .course
+            .slide(&edit.slide)
+            .and_then(|s| s.object(&edit.object))
+            .and_then(|(obj, _)| inline_edit_slide_rect(obj, edit))
+    } else {
+        None
+    };
+    let mut updated = items.to_vec();
+    let mut changed = false;
+    for item in &mut updated {
+        if item.is_state_extra != editing_extra {
+            continue;
+        }
+        if !matches!(&item.hit, Hit::Object(id) if id == &edit.object) {
+            continue;
+        }
+        if let Some(base) = expected_base {
+            let same_extra = (item.rect.min - base.min).length() <= 1.0
+                && (item.rect.max - base.max).length() <= 1.0;
+            if !same_extra {
+                continue;
+            }
+        }
+        item.rect = live_rect;
+        changed = true;
+    }
+    changed.then_some(updated)
+}
+
 /// Fitted initial frame for clicking with the Text box tool, anchored at the
 /// click point vertically centred on the single line.
 fn point_text_click_frame(editor: &Editor, ctx: &egui::Context, slide_pos: Pos2) -> Rect {
@@ -2576,6 +2844,7 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect, is_click
                     serde_json::json!({
                         "type": "text",
                         "text": "Text",
+                        "autofit": "grow",
                         "style": {
                             "color": editor.session.course.theme.text.0,
                         }
@@ -2612,7 +2881,7 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect, is_click
                 "rotation": extra_rot,
             }
         });
-        if is_point_text
+        if matches!(tool, PlacementTool::TextBox)
             && frame.width().is_finite()
             && frame.height().is_finite()
             && frame.width() > 0.0
@@ -2655,7 +2924,7 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect, is_click
             "h": frame.height().round().max(1.0)
         }
     });
-    if is_point_text
+    if is_text
         && frame.width().is_finite()
         && frame.height().is_finite()
         && frame.width() > 0.0
@@ -5809,6 +6078,7 @@ struct InlineEditTextProps {
     autofit: coursecraft_course::Autofit,
     insets: Option<coursecraft_course::TextInsets>,
     point_text: bool,
+    grow_text: bool,
 }
 
 fn inline_edit_text_props(
@@ -5826,14 +6096,18 @@ fn inline_edit_text_props(
                 autofit,
                 point_text,
                 ..
-            } => Some(InlineEditTextProps {
-                style: style.clone(),
-                align: align_for(style.align),
-                valign: valign_for(style.valign),
-                autofit: *autofit,
-                insets: style.insets,
-                point_text: *point_text && !style.wrap,
-            }),
+            } => {
+                let is_pt = *point_text && !style.wrap;
+                Some(InlineEditTextProps {
+                    style: style.clone(),
+                    align: align_for(style.align),
+                    valign: valign_for(style.valign),
+                    autofit: *autofit,
+                    insets: style.insets,
+                    point_text: is_pt,
+                    grow_text: !is_pt && *autofit == coursecraft_course::Autofit::Grow,
+                })
+            }
             coursecraft_course::StateExtraKind::Shape {
                 shape, fill, text, ..
             } if coursecraft_course::shape_allows_text(*shape) => {
@@ -5851,6 +6125,7 @@ fn inline_edit_text_props(
                     insets: st.insets,
                     style: st,
                     point_text: false,
+                    grow_text: false,
                 })
             }
             _ => None,
@@ -5873,13 +6148,17 @@ fn inline_edit_text_props(
             {
                 st.color = c.clone();
             }
+            let is_pt = *point_text && state_name.is_none() && !st.wrap;
             Some(InlineEditTextProps {
                 style: st.clone(),
                 align: align_for(st.align),
                 valign: valign_for(st.valign),
                 autofit: *autofit,
                 insets: st.insets,
-                point_text: *point_text && state_name.is_none() && !st.wrap,
+                point_text: is_pt,
+                grow_text: state_name.is_none()
+                    && !is_pt
+                    && *autofit == coursecraft_course::Autofit::Grow,
             })
         }
         (coursecraft_course::ObjectKind::Button { .. }, None) => Some(InlineEditTextProps {
@@ -5895,6 +6174,7 @@ fn inline_edit_text_props(
             autofit: coursecraft_course::Autofit::None,
             insets: None,
             point_text: false,
+            grow_text: false,
         }),
         (
             coursecraft_course::ObjectKind::Shape {
@@ -5916,6 +6196,7 @@ fn inline_edit_text_props(
                 insets: st.insets,
                 style: st,
                 point_text: false,
+                grow_text: false,
             })
         }
         (coursecraft_course::ObjectKind::Table { rows, .. }, Some((row, column))) => {
@@ -5927,6 +6208,7 @@ fn inline_edit_text_props(
                 autofit: coursecraft_course::Autofit::None,
                 insets: None,
                 point_text: false,
+                grow_text: false,
             })
         }
         _ => None,
@@ -6206,6 +6488,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         autofit,
         insets,
         point_text,
+        grow_text,
     }) = inline_edit_text_props(
         object,
         edit.cell,
@@ -6216,6 +6499,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         cancel_inline_edit(editor);
         return;
     };
+    let live_resize = point_text || grow_text;
     let text_color = coursecraft_render::parse_color(&style.color)
         .unwrap_or_else(|| coursecraft_render::palette(ui.ctx()).text);
     let link_color = coursecraft_render::parse_color(&editor.session.course.theme.accent)
@@ -6225,23 +6509,19 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
 
     let (synced_runs, synced_paragraphs, synced_changed) =
         sync_inline_edit_runs(object, &edit, editor.session.revision);
-    let slide_rect = if point_text {
-        let (fitted_w, fitted_h) = measure_point_text_box_size(
-            ui.ctx(),
-            &edit.buffer,
-            &style,
-            &synced_runs,
-            &synced_paragraphs,
-            &theme_font,
-        );
-        let live_rect = anchor_point_text_rect(
-            base_slide_rect,
-            fitted_w,
-            fitted_h,
-            style.align,
-            style.valign,
-        );
-        editor.ui.inline_edit_measured_size = Some((edit.buffer.clone(), (fitted_w, fitted_h)));
+    let slide_rect = if let Some((live_rect, measured)) = inline_edit_live_bounds_for(
+        ui.ctx(),
+        base_slide_rect,
+        &edit.buffer,
+        &edit.original,
+        &style,
+        &synced_runs,
+        &synced_paragraphs,
+        &theme_font,
+        point_text,
+        grow_text,
+    ) {
+        editor.ui.inline_edit_measured_size = Some((edit.buffer.clone(), measured));
         editor.ui.inline_edit_live_rect = Some(live_rect);
         live_rect
     } else {
@@ -6288,7 +6568,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let mut buffer = edit.buffer.clone();
     let text_rect = inset_text_rect(rect, insets, scale);
     let frame = inline_edit_frame(accent);
-    if point_text {
+    if live_resize {
         draw_dashed_rect(ui.painter(), rect, Stroke::new(1.0, accent));
     } else if insets.is_some() {
         ui.painter().rect_stroke(
@@ -6304,6 +6584,9 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     child.spacing_mut().item_spacing = egui::Vec2::ZERO;
+    if live_resize {
+        child.spacing_mut().interact_size = egui::Vec2::ZERO;
+    }
     let visuals = inline_edit_visuals(child.visuals().clone(), text_color, accent);
     *child.visuals_mut() = visuals;
     let shrink = inline_edit_shrink(
@@ -6382,13 +6665,13 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         .text_color(text_color)
         .align(egui::Align2::new(align, valign))
         .desired_width(text_rect.width())
-        .frame(if point_text || insets.is_some() {
+        .frame(if live_resize || insets.is_some() {
             egui::Frame::NONE
         } else {
             frame
         })
         .layouter(&mut layouter);
-    if point_text {
+    if live_resize {
         edit_builder = edit_builder.min_size(text_rect.size());
     }
     let mut output = edit_builder.show(&mut child);
@@ -6489,37 +6772,33 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         output.response.request_focus();
     }
     let cursor_range = output.state.cursor.char_range();
+    let buffer_changed = buffer != edit.buffer;
     if edit.just_entered {
-        // Re-apply select-all through the release click so the placeholder stays
-        // selected; clear it once the pointer is idle.
-        let chars = buffer.chars().count();
-        output
-            .state
-            .cursor
-            .set_char_range(Some(egui::text_selection::CCursorRange::two(
-                egui::text::CCursor::new(0),
-                egui::text::CCursor::new(chars),
-            )));
-        output.state.store(ui.ctx(), output.response.id);
-        if !pointer_active
-            && output.response.has_focus()
-            && let Some(state) = editor.ui.inline_edit.as_mut()
-        {
-            state.just_entered = false;
-        }
+        handle_inline_edit_just_entered(
+            editor,
+            ui.ctx(),
+            &mut output,
+            &buffer,
+            buffer_changed,
+            pointer_active,
+        );
     }
 
     update_inline_edit_buffer(editor, &edit, &style, &buffer);
-    if point_text && buffer != edit.buffer {
-        update_point_text_live_bounds(
+    if live_resize && buffer_changed {
+        update_inline_edit_live_bounds(
             editor,
             ui.ctx(),
             &buffer,
+            &edit.original,
             &style,
             &synced_runs,
             &synced_paragraphs,
             &theme_font,
             base_slide_rect,
+            slide_rect,
+            point_text,
+            grow_text,
         );
     }
     if output.response.has_focus()
@@ -6552,16 +6831,55 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     }
 }
 
+fn handle_inline_edit_just_entered(
+    editor: &mut Editor,
+    ctx: &egui::Context,
+    output: &mut egui::text_edit::TextEditOutput,
+    buffer: &str,
+    buffer_changed: bool,
+    pointer_active: bool,
+) {
+    if buffer_changed {
+        // The author already replaced the placeholder text on this pass;
+        // do not re-select what they just typed.
+        if let Some(state) = editor.ui.inline_edit.as_mut() {
+            state.just_entered = false;
+        }
+        return;
+    }
+    // Re-apply select-all through the release click so the placeholder stays
+    // selected; clear it once the pointer is idle.
+    let chars = buffer.chars().count();
+    output
+        .state
+        .cursor
+        .set_char_range(Some(egui::text_selection::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(chars),
+        )));
+    output.state.clone().store(ctx, output.response.id);
+    if !pointer_active
+        && output.response.has_focus()
+        && let Some(state) = editor.ui.inline_edit.as_mut()
+    {
+        state.just_entered = false;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn update_point_text_live_bounds(
+fn update_inline_edit_live_bounds(
     editor: &mut Editor,
     ctx: &egui::Context,
     buffer: &str,
+    original: &str,
     style: &coursecraft_course::TextStyle,
     synced_runs: &[coursecraft_course::TextRun],
     synced_paragraphs: &[coursecraft_course::Paragraph],
     theme_font: &str,
     base_slide_rect: Rect,
+    prev_slide_rect: Rect,
+    point_text: bool,
+    grow_text: bool,
 ) {
     let (next_runs, next_paragraphs) = editor
         .ui
@@ -6570,13 +6888,30 @@ fn update_point_text_live_bounds(
         .map_or((synced_runs, synced_paragraphs), |state| {
             (state.live_runs.as_slice(), state.live_paragraphs.as_slice())
         });
-    let (next_w, next_h) =
-        measure_point_text_box_size(ctx, buffer, style, next_runs, next_paragraphs, theme_font);
-    let next_rect =
-        anchor_point_text_rect(base_slide_rect, next_w, next_h, style.align, style.valign);
-    editor.ui.inline_edit_measured_size = Some((buffer.to_owned(), (next_w, next_h)));
-    editor.ui.inline_edit_live_rect = Some(next_rect);
-    ctx.request_repaint();
+    if let Some((next_rect, measured)) = inline_edit_live_bounds_for(
+        ctx,
+        base_slide_rect,
+        buffer,
+        original,
+        style,
+        next_runs,
+        next_paragraphs,
+        theme_font,
+        point_text,
+        grow_text,
+    ) {
+        editor.ui.inline_edit_measured_size = Some((buffer.to_owned(), measured));
+        editor.ui.inline_edit_live_rect = Some(next_rect);
+        let rect_changed = (next_rect.min - prev_slide_rect.min).length() > 0.25
+            || (next_rect.max - prev_slide_rect.max).length() > 0.25;
+        if rect_changed {
+            // Re-run this frame's layout/paint immediately so the painted box
+            // border, selection outline, resize handles, and TextEdit rect all
+            // match the new size on the same frame without 1-frame lag.
+            ctx.request_discard("inline text box live resize");
+        }
+        ctx.request_repaint();
+    }
 }
 
 fn dispatch_inline_edit_format_shortcuts(
@@ -6975,15 +7310,26 @@ fn draw_handles_and_outline(
         return;
     }
 
-    let single_item = if editor.selection.is_multi() {
+    let single_item_live: Option<DrawItem> = if editor.selection.is_multi() {
         None
+    } else if let Some(id) = editor.selection.object.as_ref()
+        && let Some(item) = items
+            .iter()
+            .find(|item| item.hit == Hit::Object(id.clone()))
+    {
+        let mut live = item.clone();
+        if let Some(live_rect) = editor.ui.inline_edit_live_rect
+            && editor.ui.inline_edit.as_ref().is_some_and(|edit| {
+                edit.object == *id && edit.extra_id.is_none() && edit.cell.is_none()
+            })
+        {
+            live.rect = live_rect;
+        }
+        Some(live)
     } else {
-        editor.selection.object.as_ref().and_then(|id| {
-            items
-                .iter()
-                .find(|item| item.hit == Hit::Object(id.clone()))
-        })
+        None
     };
+    let single_item = single_item_live.as_ref();
     let screen_rect = t.to_screen_rect(bbox);
     let handle_size = 8.0;
     let centers = match single_item {
@@ -7883,6 +8229,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         if editor.timeline_playback.needs_repaint(playhead_ms) {
             ui.ctx().request_repaint();
         }
+        sync_inline_edit_live_rect_before_paint(editor, ui.ctx());
         let memory = crate::MemoryMediaSource::from_store(&editor.media);
         let source = crate::TimelineMediaSource {
             inner: &memory,
@@ -7922,7 +8269,9 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         } else {
             None
         };
-        let view_items = animated.as_deref().unwrap_or(items);
+        let base_view_items = animated.as_deref().unwrap_or(items);
+        let live_view_items_owned = apply_inline_edit_live_rect(editor, base_view_items);
+        let view_items = live_view_items_owned.as_deref().unwrap_or(base_view_items);
         paint(
             &painter,
             &t,

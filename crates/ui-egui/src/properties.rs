@@ -2927,12 +2927,22 @@ fn finish(editor: &mut Editor, mut actions_to_run: Vec<(&'static str, Json)>) {
         crate::alt_text::suggest_for_object(editor, &slide, &object);
     }
 
-    if actions_to_run.len() > 1 {
+    let panel_text_edit = actions_to_run.iter().find_map(|(cmd, params)| {
+        if *cmd != "text.set" || params.get("row").is_some() {
+            return None;
+        }
+        let sid = params.get("slide").and_then(Json::as_str)?;
+        let oid = params.get("object").and_then(Json::as_str)?;
+        let txt = params.get("text").and_then(Json::as_str)?;
+        Some((sid.to_owned(), oid.to_owned(), txt.to_owned()))
+    });
+
+    let ran = if actions_to_run.len() > 1 {
         let steps: Vec<(String, Json)> = actions_to_run
             .into_iter()
             .map(|(cmd, params)| (cmd.to_owned(), params))
             .collect();
-        editor.run_batch(&steps);
+        editor.run_batch(&steps).is_some()
     } else if let Some((cmd, params)) = actions_to_run.pop() {
         let deleted_state = (cmd == "object.delete_state")
             .then(|| {
@@ -2942,12 +2952,32 @@ fn finish(editor: &mut Editor, mut actions_to_run: Vec<(&'static str, Json)>) {
                     .map(str::to_owned)
             })
             .flatten();
-        if editor.run(cmd, params).is_some()
+        let ok = editor.run(cmd, params).is_some();
+        if ok
             && let Some(name) = deleted_state
             && editor.ui.preview_state.as_deref() == Some(name.as_str())
         {
             editor.ui.preview_state = None;
         }
+        ok
+    } else {
+        false
+    };
+
+    if ran
+        && let Some((sid, oid, new_text)) = panel_text_edit
+        && let Some(edit) = editor.ui.inline_edit.as_mut()
+        && edit.slide == sid
+        && edit.object == oid
+        && edit.state_name.is_none()
+        && edit.extra_id.is_none()
+        && edit.cell.is_none()
+        && edit.buffer != new_text
+    {
+        edit.buffer = new_text.clone();
+        edit.original = new_text;
+        editor.ui.inline_edit_measured_size = None;
+        editor.ui.inline_edit_live_rect = None;
     }
 }
 
@@ -5011,11 +5041,12 @@ fn show_autofit_row(
     autofit: Autofit,
 ) -> Option<(&'static str, Json)> {
     let mut action_to_run = None;
+    let allow_grow = !id_prefix.starts_with("shape");
     inspector_row(ui, tl!("Autofit"), |ui| {
-        let selected = if autofit == Autofit::Shrink {
-            tl!("Shrink text on overflow")
-        } else {
-            tl!("Off")
+        let selected = match autofit {
+            Autofit::None => tl!("Off"),
+            Autofit::Shrink => tl!("Shrink text on overflow"),
+            Autofit::Grow => tl!("Resize box to fit text"),
         };
         let mut chosen = None;
         let rem_w = ui.available_width().max(30.0);
@@ -5034,16 +5065,28 @@ fn show_autofit_row(
                 {
                     chosen = Some(Autofit::Shrink);
                 }
+                if allow_grow
+                    && ui
+                        .selectable_label(autofit == Autofit::Grow, tl!("Resize box to fit text"))
+                        .clicked()
+                {
+                    chosen = Some(Autofit::Grow);
+                }
             });
         if let Some(value) = chosen
             && value != autofit
         {
+            let autofit_str = match value {
+                Autofit::None => "none",
+                Autofit::Shrink => "shrink",
+                Autofit::Grow => "grow",
+            };
             action_to_run = Some((
                 "object.set_autofit",
                 serde_json::json!({
                     "slide": slide_id,
                     "object": obj_id,
-                    "autofit": if value == Autofit::Shrink { "shrink" } else { "none" },
+                    "autofit": autofit_str,
                 }),
             ));
         }
