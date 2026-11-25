@@ -775,7 +775,12 @@ fn point_text_wrap_from_text_panel_and_ribbon_converts_to_area_text() {
     panels::open_at(&mut h.editor, Panel::Text, Some(Section::TextBox));
     frames(&mut h, 3);
 
-    let text_rect = h.editor.ui.dock.rect(Panel::Text).expect("Text panel drawn");
+    let text_rect = h
+        .editor
+        .ui
+        .dock
+        .rect(Panel::Text)
+        .expect("Text panel drawn");
     let wrap_pos = h
         .find_text_in("Wrap text", text_rect)
         .expect("Wrap text checkbox in Text panel › Text Box");

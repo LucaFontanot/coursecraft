@@ -280,7 +280,12 @@ fn ribbon_group_button_toggles_interactive_group_and_uses_tl() {
     );
 
     // Docked Format inspector shows "Act as one button" and docked Timeline shows the "Button" pill.
-    let format_rect = h.editor.ui.dock.rect(crate::dock::Panel::Format).expect("Format panel");
+    let format_rect = h
+        .editor
+        .ui
+        .dock
+        .rect(crate::dock::Panel::Format)
+        .expect("Format panel");
     assert!(
         h.find_text_in("Act as one button", format_rect).is_some(),
         "Format dock panel should show Act as one button"
@@ -299,7 +304,10 @@ fn ribbon_group_button_toggles_interactive_group_and_uses_tl() {
     // Pseudo-locale check: every new M37 ribbon/dock label goes through tl!.
     h.editor.set_language("pseudo");
     frames(&mut h, 2);
-    assert!(h.find_text_in("⟦Remove button behaviour⟧", ribbon).is_some());
+    assert!(
+        h.find_text_in("⟦Remove button behaviour⟧", ribbon)
+            .is_some()
+    );
     assert!(h.find_text_in("⟦Act as one button⟧", format_rect).is_some());
     assert!(h.find_text_in("⟦Button⟧", timeline_rect).is_some());
     h.editor.set_language("en");
@@ -327,7 +335,9 @@ fn home_arrange_menu_toggles_interactive_group() {
     frames(&mut h, 3);
 
     let ribbon = h.editor.ui.ribbon.rect;
-    let arrange = h.find_text_in("Arrange", ribbon).expect("Home › Drawing › Arrange");
+    let arrange = h
+        .find_text_in("Arrange", ribbon)
+        .expect("Home › Drawing › Arrange");
     h.click_at(arrange);
     frames(&mut h, 2);
     let make = h

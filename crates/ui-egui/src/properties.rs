@@ -2639,10 +2639,7 @@ pub fn show_text_panel(editor: &mut Editor, ui: &mut Ui) {
     let mut synced_inline_text = None;
     if !actions_to_run.is_empty()
         && let Some(edit) = editor.ui.inline_edit.as_ref().filter(|e| {
-            e.state_name.is_none()
-                && e.extra_id.is_none()
-                && !e.is_button
-                && e.buffer != e.original
+            e.state_name.is_none() && e.extra_id.is_none() && !e.is_button && e.buffer != e.original
         })
         && actions_to_run.iter().any(|(cmd, params)| {
             *cmd != "text.set"
