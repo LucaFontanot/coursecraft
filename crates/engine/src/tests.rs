@@ -10732,7 +10732,7 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
     };
 
     let cmds = crate::registry();
-    assert_eq!(cmds.len(), 188, "unexpected registry command count");
+    assert_eq!(cmds.len(), 189, "unexpected registry command count");
 
     for cmd in cmds {
         check_phrase(cmd.label, &format!("label for {}", cmd.id));
@@ -12248,7 +12248,7 @@ fn r5_01_registry_golden_lock() {
     use crate::delta::UndoScope;
 
     let reg = registry();
-    assert_eq!(reg.len(), 188);
+    assert_eq!(reg.len(), 189);
 
     const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
         ("course.info", false, UndoScope::FullCourse, false),
@@ -12310,6 +12310,12 @@ fn r5_01_registry_golden_lock() {
         ("slide.set_duration", true, UndoScope::SingleSlide, true),
         ("slide.set_background", true, UndoScope::SingleSlide, true),
         ("slide.set_transition", true, UndoScope::SingleSlide, true),
+        (
+            "slide.set_transition_all",
+            true,
+            UndoScope::FullCourse,
+            false,
+        ),
         (
             "slide.set_player_overrides",
             true,
@@ -12609,10 +12615,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 24_195, "registry golden table byte length");
+    assert_eq!(table.len(), 24_336, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        0xbc9d_0049_e376_49ba,
+        0xdc61_5cf1_56dd_4f3d,
         "registry golden table FNV-1a hash"
     );
 }
@@ -12821,6 +12827,62 @@ fn r5_02_interaction_insert_golden_all_eight_kinds() {
             "{kind}: last layer id"
         );
     }
+}
+
+#[test]
+fn grid_spacing_is_a_view_setting_that_undoes_and_rejects_nonsense() {
+    let mut s = Session::blank("Grid");
+    assert!((s.course.editor.grid_step() - 20.0).abs() < f32::EPSILON);
+    ok(&mut s, "view.set", json!({ "grid_spacing": 10.0 }));
+    assert_eq!(s.course.editor.grid_spacing, Some(10.0));
+    assert!((s.course.editor.grid_step() - 10.0).abs() < f32::EPSILON);
+    // The default spacing is stored as none, so the file stays as it was.
+    ok(&mut s, "view.set", json!({ "grid_spacing": 20.0 }));
+    assert_eq!(s.course.editor.grid_spacing, None);
+    s.undo().expect("undo");
+    assert_eq!(s.course.editor.grid_spacing, Some(10.0));
+    for bad in [0.0, 1.0, 1000.0, -5.0] {
+        assert!(
+            s.execute("view.set", &json!({ "grid_spacing": bad }))
+                .is_err(),
+            "{bad} accepted"
+        );
+    }
+    // A hand-edited file with a useless spacing draws the default grid.
+    s.course.editor.grid_spacing = Some(f32::NAN);
+    assert!((s.course.editor.grid_step() - 20.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn transition_apply_to_all_sets_every_slide_in_one_undo_step() {
+    let mut s = Session::blank("Transitions");
+    ok(&mut s, "slide.add", json!({}));
+    ok(&mut s, "slide.add", json!({}));
+    let fade = json!({ "type": "fade", "duration_ms": 800 });
+    ok(
+        &mut s,
+        "slide.set_transition_all",
+        json!({ "transition": fade }),
+    );
+    let all = |s: &Session| {
+        s.course
+            .scenes
+            .iter()
+            .flat_map(|sc| sc.slides.iter())
+            .map(|sl| sl.transition.as_ref().map(|t| t.duration_ms))
+            .collect::<Vec<_>>()
+    };
+    assert!(all(&s).len() >= 3);
+    assert!(all(&s).iter().all(|d| *d == Some(800)));
+    s.undo().expect("undo");
+    assert!(all(&s).iter().all(Option::is_none));
+    assert!(
+        s.execute(
+            "slide.set_transition_all",
+            &json!({ "transition": { "type": "fade", "duration_ms": 0 } })
+        )
+        .is_err()
+    );
 }
 
 #[test]

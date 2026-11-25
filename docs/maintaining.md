@@ -35,13 +35,18 @@ Settings → Actions → General: allow GitHub Actions. For pull requests from f
 
 1. Someone forks the repository, works on a branch, and opens a pull request.
 2. CI runs `cargo xtask ci` on it. A red cross means it doesn't build or a test fails; ask them to fix it before reviewing.
-3. Review it, or ask Claude Code to: `gh pr checkout <number>`, then review and run it. Check the clean-room box in the template and the [patent watch list](contributing.md#patent-watch-list).
+3. Review it, or ask Claude Code to: `gh pr checkout <number>`, then review and run it. Check the clean-room box in the template and the [patent watch list](contributing.md#patent-watch-list). For editor UI changes, check the layout matches `docs/ui/` and its status tables were updated.
 4. Ask for changes in comments, or **Squash and merge** when it's good.
 5. Small fixes from you can still go through a pull request, so CI checks them the same way.
 
 Issues: label them `bug` or `idea` (the templates do this), and close duplicates with a link to the first one.
 
 ## Releasing a version
+
+Release builds set `CRAFT_I18N_DIR` to a checkout of the craft-i18n data repository at the commit
+pinned here, and `CRAFT_I18N_REQUIRED=1` (`docs/ui/localization.md`). Pinned craft-i18n commit:
+_not set yet (set it when the first `coursecraft.tsv` lands)_.
+
 
 1. Update `CHANGELOG.md`: move the "Unreleased" notes under a new version heading.
 2. Set the version in the root `Cargo.toml` (`[workspace.package] version`).
@@ -50,10 +55,10 @@ Issues: label them `bug` or `idea` (the templates do this), and close duplicates
    git tag v0.1.0
    git push origin v0.1.0
    ```
-4. The **Release** workflow builds the macOS `.dmg`, the Windows `.exe` and the Linux `.tar.gz` (each with the player inside) and attaches them to a **draft** release. Nothing is public yet.
+4. The **Release** workflow builds the macOS `.dmg`, the Windows `-setup.exe` installer, and the Linux `.AppImage` and `.tar.gz` (each with the player inside), generates `SHA256SUMS.txt`, and attaches them to a **draft** release. Nothing is public yet.
 5. Download them and try the macOS and Windows ones (Linux is built but not tried by the maintainer; say so in the notes), paste the changelog section into the release notes, and press **Publish release**.
 
-The app's Help → Check for Updates opens the Releases page; there is no automatic update.
+The app checks GitHub Releases for updates at start (optional in Preferences) and via Help → Check for Updates; downloads are verified against `SHA256SUMS.txt` and nothing installs or restarts without the user's confirmation.
 
 ## What people will see on first launch
 

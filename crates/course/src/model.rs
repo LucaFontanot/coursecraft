@@ -449,6 +449,9 @@ pub struct EditorSettings {
     pub show_grid: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub snap_to_grid: bool,
+    /// Grid spacing in slide pixels; `None` is [`EditorSettings::DEFAULT_GRID_SPACING`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_spacing: Option<f32>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub show_guides: bool,
     #[serde(default, skip_serializing_if = "is_default_base_slide_view")]
@@ -460,11 +463,26 @@ pub struct EditorSettings {
 }
 
 impl EditorSettings {
+    /// The grid spacing when none is set, in slide pixels.
+    pub const DEFAULT_GRID_SPACING: f32 = 20.0;
+    /// The grid spacings an author can set, in slide pixels.
+    pub const GRID_SPACING_RANGE: std::ops::RangeInclusive<f32> = 2.0..=400.0;
+
+    /// The grid spacing to draw and snap to: the saved one when it is a usable
+    /// number, else the default.
+    #[must_use]
+    pub fn grid_step(&self) -> f32 {
+        self.grid_spacing
+            .filter(|v| v.is_finite() && Self::GRID_SPACING_RANGE.contains(v))
+            .unwrap_or(Self::DEFAULT_GRID_SPACING)
+    }
+
     #[must_use]
     pub fn is_default(&self) -> bool {
         !self.show_rulers
             && !self.show_grid
             && !self.snap_to_grid
+            && self.grid_spacing.is_none()
             && !self.show_guides
             && self.base_slide_view == BaseSlideView::Dim
             && self.guides.is_empty()

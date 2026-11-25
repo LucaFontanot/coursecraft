@@ -5,6 +5,12 @@ name: Release
 # on a branch to test the builds: that keeps the files as run artifacts and
 # makes no release. The release description is the version's section of
 # CHANGELOG.md (scripts/release-notes.sh), so write that section before tagging.
+#
+# File names follow the Craft suite's convention, which the in-app update check
+# (craft-update) reads: coursecraft-<version>-<os>-<arch>.<ext>, the version
+# without the tag's "v". macOS ships a .dmg, Windows ships the Inno Setup
+# -setup.exe installer only, and Linux ships both an .AppImage and a .tar.gz
+# archive holding one folder with bin/coursecraft.
 on:
   push:
     tags: ["v*"]
@@ -29,7 +35,7 @@ jobs:
         if: matrix.name == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev libasound2-dev
+          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev libasound2-dev desktop-file-utils
       - uses: dtolnay/rust-toolchain@1.99
         with:
           targets: wasm32-unknown-unknown
@@ -42,12 +48,6 @@ jobs:
       - name: Package for macOS
         if: matrix.name == 'macos'
         run: scripts/package-macos.sh "${GITHUB_REF_NAME#v}" target/release/coursecraft dist
-      - name: Package for Windows (portable)
-        if: matrix.name == 'windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/coursecraft.exe "dist/CourseCraft-$($env:GITHUB_REF_NAME)-portable.exe"
       - name: Build Windows installer
         if: matrix.name == 'windows'
         shell: pwsh
@@ -71,13 +71,51 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found after installation" }
           $tag = $env:GITHUB_REF_NAME
           $ver = $tag.TrimStart('v')
-          & $iscc "/DAppVersion=$ver" "/DOutputName=CourseCraft-$tag-setup" "/DOutputDir=$PWD\dist" "/DRepoRoot=$PWD" "packaging/windows/coursecraft.iss"
+          & $iscc "/DAppVersion=$ver" "/DOutputName=coursecraft-$ver-windows-x64-setup" "/DOutputDir=$PWD\dist" "/DRepoRoot=$PWD" "packaging/windows/coursecraft.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
       - name: Package for Linux
         if: matrix.name == 'linux'
         run: |
-          mkdir -p dist
-          tar -czf "dist/CourseCraft-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" -C target/release coursecraft -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md -C "$GITHUB_WORKSPACE/apps/coursecraft/icons" coursecraft-1024.png
+          name="coursecraft-${GITHUB_REF_NAME#v}-linux-x86_64"
+          root="stage/$name"
+          mkdir -p dist "$root/bin" "$root/share/doc/coursecraft" "$root/share/icons/hicolor/1024x1024/apps"
+          cp target/release/coursecraft "$root/bin/coursecraft"
+          cp LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md "$root/share/doc/coursecraft/"
+          cp apps/coursecraft/icons/coursecraft-1024.png "$root/share/icons/hicolor/1024x1024/apps/coursecraft.png"
+          tar -czf "dist/$name.tar.gz" -C stage "$name"
+      - name: Package for Linux (AppImage)
+        if: matrix.name == 'linux'
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          out="dist/coursecraft-$ver-linux-x86_64.AppImage"
+          appdir="stage/CourseCraft.AppDir"
+          rm -rf "$appdir"
+          mkdir -p dist "$appdir/usr/bin" "$appdir/usr/share/applications" "$appdir/usr/share/doc/coursecraft" "$appdir/usr/share/icons/hicolor/1024x1024/apps"
+          cp target/release/coursecraft "$appdir/usr/bin/coursecraft"
+          chmod 755 "$appdir/usr/bin/coursecraft"
+          cp LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md "$appdir/usr/share/doc/coursecraft/"
+          cp packaging/linux/coursecraft.desktop "$appdir/coursecraft.desktop"
+          cp packaging/linux/coursecraft.desktop "$appdir/usr/share/applications/coursecraft.desktop"
+          cp apps/coursecraft/icons/coursecraft-1024.png "$appdir/coursecraft.png"
+          cp apps/coursecraft/icons/coursecraft-1024.png "$appdir/usr/share/icons/hicolor/1024x1024/apps/coursecraft.png"
+          ln -sf coursecraft.png "$appdir/.DirIcon"
+          cat > "$appdir/AppRun" <<'EOF'
+          #!/bin/sh
+          set -eu
+          HERE="$(dirname "$(readlink -f "$0")")"
+          exec "$HERE/usr/bin/coursecraft" "$@"
+          EOF
+          chmod 755 "$appdir/AppRun"
+          desktop-file-validate "$appdir/coursecraft.desktop"
+
+          tool_ver="1.9.1"
+          tool="stage/appimagetool-x86_64.AppImage"
+          tool_sha="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+          curl -fsSL -o "$tool" "https://github.com/AppImage/appimagetool/releases/download/$tool_ver/appimagetool-x86_64.AppImage"
+          echo "$tool_sha  $tool" | sha256sum -c -
+          chmod 755 "$tool"
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$tool" "$appdir" "$out"
+          chmod 755 "$out"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
@@ -98,7 +136,7 @@ jobs:
           merge-multiple: true
       - name: Generate SHA-256 checksums
         working-directory: dist
-        run: sha256sum CourseCraft-* > SHA256SUMS.txt
+        run: sha256sum coursecraft-* > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v3
         with:
           draft: true

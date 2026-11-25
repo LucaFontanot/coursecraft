@@ -1,3175 +1,1286 @@
-//! Desktop-only update check policy, version helpers, and download limits.
+//! CourseCraft's update wrapper around `craft_update`: one quiet check at start-up and one on
+//! demand from Help, the prompt that offers the update, and the window that reports a requested
+//! check.
 //!
-//! All networking, version parsing, and Downloads I/O for CourseCraft updates
-//! live in this module behind `#[cfg(not(target_arch = "wasm32"))]`.
+//! `craft_update::updater::Updater` runs the background check, reads the launcher's version pin
+//! choice, and reports the outcome of a completed update on the next launch. CourseCraft owns the
+//! `StartupPrompt` and self-update worker so that:
+//! - Clicking **Later** / **Dismiss** or closing the prompt (Esc / ×) while an **Update and
+//!   Restart** download is in flight cancels `craft_update::Stop` immediately: the app does not
+//!   close, swap the binary/bundle, or install on exit, and a later explicit **Update and
+//!   Restart** can start again.
+//! - macOS and Linux self-updates select `.dmg`, `.AppImage` (when `$APPIMAGE` is set), or
+//!   `.tar.gz`, verify `SHA256SUMS.txt`, and only start when the user clicks **Update and
+//!   Restart** with no unsaved work.
+//! - Windows releases ship only the Inno Setup `-setup.exe` installer (no portable `.zip`), so
+//!   Windows copies open the prompt in manual-download mode pointing at `-setup.exe` (with a
+//!   short notice on legacy portable copies that have `portable.txt` beside the executable).
+//!
+//! Desktop only; the web build has no updates.
 
-use std::fs::File;
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::ffi::OsStr;
+use std::path::Path;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
-/// Minimum elapsed seconds between automatic startup update checks (24 hours).
-pub const CHECK_INTERVAL_SECS: u64 = 86_400;
+use craft_update::release::{expected_download_url, safe_web_link, same_download_url};
+use craft_update::self_update::Restart;
+use craft_update::translate::Note;
+use craft_update::updater::{Action, CheckSource, READY_TEXT, Status, Updater};
+use craft_update::{
+    Arch, Asset, CheckResultDialog, CheckResultResponse, Os, PackageKind, Platform, Release,
+    StartupPrompt, StartupPromptResponse, Stop, pick_asset,
+};
 
-/// Hard size cap for a GitHub Releases API JSON response (1 MiB).
-pub const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Hard size cap for a `SHA256SUMS.txt` checksum manifest (64 KiB).
-pub const MAX_SUMS_BYTES: usize = 64 * 1024;
+/// Notice shown in the update prompt when running an older Windows portable build (`portable.txt`
+/// beside the executable), since portable builds stopped in 0.5.0.
+pub const PORTABLE_DISCONTINUED_NOTE: &str = "The portable Windows version is no longer published. Download the Windows installer (-setup.exe) to update.";
 
-/// Hard size cap for a downloaded installer package (512 MiB).
-pub const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
+/// CourseCraft as craft-update knows it: its releases live in the upstream repository, and the
+/// prompt shows its icon and teal accent.
+pub const UPDATE_APP: craft_update::App = craft_update::App {
+    icon_png: Some(include_bytes!("../icons/window-256.png")),
+    accent: Some([0x0B, 0x7F, 0x72]),
+    // The macOS bundle's identifier (scripts/package-macos.sh), kept for existing installs.
+    bundle_id_override: Some("org.coursecraft.CourseCraft"),
+    ..craft_update::App::new(
+        "coursecraft",
+        "CourseCraft",
+        "eLearning authoring",
+        "ad1-kamath/coursecraft",
+    )
+};
 
-/// Maximum number of HTTPS redirect hops allowed per request.
-pub const MAX_REDIRECTS: usize = 5;
+/// How this running copy handles discovered updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) enum InstallMode {
+    /// macOS and Linux: self-updates via `craft_update::self_update::prepare_update` (`.dmg`,
+    /// `.AppImage` when `$APPIMAGE` is set, `.tar.gz` otherwise) with explicit cancellation.
+    CraftUpdate,
+    /// Windows Inno Setup installation: manual download of `-setup.exe`.
+    WindowsSetup,
+    /// Legacy Windows portable copy (`portable.txt` beside the executable): manual download of
+    /// `-setup.exe` with [`PORTABLE_DISCONTINUED_NOTE`].
+    WindowsLegacyPortable,
+}
 
-/// Decide whether an automatic startup update check should run now.
-///
-/// Returns `false` when automatic checks are disabled or when the system clock
-/// moved backwards relative to `last_unix`. Returns `true` when no check has
-/// been recorded yet, or at least [`CHECK_INTERVAL_SECS`] seconds have elapsed.
+/// Whether `exe` belongs to an older Windows portable build (marked by `portable.txt` beside it).
 #[must_use]
-pub fn should_auto_check(enabled: bool, last_unix: Option<u64>, now_unix: u64) -> bool {
-    if !enabled {
-        return false;
-    }
-    let Some(last) = last_unix else {
-        return true;
-    };
-    if now_unix < last {
-        return false;
-    }
-    now_unix.saturating_sub(last) >= CHECK_INTERVAL_SECS
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn is_legacy_portable_at(exe: &Path) -> bool {
+    exe.parent()
+        .is_some_and(|dir| dir.join("portable.txt").is_file())
 }
 
-fn env_flag_truthy(val: Option<&str>) -> bool {
-    let Some(raw) = val else {
-        return false;
-    };
-    let trimmed = raw.trim();
-    !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
-}
-
-/// Return `true` when environment variables suppress automatic update checks
-/// (for example in CI or headless runs).
-#[must_use]
-pub fn auto_check_suppressed_by_env(ci_env: Option<&str>, disable_env: Option<&str>) -> bool {
-    env_flag_truthy(ci_env) || env_flag_truthy(disable_env)
-}
-
-/// Read `CI` and `COURSECRAFT_DISABLE_UPDATES` from the process environment
-/// and report whether automatic update checks are suppressed.
-#[must_use]
-pub fn is_ci_or_headless_env() -> bool {
-    let ci = std::env::var("CI").ok();
-    let disable = std::env::var("COURSECRAFT_DISABLE_UPDATES").ok();
-    auto_check_suppressed_by_env(ci.as_deref(), disable.as_deref())
-}
-
-/// Build the minimal privacy-preserving `User-Agent` header value.
-///
-/// Sends only `CourseCraft/<version>` with no OS, CPU, hostname, locale, or IDs.
-#[must_use]
-pub fn user_agent(version: &str) -> String {
-    format!("CourseCraft/{version}")
-}
-
-/// Parse the running CourseCraft crate version as SemVer.
-#[must_use]
-pub fn current_version() -> Option<semver::Version> {
-    semver::Version::parse(env!("CARGO_PKG_VERSION")).ok()
-}
-
-/// Errors that can occur while checking for or downloading a CourseCraft update.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UpdateError {
-    /// Network-level failure (offline, DNS, connection refused, TLS).
-    Network(String),
-    /// Request or download stream timed out.
-    Timeout,
-    /// GitHub API rate limit reached (HTTP 403 with remaining 0, or HTTP 429).
-    RateLimited,
-    /// Unexpected non-success HTTP status code.
-    HttpStatus(u16),
-    /// Empty, malformed, non-array, or oversized API response.
-    InvalidResponse,
-    /// Target or redirect URL violated the HTTPS / GitHub host allowlist.
-    DisallowedUrl,
-    /// Redirect chain exceeded [`MAX_REDIRECTS`].
-    TooManyRedirects,
-    /// Download exceeded [`MAX_DOWNLOAD_BYTES`] or declared asset size.
-    DownloadTooLarge,
-    /// Download ended with fewer bytes than the declared asset size.
-    DownloadTruncated,
-    /// Computed SHA-256 digest did not match the expected checksum.
-    ChecksumMismatch,
-    /// User cancelled an in-progress download.
-    Cancelled,
-    /// Local filesystem error while writing or moving the downloaded file.
-    Io(String),
-}
-
-impl UpdateError {
-    /// Return a calm, plain-language explanation suitable for display in the UI.
-    #[must_use]
-    pub fn user_message(&self) -> String {
-        match self {
-            Self::Network(_) => {
-                "Couldn't check for updates. Check your internet connection and try again."
-                    .to_string()
-            }
-            Self::Timeout => "The update server took too long to respond.".to_string(),
-            Self::RateLimited => {
-                "GitHub's update service is temporarily busy. Try again later or open the releases page in your browser."
-                    .to_string()
-            }
-            Self::HttpStatus(code) => format!(
-                "GitHub returned an unexpected status (HTTP {code}). Try again later or open the releases page in your browser."
-            ),
-            Self::InvalidResponse => "Received an unexpected response from GitHub.".to_string(),
-            Self::DisallowedUrl => {
-                "The download link pointed to an unexpected address and was blocked.".to_string()
-            }
-            Self::TooManyRedirects => {
-                "The download link redirected too many times and was stopped.".to_string()
-            }
-            Self::DownloadTooLarge => {
-                "The update file is larger than expected and was not saved.".to_string()
-            }
-            Self::DownloadTruncated => {
-                "The download was incomplete and was removed. Try again or open the releases page in your browser."
-                    .to_string()
-            }
-            Self::ChecksumMismatch => {
-                "The downloaded file didn't pass verification and was removed.".to_string()
-            }
-            Self::Cancelled => "The download was cancelled.".to_string(),
-            Self::Io(_) => {
-                "Couldn't save the update to your Downloads folder. Check available disk space and permissions, or open the releases page in your browser."
-                    .to_string()
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for UpdateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.user_message())
-    }
-}
-
-impl std::error::Error for UpdateError {}
-
-fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    T: Default + serde::Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    Ok(<Option<T> as serde::Deserialize<'de>>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-/// Relevant subset of a GitHub Release object from `/repos/.../releases`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
-pub struct GitHubRelease {
-    /// Git tag name (for example `"v0.4.3"`).
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub tag_name: String,
-    /// Human-readable release title.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub name: String,
-    /// Markdown release notes body.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub body: String,
-    /// Browser URL for the GitHub release page.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub html_url: String,
-    /// ISO-8601 publication timestamp, if provided.
-    #[serde(default)]
-    pub published_at: Option<String>,
-    /// Whether the release is an unpublished draft.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub draft: bool,
-    /// Whether GitHub marks the release as a pre-release.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub prerelease: bool,
-    /// Attached downloadable files.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub assets: Vec<GitHubAsset>,
-}
-
-/// Relevant subset of a GitHub Release Asset object.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
-pub struct GitHubAsset {
-    /// Asset filename (for example `"CourseCraft-0.4.3-macos.dmg"`).
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub name: String,
-    /// Direct download URL on GitHub.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub browser_download_url: String,
-    /// Declared size of the asset in bytes.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub size: u64,
-    /// Optional content digest from GitHub (for example `"sha256:<64-hex>"`).
-    #[serde(default)]
-    pub digest: Option<String>,
-}
-
-/// Parse a GitHub Releases API JSON array response while enforcing [`MAX_API_RESPONSE_BYTES`].
-///
-/// # Errors
-/// Returns [`UpdateError::InvalidResponse`] if the payload is empty, exceeds
-/// [`MAX_API_RESPONSE_BYTES`], or is not a valid JSON array of releases.
-pub fn parse_releases_json(bytes: &[u8]) -> Result<Vec<GitHubRelease>, UpdateError> {
-    if bytes.is_empty() || bytes.len() > MAX_API_RESPONSE_BYTES {
-        return Err(UpdateError::InvalidResponse);
-    }
-    serde_json::from_slice(bytes).map_err(|_| UpdateError::InvalidResponse)
-}
-
-/// Parse a Git release tag as SemVer, stripping a single optional leading `'v'` or `'V'`.
-#[must_use]
-pub fn parse_tag_version(tag: &str) -> Option<semver::Version> {
-    let trimmed = tag.trim();
-    let stripped = trimmed
-        .strip_prefix('v')
-        .or_else(|| trimmed.strip_prefix('V'))
-        .unwrap_or(trimmed);
-    semver::Version::parse(stripped).ok()
-}
-
-/// Decide whether a parsed candidate release is eligible for the running version.
-///
-/// - Draft releases are never eligible.
-/// - Clean `0.x` builds (`current.major == 0 && current.pre.is_empty()`) accept
-///   clean SemVer releases (`candidate.pre.is_empty()`) even when GitHub marks
-///   them `prerelease: true`, while skipping SemVer RCs/alphas/betas.
-/// - Pre-release builds (`!current.pre.is_empty()`) accept newer pre-releases and
-///   final releases alike.
-/// - Stable `1.x+` builds (`current.major >= 1 && current.pre.is_empty()`) accept
-///   only releases where `!release.prerelease && candidate.pre.is_empty()`.
-#[must_use]
-pub fn is_release_eligible(
-    release: &GitHubRelease,
-    candidate: &semver::Version,
-    current: &semver::Version,
-) -> bool {
-    if release.draft {
-        return false;
-    }
-    if !current.pre.is_empty() {
-        return true;
-    }
-    if current.major == 0 {
-        return candidate.pre.is_empty();
-    }
-    !release.prerelease && candidate.pre.is_empty()
-}
-
-/// Select the highest eligible release whose SemVer version is strictly greater than `current`.
-#[must_use]
-pub fn select_latest_update(
-    releases: Vec<GitHubRelease>,
-    current: &semver::Version,
-) -> Option<(semver::Version, GitHubRelease)> {
-    let mut best: Option<(semver::Version, GitHubRelease)> = None;
-    for release in releases {
-        let Some(version) = parse_tag_version(&release.tag_name) else {
-            continue;
-        };
-        if !is_release_eligible(&release, &version, current) || version <= *current {
-            continue;
-        }
-        let is_newer = best
-            .as_ref()
-            .is_none_or(|(best_version, _)| version > *best_version);
-        if is_newer {
-            best = Some((version, release));
-        }
-    }
-    best
-}
-
-/// Find a `SHA256SUMS.txt` or `SHA256SUMS` checksum manifest asset (case-insensitive).
-#[must_use]
-pub fn find_checksums_asset(assets: &[GitHubAsset]) -> Option<&GitHubAsset> {
-    assets.iter().find(|asset| {
-        asset.name.eq_ignore_ascii_case("sha256sums.txt")
-            || asset.name.eq_ignore_ascii_case("sha256sums")
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AssetArch {
-    Arm64,
-    X64,
-    Universal,
-    Unspecified,
-}
-
-fn is_non_installer_asset(asset: &GitHubAsset) -> bool {
-    if asset.name.trim().is_empty() || asset.browser_download_url.trim().is_empty() {
-        return true;
-    }
-    let lower = asset.name.to_ascii_lowercase();
-    lower == "sha256sums"
-        || lower == "sha256sums.txt"
-        || lower.ends_with(".txt")
-        || lower.ends_with(".sha256")
-        || lower.ends_with(".sig")
-        || lower.ends_with(".asc")
-        || lower.ends_with(".json")
-        || lower.ends_with(".md")
-}
-
-fn asset_arch_tag(lower_name: &str) -> AssetArch {
-    let mut has_arm64 = false;
-    let mut has_x64 = lower_name.contains("x86_64") || lower_name.contains("x86-64");
-    let mut has_universal = false;
-
-    for token in lower_name.split(['-', '_', '.', ' ']) {
-        match token {
-            "arm64" | "aarch64" => has_arm64 = true,
-            "amd64" | "x64" | "intel" => has_x64 = true,
-            "universal" => has_universal = true,
-            _ => {}
-        }
-    }
-
-    if has_universal || (has_arm64 && has_x64) {
-        AssetArch::Universal
-    } else if has_arm64 {
-        AssetArch::Arm64
-    } else if has_x64 {
-        AssetArch::X64
-    } else {
-        AssetArch::Unspecified
-    }
-}
-
-fn normalize_target_arch(arch: &str) -> Option<AssetArch> {
-    match arch.trim().to_ascii_lowercase().as_str() {
-        "aarch64" | "arm64" => Some(AssetArch::Arm64),
-        "x86_64" | "amd64" | "x64" => Some(AssetArch::X64),
-        _ => None,
-    }
-}
-
-fn arch_compatibility_rank(asset_arch: AssetArch, target_arch: &str) -> Option<u8> {
-    let target = normalize_target_arch(target_arch);
-    match asset_arch {
-        AssetArch::Arm64 | AssetArch::X64 => (target == Some(asset_arch)).then_some(0),
-        AssetArch::Universal => target.map(|_| 1),
-        AssetArch::Unspecified => Some(2),
-    }
-}
-
-fn rank_macos_asset(lower_name: &str, arch_rank: u8) -> Option<(u8, u8)> {
-    let format_rank = if lower_name.ends_with(".dmg") {
-        0
-    } else if lower_name.ends_with(".pkg") {
-        1
-    } else if lower_name.contains("macos")
-        && (lower_name.ends_with(".zip") || lower_name.ends_with(".tar.gz"))
+/// Detects the update handling mode for the current OS and executable.
+fn detect_install_mode() -> InstallMode {
+    #[cfg(windows)]
     {
-        2
-    } else {
-        return None;
-    };
-    Some((format_rank, arch_rank))
-}
-
-fn rank_windows_asset(lower_name: &str, arch_rank: u8, prefer_portable: bool) -> Option<(u8, u8)> {
-    let format_rank = if lower_name.ends_with(".exe") {
-        if lower_name.contains("portable") {
-            if prefer_portable { 0 } else { 2 }
-        } else if lower_name.contains("setup") || lower_name.contains("installer") {
-            if prefer_portable { 1 } else { 0 }
-        } else {
-            3
-        }
-    } else if lower_name.ends_with(".msi") {
-        if prefer_portable { 2 } else { 1 }
-    } else {
-        return None;
-    };
-    Some((format_rank, arch_rank))
-}
-
-fn rank_linux_asset(lower_name: &str, arch_rank: u8) -> Option<(u8, u8)> {
-    let is_appimage = lower_name.ends_with(".appimage");
-    if !is_appimage && !lower_name.contains("linux") {
-        return None;
-    }
-    let format_rank = if lower_name.ends_with(".tar.gz") {
-        0
-    } else if is_appimage {
-        1
-    } else if lower_name.ends_with(".deb") {
-        2
-    } else if lower_name.ends_with(".rpm") {
-        3
-    } else {
-        return None;
-    };
-    Some((format_rank, arch_rank))
-}
-
-/// Pick the best release installer asset for the given OS, CPU architecture, and
-/// Windows portable preference.
-#[must_use]
-pub fn pick_asset<'a>(
-    assets: &'a [GitHubAsset],
-    os: &str,
-    arch: &str,
-    prefer_portable: bool,
-) -> Option<&'a GitHubAsset> {
-    let os_lower = os.trim().to_ascii_lowercase();
-    if !matches!(os_lower.as_str(), "macos" | "windows" | "linux") {
-        return None;
-    }
-
-    let mut best: Option<((u8, u8), &'a GitHubAsset)> = None;
-    for asset in assets {
-        if is_non_installer_asset(asset) {
-            continue;
-        }
-        let lower_name = asset.name.to_ascii_lowercase();
-        let Some(arch_rank) = arch_compatibility_rank(asset_arch_tag(&lower_name), arch) else {
-            continue;
-        };
-        let rank = match os_lower.as_str() {
-            "macos" => rank_macos_asset(&lower_name, arch_rank),
-            "windows" => rank_windows_asset(&lower_name, arch_rank, prefer_portable),
-            "linux" => rank_linux_asset(&lower_name, arch_rank),
-            _ => None,
-        };
-        let Some(rank) = rank else {
-            continue;
-        };
-        if best.as_ref().is_none_or(|(best_rank, _)| rank < *best_rank) {
-            best = Some((rank, asset));
-        }
-    }
-    best.map(|(_, asset)| asset)
-}
-
-fn is_valid_sha256_hex(hex: &str) -> bool {
-    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// Parse a GitHub asset digest of the form `"sha256:<64-hex>"` into lowercase 64-char hex.
-#[must_use]
-pub fn parse_sha256_digest(digest: &str) -> Option<String> {
-    let (prefix, hex) = digest.trim().split_once(':')?;
-    if !prefix.eq_ignore_ascii_case("sha256") || !is_valid_sha256_hex(hex) {
-        return None;
-    }
-    Some(hex.to_ascii_lowercase())
-}
-
-/// Extract the lowercase 64-char SHA-256 hex digest for `filename` from a
-/// `SHA256SUMS.txt` manifest.
-#[must_use]
-pub fn parse_sha256sums_line(text: &str, filename: &str) -> Option<String> {
-    if filename.is_empty() {
-        return None;
-    }
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some(hash) = line.get(..64) else {
-            continue;
-        };
-        if !is_valid_sha256_hex(hash) {
-            continue;
-        }
-        let Some(rest) = line.get(64..) else {
-            continue;
-        };
-        if !rest.starts_with([' ', '\t']) {
-            continue;
-        }
-        let after_ws = rest.trim_start_matches([' ', '\t']);
-        let after_mode = after_ws.strip_prefix('*').unwrap_or(after_ws);
-        let entry_name = after_mode.strip_prefix("./").unwrap_or(after_mode);
-        if entry_name == filename {
-            return Some(hash.to_ascii_lowercase());
-        }
-    }
-    None
-}
-
-const FALLBACK_RELEASES_URL: &str = "https://github.com/ad1-kamath/coursecraft/releases";
-const MAX_ASSET_FILENAME_CHARS: usize = 200;
-const MAX_UNIQUE_DOWNLOAD_ATTEMPTS: u32 = 1000;
-const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
-
-fn is_valid_subdomain_prefix(sub: &str) -> bool {
-    if sub.is_empty() {
-        return false;
-    }
-    sub.split('.').all(|label| {
-        !label.is_empty()
-            && !label.starts_with('-')
-            && !label.ends_with('-')
-            && label
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    })
-}
-
-fn extract_https_host(url: &str) -> Option<&str> {
-    if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
-        return None;
-    }
-    let rest = url.strip_prefix("https://")?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    if authority.is_empty() || authority.contains('@') {
-        return None;
-    }
-    match authority.split_once(':') {
-        Some((host, "443")) => Some(host),
-        Some(_) => None,
-        None => Some(authority),
-    }
-}
-
-/// Validate that an update or redirect URL uses `https://` and targets an
-/// allowlisted GitHub host (`api.github.com`, `github.com`, or
-/// `*.githubusercontent.com`).
-#[must_use]
-pub fn is_allowed_update_url(url: &str) -> bool {
-    let Some(host) = extract_https_host(url) else {
-        return false;
-    };
-    let lower = host.to_ascii_lowercase();
-    if lower == "api.github.com" || lower == "github.com" {
-        return true;
-    }
-    lower
-        .strip_suffix(".githubusercontent.com")
-        .is_some_and(is_valid_subdomain_prefix)
-}
-
-/// Resolve an HTTP `Location` header relative to `base`, rejecting empty values,
-/// whitespace/control characters, and non-HTTPS schemes.
-#[must_use]
-pub fn resolve_redirect_url(base: &str, location: &str) -> Option<String> {
-    if location.is_empty()
-        || location
-            .chars()
-            .any(|c| c.is_control() || c.is_whitespace())
-    {
-        return None;
-    }
-    if location.starts_with("https://") {
-        return Some(location.to_owned());
-    }
-    if let Some(rest) = location.strip_prefix("//") {
-        if rest.is_empty() || rest.starts_with('/') {
-            return None;
-        }
-        return Some(format!("https:{location}"));
-    }
-    if location.starts_with('/') {
-        if base.chars().any(|c| c.is_control() || c.is_whitespace()) {
-            return None;
-        }
-        let rest = base.strip_prefix("https://")?;
-        let authority = rest.split(['/', '?', '#']).next()?;
-        if authority.is_empty() {
-            return None;
-        }
-        return Some(format!("https://{authority}{location}"));
-    }
-    None
-}
-
-/// Validate a release asset filename before joining it onto a local directory.
-#[must_use]
-pub fn safe_asset_filename(name: &str) -> Option<String> {
-    if name.is_empty()
-        || name.trim().is_empty()
-        || name.chars().count() > MAX_ASSET_FILENAME_CHARS
-        || name.starts_with('.')
-        || name.contains("..")
-    {
-        return None;
-    }
-    if name
-        .chars()
-        .any(|c| matches!(c, '/' | '\\' | ':' | '\0') || c.is_control())
-    {
-        return None;
-    }
-    Some(name.to_owned())
-}
-
-fn path_is_occupied(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok() || path.exists()
-}
-
-fn split_filename_stem_ext(filename: &str) -> (&str, &str) {
-    let lower = filename.to_ascii_lowercase();
-    for compound in [".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst"] {
-        if lower.ends_with(compound) && filename.len() > compound.len() {
-            let split_at = filename.len() - compound.len();
-            if let (Some(stem), Some(ext)) = (filename.get(..split_at), filename.get(split_at..)) {
-                return (stem, ext);
-            }
-        }
-    }
-    if let Some(dot) = filename.rfind('.')
-        && dot > 0
-        && let (Some(stem), Some(ext)) = (filename.get(..dot), filename.get(dot..))
-    {
-        return (stem, ext);
-    }
-    (filename, "")
-}
-
-/// Pick a collision-free destination path under `dir` without overwriting any
-/// existing file. Preserves compound extensions such as `.tar.gz`.
-#[must_use]
-pub fn unique_download_path(dir: &Path, filename: &str) -> PathBuf {
-    let initial = dir.join(filename);
-    if !path_is_occupied(&initial) {
-        return initial;
-    }
-    let (stem, ext) = split_filename_stem_ext(filename);
-    for n in 1..=MAX_UNIQUE_DOWNLOAD_ATTEMPTS {
-        let candidate = dir.join(format!("{stem} ({n}){ext}"));
-        if !path_is_occupied(&candidate) {
-            return candidate;
-        }
-    }
-    dir.join(format!(
-        "{stem} ({}){ext}",
-        MAX_UNIQUE_DOWNLOAD_ATTEMPTS + 1
-    ))
-}
-
-fn part_path_for(dest: &Path) -> PathBuf {
-    let mut os = dest.as_os_str().to_os_string();
-    os.push(".part");
-    PathBuf::from(os)
-}
-
-/// Kind of HTTP request made by the update subsystem (selects timeouts/headers).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RequestKind {
-    /// GitHub Releases metadata JSON query.
-    Metadata,
-    /// `SHA256SUMS.txt` checksum manifest fetch.
-    Checksums,
-    /// Installer package binary stream.
-    Download,
-}
-
-/// Minimal HTTP response surface returned by [`UpdateHttp`].
-pub struct HttpResponse {
-    /// Numeric HTTP status code (e.g. `200`, `302`, `429`).
-    pub status: u16,
-    /// Value of the `Location` header, if present.
-    pub location: Option<String>,
-    /// Parsed `Content-Length` header value, if present.
-    pub content_length: Option<u64>,
-    /// Parsed `X-RateLimit-Remaining` header value, if present.
-    pub rate_limit_remaining: Option<u64>,
-    /// Streaming response body reader.
-    pub body: Box<dyn Read + Send>,
-}
-
-/// Testable HTTP transport seam for update checks and downloads.
-pub trait UpdateHttp: Send + Sync {
-    /// Perform a single non-redirecting HTTPS `GET` request.
-    ///
-    /// # Errors
-    /// Returns [`UpdateError`] on transport failures or timeouts.
-    fn get(
-        &self,
-        url: &str,
-        accept: &str,
-        user_agent: &str,
-        kind: RequestKind,
-    ) -> Result<HttpResponse, UpdateError>;
-}
-
-/// Execute an HTTPS `GET` while manually following up to [`MAX_REDIRECTS`]
-/// redirects and validating every hop with [`is_allowed_update_url`].
-///
-/// # Errors
-/// Returns [`UpdateError::DisallowedUrl`] if any hop or `Location` header is
-/// disallowed, [`UpdateError::TooManyRedirects`] if redirects exceed
-/// [`MAX_REDIRECTS`], or any transport error from `http`.
-pub fn follow_get_redirects(
-    http: &dyn UpdateHttp,
-    url: &str,
-    accept: &str,
-    user_agent: &str,
-    kind: RequestKind,
-) -> Result<HttpResponse, UpdateError> {
-    let mut current_url = url.to_owned();
-    for hop in 0..=MAX_REDIRECTS {
-        if !is_allowed_update_url(&current_url) {
-            return Err(UpdateError::DisallowedUrl);
-        }
-        let resp = http.get(&current_url, accept, user_agent, kind)?;
-        if !matches!(resp.status, 301 | 302 | 303 | 307 | 308) {
-            return Ok(resp);
-        }
-        if hop == MAX_REDIRECTS {
-            return Err(UpdateError::TooManyRedirects);
-        }
-        let Some(location) = resp.location.as_deref() else {
-            return Err(UpdateError::DisallowedUrl);
-        };
-        let Some(next_url) = resolve_redirect_url(&current_url, location) else {
-            return Err(UpdateError::DisallowedUrl);
-        };
-        current_url = next_url;
-    }
-    Err(UpdateError::TooManyRedirects)
-}
-
-fn check_http_status(status: u16, rate_limit_remaining: Option<u64>) -> Result<(), UpdateError> {
-    if (200..300).contains(&status) {
-        return Ok(());
-    }
-    if status == 429 || (status == 403 && rate_limit_remaining == Some(0)) {
-        return Err(UpdateError::RateLimited);
-    }
-    Err(UpdateError::HttpStatus(status))
-}
-
-fn is_io_timeout(err: &io::Error) -> bool {
-    err.kind() == io::ErrorKind::TimedOut
-        || err
-            .get_ref()
-            .and_then(|inner| inner.downcast_ref::<ureq::Error>())
-            .is_some_and(|e| matches!(e, ureq::Error::Timeout(_)))
-}
-
-fn read_capped_bytes(reader: &mut dyn Read, max_bytes: usize) -> Result<Vec<u8>, UpdateError> {
-    let limit = (max_bytes as u64).saturating_add(1);
-    let mut buf = Vec::new();
-    let mut limited = reader.take(limit);
-    limited.read_to_end(&mut buf).map_err(|err| {
-        if is_io_timeout(&err) {
-            UpdateError::Timeout
-        } else {
-            UpdateError::Network(err.to_string())
-        }
-    })?;
-    if buf.len() > max_bytes {
-        return Err(UpdateError::InvalidResponse);
-    }
-    Ok(buf)
-}
-
-/// Matched installer asset resolved from a GitHub release.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedAsset {
-    /// Release asset filename.
-    pub name: String,
-    /// Direct download URL for the asset.
-    pub download_url: String,
-    /// Declared byte size from GitHub.
-    pub size: u64,
-    /// Normalized lowercase 64-char SHA-256 hex digest from `asset.digest`, if valid.
-    pub sha256_digest: Option<String>,
-}
-
-/// Resolved update metadata ready for display or download.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedUpdate {
-    /// New SemVer version string (without leading `v`).
-    pub version: String,
-    /// Currently running SemVer version string.
-    pub current_version: String,
-    /// Validated HTTPS release page URL on GitHub.
-    pub release_url: String,
-    /// Raw Markdown release notes body.
-    pub notes_markdown: String,
-    /// ISO-8601 publication timestamp, if provided.
-    pub published_at: Option<String>,
-    /// Platform-matched installer asset, if one exists for the target OS/CPU.
-    pub asset: Option<ResolvedAsset>,
-    /// Download URL for `SHA256SUMS.txt` if present on the release.
-    pub checksums_url: Option<String>,
-}
-
-/// Outcome of checking GitHub Releases for a newer CourseCraft version.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(clippy::large_enum_variant)]
-pub enum CheckOutcome {
-    /// Running version is already at or ahead of the latest eligible release.
-    UpToDate,
-    /// A newer eligible release is available.
-    Available(ResolvedUpdate),
-}
-
-/// Query GitHub Releases via `http` and resolve whether an update is available
-/// for the given current version and target platform.
-///
-/// # Errors
-/// Returns [`UpdateError`] on disallowed URLs, rate limits, HTTP/network errors,
-/// or malformed/oversized responses.
-pub fn check_for_update_with(
-    http: &dyn UpdateHttp,
-    api_url: &str,
-    current: &semver::Version,
-    os: &str,
-    arch: &str,
-    prefer_portable: bool,
-) -> Result<CheckOutcome, UpdateError> {
-    let current_str = current.to_string();
-    let ua = user_agent(&current_str);
-    let mut resp = follow_get_redirects(
-        http,
-        api_url,
-        "application/vnd.github+json",
-        &ua,
-        RequestKind::Metadata,
-    )?;
-    check_http_status(resp.status, resp.rate_limit_remaining)?;
-    let bytes = read_capped_bytes(&mut *resp.body, MAX_API_RESPONSE_BYTES)?;
-    let releases = parse_releases_json(&bytes)?;
-
-    let Some((version, release)) = select_latest_update(releases, current) else {
-        return Ok(CheckOutcome::UpToDate);
-    };
-
-    let asset =
-        pick_asset(&release.assets, os, arch, prefer_portable).map(|picked| ResolvedAsset {
-            name: picked.name.clone(),
-            download_url: picked.browser_download_url.clone(),
-            size: picked.size,
-            sha256_digest: picked.digest.as_deref().and_then(parse_sha256_digest),
-        });
-    let checksums_url = find_checksums_asset(&release.assets)
-        .map(|a| a.browser_download_url.clone())
-        .filter(|u| !u.trim().is_empty());
-    let release_url = if is_allowed_update_url(&release.html_url) {
-        release.html_url
-    } else {
-        FALLBACK_RELEASES_URL.to_string()
-    };
-
-    Ok(CheckOutcome::Available(ResolvedUpdate {
-        version: version.to_string(),
-        current_version: current_str,
-        release_url,
-        notes_markdown: release.body,
-        published_at: release.published_at,
-        asset,
-        checksums_url,
-    }))
-}
-
-/// Parameters for a streaming, verified installer download.
-pub struct DownloadSpec<'a> {
-    /// Asset download URL (must satisfy [`is_allowed_update_url`]).
-    pub url: &'a str,
-    /// Declared byte size from GitHub, if known.
-    pub expected_size: Option<u64>,
-    /// Expected SHA-256 digest (either 64-char hex or `"sha256:<64-hex>"`), if known.
-    pub expected_sha256: Option<&'a str>,
-    /// Optional fallback URL to a `SHA256SUMS.txt` manifest.
-    pub checksums_url: Option<&'a str>,
-    /// Local destination directory (typically the user's Downloads folder).
-    pub dest_dir: &'a Path,
-    /// Asset filename (validated via [`safe_asset_filename`]).
-    pub filename: &'a str,
-    /// Privacy-preserving `User-Agent` header value.
-    pub user_agent: &'a str,
-}
-
-/// Result of a completed and verified installer download.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownloadResult {
-    /// Final saved file path in `dest_dir`.
-    pub path: PathBuf,
-    /// Exact number of bytes written.
-    pub bytes: u64,
-    /// Whether the file was verified against a SHA-256 digest.
-    pub sha256_verified: bool,
-}
-
-fn encode_hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        out.push(char::from(HEX[usize::from(b >> 4)]));
-        out.push(char::from(HEX[usize::from(b & 0x0f)]));
-    }
-    out
-}
-
-fn normalize_expected_sha256(raw: &str) -> Option<String> {
-    if let Some(parsed) = parse_sha256_digest(raw) {
-        return Some(parsed);
-    }
-    let trimmed = raw.trim();
-    if is_valid_sha256_hex(trimmed) {
-        Some(trimmed.to_ascii_lowercase())
-    } else {
-        None
-    }
-}
-
-fn resolve_expected_sha256(
-    http: &dyn UpdateHttp,
-    spec: &DownloadSpec<'_>,
-    safe_name: &str,
-) -> Result<Option<String>, UpdateError> {
-    if let Some(expected) = spec.expected_sha256 {
-        let normalized = normalize_expected_sha256(expected).ok_or(UpdateError::InvalidResponse)?;
-        return Ok(Some(normalized));
-    }
-    let Some(sums_url) = spec.checksums_url else {
-        return Ok(None);
-    };
-    let mut resp = follow_get_redirects(
-        http,
-        sums_url,
-        "text/plain, */*",
-        spec.user_agent,
-        RequestKind::Checksums,
-    )?;
-    check_http_status(resp.status, resp.rate_limit_remaining)?;
-    let bytes = read_capped_bytes(&mut *resp.body, MAX_SUMS_BYTES)?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| UpdateError::InvalidResponse)?;
-    Ok(parse_sha256sums_line(text, safe_name))
-}
-
-struct StreamTarget<'a> {
-    part_path: &'a Path,
-    expected_size: Option<u64>,
-    content_length: Option<u64>,
-    expected_sha256: Option<&'a str>,
-}
-
-fn verify_stream_completion(
-    downloaded: u64,
-    target: &StreamTarget<'_>,
-    actual_hex: &str,
-) -> Result<bool, UpdateError> {
-    if let Some(expected) = target.expected_size {
-        if downloaded < expected {
-            return Err(UpdateError::DownloadTruncated);
-        }
-    } else if let Some(cl) = target.content_length
-        && downloaded < cl
-    {
-        return Err(UpdateError::DownloadTruncated);
-    }
-
-    if let Some(expected_hex) = target.expected_sha256 {
-        if actual_hex != expected_hex {
-            return Err(UpdateError::ChecksumMismatch);
-        }
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-fn stream_to_part_file(
-    reader: &mut dyn Read,
-    target: &StreamTarget<'_>,
-    cancel: &AtomicBool,
-    on_progress: &mut impl FnMut(u64, Option<u64>),
-) -> Result<(u64, bool), UpdateError> {
-    let mut file = File::create(target.part_path).map_err(|e| UpdateError::Io(e.to_string()))?;
-    let mut buf = vec![0_u8; DOWNLOAD_CHUNK_BYTES];
-    let mut hasher = ring::digest::Context::new(&ring::digest::SHA256);
-    let mut downloaded: u64 = 0;
-    let total = target.expected_size.or(target.content_length);
-
-    loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(UpdateError::Cancelled);
-        }
-        let n = match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) if is_io_timeout(&err) => return Err(UpdateError::Timeout),
-            Err(err) => return Err(UpdateError::Network(err.to_string())),
-        };
-        downloaded = downloaded.saturating_add(n as u64);
-        if downloaded > MAX_DOWNLOAD_BYTES
-            || target.expected_size.is_some_and(|exp| downloaded > exp)
+        if std::env::current_exe()
+            .ok()
+            .is_some_and(|exe| is_legacy_portable_at(&exe))
         {
-            return Err(UpdateError::DownloadTooLarge);
-        }
-        let Some(chunk) = buf.get(..n) else {
-            return Err(UpdateError::InvalidResponse);
-        };
-        file.write_all(chunk)
-            .map_err(|e| UpdateError::Io(e.to_string()))?;
-        hasher.update(chunk);
-        on_progress(downloaded, total);
-    }
-
-    if cancel.load(Ordering::Relaxed) {
-        return Err(UpdateError::Cancelled);
-    }
-    file.flush().map_err(|e| UpdateError::Io(e.to_string()))?;
-    let actual_hex = encode_hex_lower(hasher.finish().as_ref());
-    let sha256_verified = verify_stream_completion(downloaded, target, &actual_hex)?;
-    Ok((downloaded, sha256_verified))
-}
-
-/// Stream a release installer to a `.part` file under `spec.dest_dir`, verify
-/// size limits and SHA-256 (from `expected_sha256` or `SHA256SUMS.txt`), and
-/// atomically rename to a collision-free final path. Removes `.part` on any
-/// error or cancellation.
-///
-/// # Errors
-/// Returns [`UpdateError`] on invalid filename/URL, cancellation, size limit or
-/// truncation failure, SHA-256 mismatch, HTTP/network failure, or local I/O error.
-pub fn download_asset_verified(
-    http: &dyn UpdateHttp,
-    spec: &DownloadSpec<'_>,
-    cancel: &AtomicBool,
-    mut on_progress: impl FnMut(u64, Option<u64>),
-) -> Result<DownloadResult, UpdateError> {
-    if cancel.load(Ordering::Relaxed) {
-        return Err(UpdateError::Cancelled);
-    }
-    let safe_name = safe_asset_filename(spec.filename).ok_or(UpdateError::InvalidResponse)?;
-    if !is_allowed_update_url(spec.url) {
-        return Err(UpdateError::DisallowedUrl);
-    }
-    if spec.expected_size.is_some_and(|s| s > MAX_DOWNLOAD_BYTES) {
-        return Err(UpdateError::DownloadTooLarge);
-    }
-
-    let expected_sha256 = resolve_expected_sha256(http, spec, &safe_name)?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err(UpdateError::Cancelled);
-    }
-
-    let mut resp = follow_get_redirects(
-        http,
-        spec.url,
-        "application/octet-stream",
-        spec.user_agent,
-        RequestKind::Download,
-    )?;
-    check_http_status(resp.status, resp.rate_limit_remaining)?;
-    if resp
-        .content_length
-        .is_some_and(|cl| cl > MAX_DOWNLOAD_BYTES)
-        || spec
-            .expected_size
-            .is_some_and(|exp| resp.content_length.is_some_and(|cl| cl > exp))
-    {
-        return Err(UpdateError::DownloadTooLarge);
-    }
-
-    let dest = unique_download_path(spec.dest_dir, &safe_name);
-    let part = part_path_for(&dest);
-    let target = StreamTarget {
-        part_path: &part,
-        expected_size: spec.expected_size,
-        content_length: resp.content_length,
-        expected_sha256: expected_sha256.as_deref(),
-    };
-
-    let (bytes, sha256_verified) =
-        match stream_to_part_file(&mut *resp.body, &target, cancel, &mut on_progress) {
-            Ok(res) => res,
-            Err(err) => {
-                let _ = std::fs::remove_file(&part);
-                return Err(err);
-            }
-        };
-
-    if let Err(err) = std::fs::rename(&part, &dest) {
-        let _ = std::fs::remove_file(&part);
-        return Err(UpdateError::Io(err.to_string()));
-    }
-
-    Ok(DownloadResult {
-        path: dest,
-        bytes,
-        sha256_verified,
-    })
-}
-
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
-const DOWNLOAD_RECV_TIMEOUT: Duration = Duration::from_secs(30);
-const GITHUB_API_VERSION: &str = "2022-11-28";
-const DEFAULT_RELEASES_API_URL: &str =
-    "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20";
-const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
-const PROGRESS_MIN_BYTES: u64 = 128 * 1024;
-
-/// Production HTTPS transport backed by `ureq` with manual redirect handling
-/// and per-request timeouts.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct UreqHttp;
-
-impl UreqHttp {
-    fn build_config(kind: RequestKind, user_agent: &str) -> ureq::config::Config {
-        let mut builder = ureq::config::Config::builder()
-            .max_redirects(0)
-            .http_status_as_error(false)
-            .https_only(true)
-            .user_agent(user_agent)
-            .accept_encoding("")
-            .timeout_connect(Some(CONNECT_TIMEOUT));
-        builder = match kind {
-            RequestKind::Metadata | RequestKind::Checksums => {
-                builder.timeout_global(Some(METADATA_TIMEOUT))
-            }
-            RequestKind::Download => builder
-                .timeout_resolve(Some(CONNECT_TIMEOUT))
-                .timeout_send_request(Some(CONNECT_TIMEOUT))
-                .timeout_recv_response(Some(DOWNLOAD_RECV_TIMEOUT))
-                .timeout_per_read(Some(DOWNLOAD_RECV_TIMEOUT)),
-        };
-        builder.build()
-    }
-
-    fn build_agent(kind: RequestKind, user_agent: &str) -> ureq::Agent {
-        ureq::Agent::new_with_config(Self::build_config(kind, user_agent))
-    }
-}
-
-fn map_ureq_error(err: ureq::Error) -> UpdateError {
-    match err {
-        ureq::Error::Timeout(_) => UpdateError::Timeout,
-        ureq::Error::Io(ref io_err) if is_io_timeout(io_err) => UpdateError::Timeout,
-        ureq::Error::RequireHttpsOnly(_) => UpdateError::DisallowedUrl,
-        other => UpdateError::Network(other.to_string()),
-    }
-}
-
-fn header_str(headers: &ureq::http::HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-}
-
-fn header_u64(headers: &ureq::http::HeaderMap, name: &str) -> Option<u64> {
-    headers
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
-}
-
-impl UpdateHttp for UreqHttp {
-    fn get(
-        &self,
-        url: &str,
-        accept: &str,
-        user_agent: &str,
-        kind: RequestKind,
-    ) -> Result<HttpResponse, UpdateError> {
-        let agent = Self::build_agent(kind, user_agent);
-        let mut req = agent
-            .get(url)
-            .header("User-Agent", user_agent)
-            .header("Accept", accept);
-        if kind == RequestKind::Metadata {
-            req = req.header("X-GitHub-Api-Version", GITHUB_API_VERSION);
-        }
-        let response = req.call().map_err(map_ureq_error)?;
-        let status = response.status().as_u16();
-        let headers = response.headers();
-        let location = header_str(headers, "location");
-        let content_length = header_u64(headers, "content-length");
-        let rate_limit_remaining = header_u64(headers, "x-ratelimit-remaining");
-        let body = Box::new(response.into_body().into_reader());
-        Ok(HttpResponse {
-            status,
-            location,
-            content_length,
-            rate_limit_remaining,
-            body,
-        })
-    }
-}
-
-fn unquote_xdg_value(raw: &str) -> String {
-    let trimmed = raw.trim();
-    let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
-        return trimmed.to_owned();
-    };
-    let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
-            }
+            InstallMode::WindowsLegacyPortable
         } else {
-            out.push(ch);
+            InstallMode::WindowsSetup
         }
     }
-    out
-}
-
-fn expand_xdg_path(value: &str, home: &Path) -> Option<PathBuf> {
-    if value.is_empty() || value.chars().any(char::is_control) {
-        return None;
-    }
-    if value == "$HOME" || value == "$HOME/" || value == "${HOME}" || value == "${HOME}/" {
-        return Some(home.to_path_buf());
-    }
-    if let Some(rest) = value
-        .strip_prefix("$HOME/")
-        .or_else(|| value.strip_prefix("${HOME}/"))
+    #[cfg(not(windows))]
     {
-        let rel = rest.trim_start_matches('/');
-        if rel.is_empty() {
-            return Some(home.to_path_buf());
-        }
-        return Some(home.join(rel));
+        InstallMode::CraftUpdate
     }
-    if value.starts_with('/') {
-        return Some(PathBuf::from(value));
-    }
-    None
 }
 
-/// Parse `XDG_DOWNLOAD_DIR` from an `xdg-user-dirs` `user-dirs.dirs` file.
+/// The Linux package format matching the running process: `.AppImage` when `$APPIMAGE` is set
+/// and non-empty, `.tar.gz` otherwise (matching `craft_update::self_update`'s Linux detection).
 #[must_use]
-pub fn parse_xdg_download_dir(text: &str, home: &Path) -> Option<PathBuf> {
-    let mut found = None;
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, raw_val)) = line.split_once('=') else {
-            continue;
-        };
-        if key.trim() != "XDG_DOWNLOAD_DIR" {
-            continue;
-        }
-        let unquoted = unquote_xdg_value(raw_val);
-        if let Some(path) = expand_xdg_path(&unquoted, home) {
-            found = Some(path);
-        }
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn linux_package_kind(appimage_env: Option<&OsStr>) -> PackageKind {
+    if appimage_env.is_some_and(|value| !value.is_empty()) {
+        PackageKind::AppImage
+    } else {
+        PackageKind::TarGz
     }
-    found
 }
 
-fn non_empty_env_path(key: &str) -> Option<PathBuf> {
-    let val = std::env::var_os(key)?;
-    if val.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(val))
-}
-
-/// Return the user's standard Downloads directory for the current platform.
+/// Picks the matching Linux release asset (`.AppImage` when `$APPIMAGE` is set, `.tar.gz`
+/// otherwise) using `craft-update`'s asset matcher.
 #[must_use]
-pub fn downloads_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        non_empty_env_path("HOME").map(|home| home.join("Downloads"))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        non_empty_env_path("USERPROFILE").map(|profile| profile.join("Downloads"))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let home = non_empty_env_path("HOME")?;
-        let config_dir = non_empty_env_path("XDG_CONFIG_HOME")
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| home.join(".config"));
-        let dirs_file = config_dir.join("user-dirs.dirs");
-        if let Ok(text) = std::fs::read_to_string(dirs_file)
-            && let Some(parsed) = parse_xdg_download_dir(&text, &home)
-        {
-            return Some(parsed);
-        }
-        Some(home.join("Downloads"))
-    }
-}
-
-/// Return `true` when an executable path's file stem indicates a portable build.
-#[must_use]
-pub fn exe_path_is_portable(path: &Path) -> bool {
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .is_some_and(|stem| stem.to_ascii_lowercase().contains("portable"))
-}
-
-/// Return `true` when the currently running binary appears to be a portable build.
-#[must_use]
-pub fn is_portable_install() -> bool {
-    std::env::current_exe()
-        .ok()
-        .is_some_and(|path| exe_path_is_portable(&path))
-}
-
-/// Events emitted by [`UpdateClient`] background worker threads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(clippy::large_enum_variant)]
-pub enum UpdateEvent {
-    /// A version check completed (either silent startup or manual).
-    CheckFinished {
-        /// `true` when explicitly requested by the user; `false` for silent startup checks.
-        manual: bool,
-        /// Outcome or error from the check.
-        result: Result<CheckOutcome, UpdateError>,
-    },
-    /// Throttled download progress update.
-    DownloadProgress {
-        /// Bytes written so far.
-        downloaded: u64,
-        /// Total expected bytes, if known.
-        total: Option<u64>,
-    },
-    /// A download completed, failed, or was cancelled.
-    DownloadFinished(Result<DownloadResult, UpdateError>),
-}
-
-/// Current background activity of [`UpdateClient`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateBusy {
-    /// No update check or download is running.
-    Idle,
-    /// A background update check is in flight.
-    Checking,
-    /// A background installer download is in flight.
-    Downloading,
-}
-
-struct DownloadJob {
-    http: Arc<dyn UpdateHttp>,
-    asset: ResolvedAsset,
-    checksums_url: Option<String>,
-    dest_dir: PathBuf,
-    user_agent: String,
-    cancel: Arc<AtomicBool>,
-    tx: mpsc::Sender<UpdateEvent>,
-    ctx: egui::Context,
-}
-
-fn run_download_job(job: DownloadJob) {
-    let mut last_sent_at: Option<Instant> = None;
-    let mut last_sent_bytes: u64 = 0;
-    let mut last_total: Option<u64> = None;
-
-    let spec = DownloadSpec {
-        url: &job.asset.download_url,
-        expected_size: (job.asset.size > 0).then_some(job.asset.size),
-        expected_sha256: job.asset.sha256_digest.as_deref(),
-        checksums_url: job.checksums_url.as_deref(),
-        dest_dir: &job.dest_dir,
-        filename: &job.asset.name,
-        user_agent: &job.user_agent,
-    };
-
-    let result = download_asset_verified(
-        job.http.as_ref(),
-        &spec,
-        &job.cancel,
-        |downloaded, total| {
-            last_total = total;
-            let now = Instant::now();
-            let should_send = last_sent_at.is_none()
-                || total.is_some_and(|t| downloaded >= t)
-                || last_sent_at.is_some_and(|t| now.duration_since(t) >= PROGRESS_MIN_INTERVAL)
-                || downloaded.saturating_sub(last_sent_bytes) >= PROGRESS_MIN_BYTES;
-            if should_send {
-                let _ = job
-                    .tx
-                    .send(UpdateEvent::DownloadProgress { downloaded, total });
-                job.ctx.request_repaint();
-                last_sent_at = Some(now);
-                last_sent_bytes = downloaded;
-            }
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn select_linux_asset<'a>(
+    release: &'a Release,
+    arch: Arch,
+    appimage_env: Option<&OsStr>,
+) -> Option<(&'a Asset, PackageKind)> {
+    let stems: Vec<&str> = UPDATE_APP.stems().collect();
+    let kind = linux_package_kind(appimage_env);
+    pick_asset(
+        release,
+        &stems,
+        Platform {
+            os: Os::Linux,
+            arch,
         },
-    );
-
-    if let Ok(ref done) = result
-        && last_sent_bytes < done.bytes
-    {
-        let _ = job.tx.send(UpdateEvent::DownloadProgress {
-            downloaded: done.bytes,
-            total: last_total.or(Some(done.bytes)),
-        });
-    }
-
-    let _ = job.tx.send(UpdateEvent::DownloadFinished(result));
-    job.ctx.request_repaint();
+        &[kind],
+    )
 }
 
-/// Non-blocking desktop update coordinator running checks and downloads on a
-/// background thread and notifying the UI via an `mpsc` channel.
-pub struct UpdateClient {
-    http: Arc<dyn UpdateHttp>,
-    api_url: String,
-    current_version: semver::Version,
-    os: String,
-    arch: String,
-    prefer_portable: bool,
-    rx: Option<mpsc::Receiver<UpdateEvent>>,
-    busy: UpdateBusy,
-    cancel: Arc<AtomicBool>,
-}
-
-impl Default for UpdateClient {
-    fn default() -> Self {
-        Self::new()
+/// Preferred Windows asset platform tokens for `arch` (native first, then emulated).
+fn windows_tokens(arch: Arch) -> &'static [&'static str] {
+    match arch {
+        Arch::X64 => &["windows-x64", "windows-x86"],
+        Arch::Arm64 => &["windows-arm64", "windows-x64", "windows-x86"],
+        Arch::X86 => &["windows-x86"],
+        Arch::Riscv64 => &[],
     }
 }
 
-impl UpdateClient {
-    /// Construct a production update client targeting the official GitHub releases feed.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            http: Arc::new(UreqHttp),
-            api_url: DEFAULT_RELEASES_API_URL.to_string(),
-            current_version: current_version().unwrap_or_else(|| semver::Version::new(0, 0, 0)),
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-            prefer_portable: is_portable_install(),
-            rx: None,
-            busy: UpdateBusy::Idle,
-            cancel: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    /// Construct an update client with an injected HTTP transport and platform metadata for tests.
-    #[cfg(test)]
-    #[must_use]
-    pub fn with_http_and_env(
-        http: Arc<dyn UpdateHttp>,
-        current: semver::Version,
-        os: &str,
-        arch: &str,
-        prefer_portable: bool,
-    ) -> Self {
-        Self {
-            http,
-            api_url: DEFAULT_RELEASES_API_URL.to_string(),
-            current_version: current,
-            os: os.to_string(),
-            arch: arch.to_string(),
-            prefer_portable,
-            rx: None,
-            busy: UpdateBusy::Idle,
-            cancel: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    /// Return the current background activity state.
-    #[must_use]
-    pub fn busy(&self) -> UpdateBusy {
-        self.busy
-    }
-
-    /// Spawn a background version check if the client is currently idle.
-    ///
-    /// Returns `false` if a check or download is already in progress (or if the
-    /// worker thread could not be spawned).
-    pub fn start_check(&mut self, manual: bool, ctx: &egui::Context) -> bool {
-        if self.busy != UpdateBusy::Idle {
-            return false;
-        }
-        let (tx, rx) = mpsc::channel();
-        let http = Arc::clone(&self.http);
-        let api_url = self.api_url.clone();
-        let current = self.current_version.clone();
-        let os = self.os.clone();
-        let arch = self.arch.clone();
-        let prefer_portable = self.prefer_portable;
-        let ctx = ctx.clone();
-
-        let spawned = std::thread::Builder::new()
-            .name("coursecraft-update-check".to_string())
-            .spawn(move || {
-                let result = check_for_update_with(
-                    http.as_ref(),
-                    &api_url,
-                    &current,
-                    &os,
-                    &arch,
-                    prefer_portable,
-                );
-                let _ = tx.send(UpdateEvent::CheckFinished { manual, result });
-                ctx.request_repaint();
-            });
-
-        if spawned.is_err() {
-            return false;
-        }
-
-        self.rx = Some(rx);
-        self.busy = UpdateBusy::Checking;
-        true
-    }
-
-    /// Spawn a background verified download if the client is currently idle.
-    ///
-    /// Returns `false` if a check or download is already in progress (or if the
-    /// worker thread could not be spawned).
-    pub fn start_download(
-        &mut self,
-        asset: ResolvedAsset,
-        checksums_url: Option<String>,
-        dest_dir: PathBuf,
-        ctx: &egui::Context,
-    ) -> bool {
-        if self.busy != UpdateBusy::Idle {
-            return false;
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
-        let job = DownloadJob {
-            http: Arc::clone(&self.http),
-            asset,
-            checksums_url,
-            dest_dir,
-            user_agent: user_agent(&self.current_version.to_string()),
-            cancel: Arc::clone(&cancel),
-            tx,
-            ctx: ctx.clone(),
+/// Parses a Windows Inno Setup installer asset name (`<stem>-<version>-windows-<arch>-setup.exe`),
+/// returning its `<os>-<arch>` token when it matches one of `stems` and a valid version.
+fn parse_windows_setup_token(name: &str, stems: &[&str]) -> Option<String> {
+    let base = name.strip_suffix("-setup.exe")?;
+    for stem in stems {
+        let Some(rest) = base.strip_prefix(stem).and_then(|r| r.strip_prefix('-')) else {
+            continue;
         };
+        let mut parts = rest.rsplitn(3, '-');
+        let (Some(arch), Some(os), Some(version)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if os != "windows"
+            || craft_update::parse_version(version).is_none()
+            || !version.starts_with(|c: char| c.is_ascii_digit())
+        {
+            continue;
+        }
+        return Some(format!("{os}-{arch}"));
+    }
+    None
+}
 
-        let spawned = std::thread::Builder::new()
-            .name("coursecraft-update-download".to_string())
-            .spawn(move || run_download_job(job));
+/// Picks the Windows `-setup.exe` installer asset from `release` for `arch`. Never selects a
+/// portable zip or a non-Windows file.
+#[must_use]
+pub(crate) fn select_windows_setup_asset<'a>(
+    release: &'a Release,
+    stems: &[&str],
+    arch: Arch,
+) -> Option<&'a Asset> {
+    let parsed: Vec<(&Asset, String)> = release
+        .assets
+        .iter()
+        .filter_map(|asset| {
+            parse_windows_setup_token(&asset.name, stems).map(|token| (asset, token))
+        })
+        .collect();
+    for token in windows_tokens(arch) {
+        if let Some((asset, _)) = parsed.iter().find(|(_, t)| t == token) {
+            return Some(*asset);
+        }
+    }
+    None
+}
 
-        if spawned.is_err() {
-            return false;
+/// The safe download link for a Windows update: the release's `-setup.exe` asset when present and
+/// bound to `app`'s repository/tag, otherwise the release page or the app's releases page.
+#[must_use]
+pub(crate) fn windows_download_url(
+    app: &craft_update::App,
+    release: &Release,
+    arch: Arch,
+) -> Option<String> {
+    let stems: Vec<&str> = app.stems().collect();
+    let repo = if release.repo.is_empty() {
+        app.repo
+    } else {
+        release.repo.as_str()
+    };
+    if let Some(asset) = select_windows_setup_asset(release, &stems, arch)
+        && safe_web_link(&asset.url)
+        && expected_download_url(repo, &release.tag, &asset.name)
+            .is_some_and(|expected| same_download_url(&asset.url, &expected))
+    {
+        return Some(asset.url.clone());
+    }
+    release_download_url(app, release)
+}
+
+/// The safe release-page link for manual download on non-Windows platforms.
+#[must_use]
+fn release_download_url(app: &craft_update::App, release: &Release) -> Option<String> {
+    if safe_web_link(&release.html_url) {
+        return Some(release.html_url.clone());
+    }
+    let releases = app.releases_url();
+    safe_web_link(&releases).then_some(releases)
+}
+
+fn current_windows_arch() -> Arch {
+    Platform::current().map_or(Arch::X64, |p| p.arch)
+}
+
+fn running_version() -> String {
+    craft_update::self_update::current_version(&UPDATE_APP, VERSION)
+        .map_or_else(|| VERSION.to_owned(), |v| v.to_string())
+}
+
+fn can_install_itself(release: &Release) -> bool {
+    craft_update::self_update::is_self_updating(&UPDATE_APP)
+        && craft_update::self_update::release_installs(&UPDATE_APP, release)
+}
+
+fn save_first_note() -> Note {
+    Note::new(
+        "Save or close your open work first; the update restarts the app.",
+        &[],
+    )
+}
+
+fn installed_note() -> Note {
+    Note::new(READY_TEXT, &[("app", UPDATE_APP.name)])
+}
+
+fn build_prompt(release: Release, mode: InstallMode, installs_itself: bool) -> StartupPrompt {
+    let self_update = mode == InstallMode::CraftUpdate && installs_itself;
+    let mut prompt =
+        StartupPrompt::with_self_update(&UPDATE_APP, release, running_version(), self_update)
+            .with_translator(translate);
+    if mode == InstallMode::WindowsLegacyPortable {
+        prompt.set_note(Note::new(PORTABLE_DISCONTINUED_NOTE, &[]));
+    }
+    prompt
+}
+
+/// A prepared update waiting for process exit.
+enum ReadyUpdate {
+    Real(Restart),
+    #[cfg(test)]
+    Simulated(Arc<std::sync::atomic::AtomicBool>),
+}
+
+impl ReadyUpdate {
+    fn start(self) -> Result<(), String> {
+        match self {
+            Self::Real(restart) => restart.start(),
+            #[cfg(test)]
+            Self::Simulated(ran) => {
+                ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// An in-flight self-update download/install worker with its cancellation handle.
+struct ActiveInstall {
+    rx: Receiver<Result<ReadyUpdate, String>>,
+    stop: Arc<Stop>,
+}
+
+#[cfg(test)]
+type InstallProbe = Arc<dyn Fn(&Release) -> bool + Send + Sync>;
+#[cfg(test)]
+type InstallRunner = Arc<dyn Fn(&Release, Arc<Stop>) -> Result<ReadyUpdate, String> + Send + Sync>;
+
+/// Downloads, verifies, and prepares a self-update while checking `stop` throughout download and
+/// immediately before swapping the installed binary/bundle on disk.
+fn run_self_update(
+    installed: &craft_update::self_update::Install,
+    mut release: Release,
+    version: &str,
+    stop: &Stop,
+) -> Result<ReadyUpdate, String> {
+    stop.check()?;
+    let http = craft_update::Http::new(&format!("{}/Update", UPDATE_APP.name))
+        .map_err(|e| format!("could not initialize HTTP: {e}"))?;
+    if release.assets.is_empty() {
+        stop.check()?;
+        if let Some(full) = craft_update::check_for_update(&UPDATE_APP, &http, version)
+            .map_err(|e| format!("could not fetch release assets: {e}"))?
+        {
+            release = full;
+        }
+    }
+    stop.check()?;
+    let paths = craft_update::Paths::for_app(&UPDATE_APP)
+        .map_err(|e| format!("could not find paths: {e}"))?;
+    let platform = Platform::current().ok_or("unsupported platform for self update")?;
+    let restart = craft_update::self_update::prepare_update(
+        &UPDATE_APP,
+        installed,
+        &release,
+        platform,
+        &http,
+        &paths,
+        stop,
+        &mut |_| {},
+        &|| stop.check(),
+        Some(version),
+    )?;
+    stop.check()?;
+    Ok(ReadyUpdate::Real(restart))
+}
+
+/// The updater and whether this run checks at start.
+pub struct Runtime {
+    updater: Updater,
+    mode: InstallMode,
+    /// Release discovered by the background check thread (`(release, installs_itself)`),
+    /// intercepted so CourseCraft owns the prompt and cancellable install worker.
+    intercepted: Arc<Mutex<Option<(Release, bool)>>>,
+    prompt: Option<StartupPrompt>,
+    install: Option<ActiveInstall>,
+    restart: Option<ReadyUpdate>,
+    close_wanted: bool,
+    local_status: Option<Status>,
+    #[cfg(test)]
+    install_runner: Option<InstallRunner>,
+    /// The desktop host turns the check at start on (preference on, not CI); tests leave it off.
+    enabled: bool,
+    check_requested: bool,
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::with_mode(detect_install_mode(), None)
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        self.start_pending_update();
+    }
+}
+
+/// The prompt's words in the interface language, through the editor's catalogs.
+fn translate(text: &str, args: &[(&str, &str)]) -> String {
+    coursecraft_ui_egui::i18n::translate_with(text, args)
+}
+
+impl Runtime {
+    /// Builds a runtime for `mode`, optionally substituting `source` for GitHub API calls (tests).
+    fn with_mode(mode: InstallMode, source: Option<CheckSource>) -> Self {
+        Self::with_hooks(
+            mode,
+            source,
+            #[cfg(test)]
+            None,
+            #[cfg(test)]
+            None,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    fn with_hooks(
+        mode: InstallMode,
+        source: Option<CheckSource>,
+        #[cfg(test)] records_root: Option<&Path>,
+        #[cfg(test)] install_probe: Option<InstallProbe>,
+        #[cfg(test)] install_runner: Option<InstallRunner>,
+    ) -> Self {
+        let intercepted = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&intercepted);
+        let wrapped: CheckSource = Arc::new(move || {
+            let result = match &source {
+                Some(ask) => ask(),
+                None => craft_update::Http::new(&format!("{}/Update", UPDATE_APP.name))
+                    .and_then(|http| craft_update::check_for_update(&UPDATE_APP, &http, VERSION)),
+            };
+            match result {
+                Ok(Some(release)) => {
+                    let installs_itself = if mode == InstallMode::CraftUpdate {
+                        #[cfg(test)]
+                        {
+                            install_probe
+                                .as_ref()
+                                .map_or_else(|| can_install_itself(&release), |p| p(&release))
+                        }
+                        #[cfg(not(test))]
+                        {
+                            can_install_itself(&release)
+                        }
+                    } else {
+                        false
+                    };
+                    *slot.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some((release, installs_itself));
+                    Ok(None)
+                }
+                other => other,
+            }
+        });
+        #[allow(unused_mut)]
+        let mut updater = Updater::new(&UPDATE_APP, VERSION)
+            .with_translator(translate)
+            .with_source(wrapped);
+        #[cfg(test)]
+        if let Some(root) = records_root {
+            updater = updater
+                .with_paths(craft_update::Paths::under(root))
+                .with_pins_path(root.join("pins.json"));
+        }
+        Self {
+            updater,
+            mode,
+            intercepted,
+            prompt: None,
+            install: None,
+            restart: None,
+            close_wanted: false,
+            local_status: None,
+            #[cfg(test)]
+            install_runner,
+            enabled: false,
+            check_requested: false,
+        }
+    }
+
+    /// Turns the check at start on or off.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Help ▸ Check for Updates: runs a check and reports the outcome either way.
+    pub fn request_check(&mut self) {
+        if self.prompt.is_none() && !matches!(self.updater.status(), Status::Checking) {
+            self.check_requested = true;
+        }
+    }
+
+    /// Starts the helper of a ready, uncancelled update once process exit is certain.
+    /// An in-flight download is cancelled instead of installing on exit. Later calls do nothing.
+    pub fn start_pending_update(&mut self) {
+        if let Some(active) = self.install.take() {
+            active.stop.cancel();
+        }
+        if let Some(ready) = self.restart.take()
+            && let Err(e) = ready.start()
+        {
+            eprintln!("CourseCraft self-update failed: {e}");
+        }
+        self.updater.start_pending_update();
+    }
+
+    /// Cancels any in-flight download/install so the app never closes, swaps binaries, or
+    /// installs on exit.
+    fn cancel_install(&mut self) {
+        if let Some(active) = self.install.take() {
+            active.stop.cancel();
+        }
+        self.restart = None;
+        self.close_wanted = false;
+        if matches!(self.local_status, Some(Status::Installing | Status::Ready)) {
+            self.local_status = None;
+        }
+    }
+
+    /// Runs the checks and polls the installation worker; call once a frame.
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.check_requested) {
+            if self.install.is_some() {
+                self.local_status = Some(Status::Installing);
+            } else if self.restart.is_some() {
+                self.local_status = Some(Status::Ready);
+            } else {
+                self.local_status = None;
+                self.updater.check_now(ctx);
+            }
+        } else if self.enabled {
+            self.updater.check_at_start(ctx);
+        }
+        self.updater.tick(ctx);
+
+        if self.updater.managed().is_some() {
+            self.intercepted
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            if self.install.is_none() && self.restart.is_none() {
+                self.prompt = None;
+            }
+        } else if let Some((release, installs_itself)) = self
+            .intercepted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            self.updater.dismiss_status();
+            if self.install.is_none() && self.restart.is_none() && self.prompt.is_none() {
+                self.prompt = Some(build_prompt(release, self.mode, installs_itself));
+            }
         }
 
-        self.cancel = cancel;
-        self.rx = Some(rx);
-        self.busy = UpdateBusy::Downloading;
-        true
+        self.poll_install(ctx);
     }
 
-    /// Signal any in-progress download to cancel at the next chunk boundary.
-    pub fn cancel_download(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
-    }
-
-    /// Drain pending events from the active background worker without blocking.
-    pub fn poll(&mut self) -> Vec<UpdateEvent> {
-        let mut events = Vec::new();
-        let mut finished = false;
-
-        if let Some(rx) = &self.rx {
-            loop {
-                match rx.try_recv() {
-                    Ok(event) => {
-                        if matches!(
-                            event,
-                            UpdateEvent::CheckFinished { .. } | UpdateEvent::DownloadFinished(_)
-                        ) {
-                            finished = true;
-                        }
-                        events.push(event);
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        finished = true;
-                        break;
-                    }
+    fn poll_install(&mut self, ctx: &egui::Context) {
+        let Some(active) = &self.install else {
+            return;
+        };
+        let outcome = match active.rx.try_recv() {
+            Ok(outcome) => Some(outcome),
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(100));
+                None
+            }
+            Err(TryRecvError::Disconnected) => {
+                Some(Err("The update stopped unexpectedly.".to_owned()))
+            }
+        };
+        let Some(outcome) = outcome else {
+            return;
+        };
+        let Some(active) = self.install.take() else {
+            return;
+        };
+        // If cancelled while finishing, discard any result without closing or scheduling exit work.
+        if active.stop.check().is_err() {
+            return;
+        }
+        match outcome {
+            Ok(ready) => {
+                self.restart = Some(ready);
+                self.close_wanted = true;
+                if let Some(prompt) = &mut self.prompt {
+                    prompt.is_installing = false;
+                    prompt.is_ready = true;
+                    prompt.set_note(installed_note());
+                }
+                if matches!(self.local_status, Some(Status::Installing)) {
+                    self.local_status = Some(Status::Ready);
+                }
+            }
+            Err(err) => {
+                eprintln!("CourseCraft self-update failed: {err}");
+                if matches!(self.local_status, Some(Status::Installing)) {
+                    self.local_status = None;
+                }
+                if let Some(prompt) = &mut self.prompt {
+                    prompt.is_installing = false;
+                    prompt.set_message(err);
                 }
             }
         }
-
-        if finished {
-            self.busy = UpdateBusy::Idle;
-            self.rx = None;
-        }
-        events
     }
+
+    /// Starts a cancellable self-update worker for the open prompt.
+    fn start_install(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = &mut self.prompt else {
+            return;
+        };
+        if self.restart.is_some() {
+            prompt.set_note(installed_note());
+            self.close_wanted = true;
+            return;
+        }
+        if self.install.is_some() {
+            return;
+        }
+        let release = prompt.release.clone();
+        let stop = Arc::new(Stop::default());
+        let worker_stop = Arc::clone(&stop);
+        let ctx_clone = ctx.clone();
+        let (tx, rx) = channel();
+
+        #[cfg(test)]
+        let test_runner = self.install_runner.clone();
+
+        #[cfg(test)]
+        let installed = if test_runner.is_some() {
+            None
+        } else {
+            craft_update::self_update::current(&UPDATE_APP)
+        };
+        #[cfg(not(test))]
+        let installed = craft_update::self_update::current(&UPDATE_APP);
+
+        #[cfg(test)]
+        let has_runner = test_runner.is_some() || installed.is_some();
+        #[cfg(not(test))]
+        let has_runner = installed.is_some();
+
+        if !has_runner {
+            prompt.set_note(Note::new(
+                "Cannot auto-update this installation type. Please download manually.",
+                &[],
+            ));
+            prompt.is_installing = false;
+            return;
+        }
+
+        prompt.is_installing = true;
+        prompt.clear_message();
+        let version = running_version();
+        let spawned = std::thread::Builder::new()
+            .name("self-update".into())
+            .spawn(move || {
+                let run = || {
+                    #[cfg(test)]
+                    if let Some(runner) = test_runner {
+                        return runner(&release, Arc::clone(&worker_stop));
+                    }
+                    let Some(installed) = installed else {
+                        return Err("Cannot auto-update this installation type.".to_owned());
+                    };
+                    run_self_update(&installed, release, &version, &worker_stop)
+                };
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run))
+                    .unwrap_or_else(|_| Err("The update failed unexpectedly.".to_owned()));
+                // Only send when still active; if cancelled, drop any outcome silently.
+                if worker_stop.check().is_ok() {
+                    let _ = tx.send(outcome);
+                }
+                ctx_clone.request_repaint();
+            });
+        match spawned {
+            Ok(_) => {
+                self.install = Some(ActiveInstall { rx, stop });
+            }
+            Err(e) => {
+                prompt.is_installing = false;
+                prompt.set_note(Note::new(
+                    "Couldn't start the update ({error})",
+                    &[("error", &e.to_string())],
+                ));
+            }
+        }
+    }
+
+    /// Draws the prompt and the result window. `clean`: nothing is unsaved, so an installation
+    /// may start and a ready update may ask the app to close.
+    pub fn show(&mut self, ctx: &egui::Context, clean: bool) {
+        match self.show_action(ctx, clean) {
+            Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            // The app's close path asks about unsaved work; `on_exit` starts the helper.
+            Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Action::None => {}
+        }
+    }
+
+    /// Draws the prompt and returns the resulting action without executing OS side effects.
+    fn show_action(&mut self, ctx: &egui::Context, clean: bool) -> Action {
+        if clean && self.restart.is_some() && std::mem::take(&mut self.close_wanted) {
+            return Action::Close;
+        }
+        let mut action = Action::None;
+        if let Some(prompt) = &mut self.prompt {
+            let response = prompt.show(ctx);
+            match response {
+                StartupPromptResponse::Pending => {}
+                StartupPromptResponse::UpdateAndRestart => {
+                    if self.mode == InstallMode::CraftUpdate {
+                        if clean {
+                            self.start_install(ctx);
+                            if self.restart.is_some() && std::mem::take(&mut self.close_wanted) {
+                                action = Action::Close;
+                            }
+                        } else {
+                            prompt.set_note(save_first_note());
+                        }
+                    }
+                }
+                StartupPromptResponse::Download => {
+                    let url = match self.mode {
+                        InstallMode::CraftUpdate => {
+                            release_download_url(&UPDATE_APP, &prompt.release)
+                        }
+                        InstallMode::WindowsSetup | InstallMode::WindowsLegacyPortable => {
+                            windows_download_url(
+                                &UPDATE_APP,
+                                &prompt.release,
+                                current_windows_arch(),
+                            )
+                        }
+                    };
+                    self.prompt = None;
+                    action = url.map_or(Action::None, Action::OpenUrl);
+                }
+                StartupPromptResponse::Later => {
+                    if self.install.is_some() {
+                        self.cancel_install();
+                    } else {
+                        self.close_wanted = false;
+                    }
+                    self.prompt = None;
+                }
+            }
+        }
+        let status = self
+            .local_status
+            .as_ref()
+            .unwrap_or_else(|| self.updater.status())
+            .clone();
+        if !matches!(status, Status::Idle) {
+            let response = CheckResultDialog::new(&UPDATE_APP, VERSION)
+                .with_translator(translate)
+                .show(ctx, &status);
+            self.answer(response);
+        }
+        action
+    }
+
+    /// Acts on the result window's answer.
+    fn answer(&mut self, response: CheckResultResponse) {
+        match response {
+            CheckResultResponse::Close => {
+                self.local_status = None;
+                self.updater.dismiss_status();
+            }
+            CheckResultResponse::CheckAgain => {
+                self.local_status = None;
+                self.check_requested = true;
+            }
+            // The next frame's `show_action` asks the window to close once nothing is unsaved.
+            CheckResultResponse::RestartToUpdate => {
+                if self.restart.is_some() {
+                    self.close_wanted = true;
+                }
+            }
+            CheckResultResponse::None => {}
+        }
+    }
+
+    #[cfg(test)]
+    fn prompt_open(&self) -> bool {
+        self.prompt.is_some()
+    }
+
+    #[cfg(test)]
+    fn offer(&mut self, release: Release, installs_itself: bool) {
+        if self.install.is_none() && self.restart.is_none() {
+            self.prompt = Some(build_prompt(release, self.mode, installs_itself));
+            self.local_status = None;
+            self.updater.dismiss_status();
+        }
+    }
+}
+
+/// Whether `CI` or `COURSECRAFT_DISABLE_UPDATES` turn the check at start off.
+#[must_use]
+pub fn suppressed_by_env() -> bool {
+    let set = |name: &str| {
+        std::env::var(name).is_ok_and(|v| {
+            let v = v.trim();
+            !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+        })
+    };
+    set("CI") || set("COURSECRAFT_DISABLE_UPDATES")
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-    use std::io::{self, Cursor, Read};
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex, mpsc};
-    use std::time::{Duration, Instant};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use super::{
-        CHECK_INTERVAL_SECS, CheckOutcome, DownloadSpec, GitHubAsset, GitHubRelease, HttpResponse,
-        MAX_API_RESPONSE_BYTES, MAX_DOWNLOAD_BYTES, MAX_SUMS_BYTES, RequestKind, ResolvedAsset,
-        UpdateBusy, UpdateClient, UpdateError, UpdateEvent, UpdateHttp, UreqHttp,
-        auto_check_suppressed_by_env, check_for_update_with, current_version,
-        download_asset_verified, encode_hex_lower, exe_path_is_portable, find_checksums_asset,
-        follow_get_redirects, is_allowed_update_url, is_release_eligible, parse_releases_json,
-        parse_sha256_digest, parse_sha256sums_line, parse_tag_version, parse_xdg_download_dir,
-        pick_asset, resolve_redirect_url, safe_asset_filename, select_latest_update,
-        should_auto_check, unique_download_path, user_agent,
-    };
+    use super::*;
 
-    const V043_RELEASES_JSON: &str = r#"[
-      {
-        "id": 214567890,
-        "tag_name": "v0.4.3",
-        "name": "CourseCraft 0.4.3",
-        "body": "**Faster, lighter editor**\n\n- Improved timeline scrolling\n- Fixed SCORM export edge cases\n",
-        "html_url": "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.3",
-        "published_at": "2026-10-12T18:30:00Z",
-        "draft": false,
-        "prerelease": true,
-        "assets": [
-          {
-            "id": 1001,
-            "name": "CourseCraft-0.4.3-macos.dmg",
-            "browser_download_url": "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg",
-            "size": 28677774,
-            "digest": "sha256:f6caeb20ad874ade46c8bf992cb70e777d30ae273877667de6671b4acae051e3"
-          },
-          {
-            "id": 1002,
-            "name": "CourseCraft-v0.4.3-setup.exe",
-            "browser_download_url": "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-v0.4.3-setup.exe",
-            "size": 20809277,
-            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-          },
-          {
-            "id": 1003,
-            "name": "CourseCraft-v0.4.3-portable.exe",
-            "browser_download_url": "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-v0.4.3-portable.exe",
-            "size": 65619456,
-            "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-          },
-          {
-            "id": 1004,
-            "name": "CourseCraft-v0.4.3-linux-x86_64.tar.gz",
-            "browser_download_url": "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-v0.4.3-linux-x86_64.tar.gz",
-            "size": 29924711,
-            "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-          }
-        ]
-      }
-    ]"#;
-
-    fn make_release(tag: &str, draft: bool, prerelease: bool) -> GitHubRelease {
-        GitHubRelease {
-            tag_name: tag.to_string(),
-            name: format!("CourseCraft {tag}"),
-            html_url: format!("https://github.com/ad1-kamath/coursecraft/releases/tag/{tag}"),
-            draft,
-            prerelease,
-            ..GitHubRelease::default()
-        }
+    /// A runtime whose updater keeps its records under `root`, reads no launcher choice and asks
+    /// no server, with the check at start on.
+    fn runtime_with_records(root: &std::path::Path) -> Runtime {
+        let mut rt = Runtime::with_hooks(
+            InstallMode::CraftUpdate,
+            Some(std::sync::Arc::new(|| Ok(None))),
+            Some(root),
+            None,
+            None,
+        );
+        rt.enabled = true;
+        rt
     }
 
-    fn make_asset(name: &str) -> GitHubAsset {
-        GitHubAsset {
-            name: name.to_string(),
-            browser_download_url: format!(
-                "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.4/{name}"
-            ),
-            size: 1024,
-            digest: None,
-        }
-    }
-
-    #[test]
-    fn up01_parse_v043_fixture() {
-        let releases = parse_releases_json(V043_RELEASES_JSON.as_bytes()).expect("valid fixture");
-        assert_eq!(releases.len(), 1);
-        let rel = &releases[0];
-        assert_eq!(rel.tag_name, "v0.4.3");
-        assert_eq!(rel.name, "CourseCraft 0.4.3");
-        assert!(rel.body.contains("Faster, lighter editor"));
-        assert_eq!(
-            rel.html_url,
-            "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.3"
-        );
-        assert_eq!(rel.published_at.as_deref(), Some("2026-10-12T18:30:00Z"));
-        assert!(!rel.draft);
-        assert!(rel.prerelease);
-        assert_eq!(rel.assets.len(), 4);
-
-        assert_eq!(rel.assets[0].name, "CourseCraft-0.4.3-macos.dmg");
-        assert_eq!(rel.assets[0].size, 28_677_774);
-        assert_eq!(
-            rel.assets[0].digest.as_deref(),
-            Some("sha256:f6caeb20ad874ade46c8bf992cb70e777d30ae273877667de6671b4acae051e3")
-        );
-        assert_eq!(rel.assets[1].name, "CourseCraft-v0.4.3-setup.exe");
-        assert_eq!(rel.assets[1].size, 20_809_277);
-        assert_eq!(rel.assets[2].name, "CourseCraft-v0.4.3-portable.exe");
-        assert_eq!(rel.assets[2].size, 65_619_456);
-        assert_eq!(rel.assets[3].name, "CourseCraft-v0.4.3-linux-x86_64.tar.gz");
-        assert_eq!(rel.assets[3].size, 29_924_711);
-    }
-
-    #[test]
-    fn up02_semver_and_prerelease_policy() {
-        let v043 = semver::Version::parse("0.4.3").expect("valid semver");
-        let v050_rc1 = semver::Version::parse("0.5.0-rc.1").expect("valid semver");
-        let v100 = semver::Version::parse("1.0.0").expect("valid semver");
-
-        // Tag parsing strips one optional leading v/V and trims whitespace.
-        assert_eq!(
-            parse_tag_version("v0.4.4"),
-            Some(semver::Version::new(0, 4, 4))
-        );
-        assert_eq!(
-            parse_tag_version(" V0.4.10 "),
-            Some(semver::Version::new(0, 4, 10))
-        );
-        assert_eq!(parse_tag_version("0.4.3"), Some(v043.clone()));
-        assert_eq!(parse_tag_version("vv0.4.3"), None);
-        assert_eq!(parse_tag_version("not-a-version"), None);
-
-        // 0.4.3 -> v0.4.4 (GitHub prerelease=true) = update.
-        let picked = select_latest_update(vec![make_release("v0.4.4", false, true)], &v043);
-        assert_eq!(picked.map(|(v, _)| v), Some(semver::Version::new(0, 4, 4)));
-
-        // 0.4.3 -> v0.4.10 > v0.4.9 (SemVer, not lexicographic).
-        let picked = select_latest_update(
-            vec![
-                make_release("v0.4.9", false, true),
-                make_release("v0.4.10", false, true),
-            ],
-            &v043,
-        );
-        assert_eq!(picked.map(|(v, _)| v), Some(semver::Version::new(0, 4, 10)));
-
-        // 0.4.3 -> v0.5.0-rc.1 = ignored.
-        let picked = select_latest_update(vec![make_release("v0.5.0-rc.1", false, true)], &v043);
-        assert!(picked.is_none());
-
-        // 0.5.0-rc.1 -> v0.5.0-rc.2 and v0.5.0 = update.
-        let picked_rc2 =
-            select_latest_update(vec![make_release("v0.5.0-rc.2", false, true)], &v050_rc1);
-        assert_eq!(
-            picked_rc2.map(|(v, _)| v.to_string()),
-            Some("0.5.0-rc.2".to_string())
-        );
-        let picked_final = select_latest_update(
-            vec![
-                make_release("v0.5.0-rc.2", false, true),
-                make_release("v0.5.0", false, false),
-            ],
-            &v050_rc1,
-        );
-        assert_eq!(
-            picked_final.map(|(v, _)| v),
-            Some(semver::Version::new(0, 5, 0))
-        );
-
-        // 1.0.0 -> v1.1.0-beta.1 or GitHub prerelease=true v1.1.0 = ignored; stable v1.0.1 accepted.
-        assert!(
-            select_latest_update(
-                vec![
-                    make_release("v1.1.0-beta.1", false, true),
-                    make_release("v1.1.0", false, true),
-                ],
-                &v100,
-            )
-            .is_none()
-        );
-        let picked_stable = select_latest_update(vec![make_release("v1.0.1", false, false)], &v100);
-        assert_eq!(
-            picked_stable.map(|(v, _)| v),
-            Some(semver::Version::new(1, 0, 1))
-        );
-
-        // Drafts are always ignored even for pre-release users.
-        let draft = make_release("v9.9.9", true, false);
-        assert!(!is_release_eligible(
-            &draft,
-            &semver::Version::new(9, 9, 9),
-            &v050_rc1
-        ));
-        assert!(select_latest_update(vec![draft], &v043).is_none());
-
-        // Out-of-order releases pick maximum SemVer.
-        let out_of_order = select_latest_update(
-            vec![
-                make_release("v0.3.9", false, true),
-                make_release("v0.4.6", false, true),
-                make_release("v0.4.4", false, true),
-                make_release("v0.4.5", false, false),
-            ],
-            &v043,
-        );
-        assert_eq!(
-            out_of_order.map(|(v, _)| v),
-            Some(semver::Version::new(0, 4, 6))
-        );
-
-        // Same or older version returns None.
-        assert!(
-            select_latest_update(
-                vec![
-                    make_release("v0.4.3", false, true),
-                    make_release("v0.4.2", false, true),
-                ],
-                &v043,
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn up03_hostile_and_oversized_json() {
-        // Empty payload.
-        assert_eq!(parse_releases_json(b""), Err(UpdateError::InvalidResponse));
-
-        // Invalid JSON syntax.
-        assert_eq!(
-            parse_releases_json(b"[{not json"),
-            Err(UpdateError::InvalidResponse)
-        );
-
-        // JSON object instead of array (for example GitHub error body).
-        assert_eq!(
-            parse_releases_json(br#"{"message":"Not Found"}"#),
-            Err(UpdateError::InvalidResponse)
-        );
-
-        // Oversized payload (MAX_API_RESPONSE_BYTES + 1).
-        let mut oversized = vec![b' '; MAX_API_RESPONSE_BYTES + 1];
-        oversized[0] = b'[';
-        oversized[MAX_API_RESPONSE_BYTES] = b']';
-        assert_eq!(
-            parse_releases_json(&oversized),
-            Err(UpdateError::InvalidResponse)
-        );
-
-        // Missing fields, null nullable fields, and invalid tag strings do not panic.
-        let sparse = br#"[
-          {},
-          {"tag_name": null, "name": null, "body": null, "assets": null},
-          {"tag_name": "nightly-2026-10-12"},
-          {"tag_name": "v0.4.5"}
-        ]"#;
-        let parsed = parse_releases_json(sparse).expect("sparse array parses");
-        assert_eq!(parsed.len(), 4);
-        let picked = select_latest_update(parsed, &semver::Version::new(0, 4, 3));
-        assert_eq!(picked.map(|(v, _)| v), Some(semver::Version::new(0, 4, 5)));
-
-        // Verify plain-language user messages never leak raw inner payloads.
-        let net_err = UpdateError::Network("raw dns stacktrace 127.0.0.1".to_string());
-        assert!(!net_err.user_message().contains("stacktrace"));
-        assert_eq!(net_err.to_string(), net_err.user_message());
-        let io_err = UpdateError::Io("/secret/path errno 28".to_string());
-        assert!(!io_err.user_message().contains("/secret/path"));
-        assert!(UpdateError::HttpStatus(503).user_message().contains("503"));
-        assert!(!UpdateError::Timeout.user_message().is_empty());
-        assert!(!UpdateError::RateLimited.user_message().is_empty());
-        assert!(!UpdateError::DisallowedUrl.user_message().is_empty());
-        assert!(!UpdateError::TooManyRedirects.user_message().is_empty());
-        assert!(!UpdateError::DownloadTooLarge.user_message().is_empty());
-        assert!(!UpdateError::DownloadTruncated.user_message().is_empty());
-        assert!(!UpdateError::ChecksumMismatch.user_message().is_empty());
-        assert!(!UpdateError::Cancelled.user_message().is_empty());
-    }
-
-    #[test]
-    fn up04_pick_asset_platforms_and_arches() {
-        let mut releases = parse_releases_json(V043_RELEASES_JSON.as_bytes()).expect("valid json");
-        let mut assets = releases.remove(0).assets;
-        assets.push(make_asset("SHA256SUMS.txt"));
-        assets.push(make_asset("CourseCraft-0.4.3-macos.dmg.sig"));
-        assets.push(make_asset("CourseCraft-0.4.3-macos.dmg.sha256"));
-        assets.push(GitHubAsset {
-            name: "CourseCraft-0.4.3-macos-arm64.dmg".to_string(),
-            browser_download_url: String::new(),
-            size: 100,
-            digest: None,
-        });
-
-        assert_eq!(
-            find_checksums_asset(&assets).map(|a| a.name.as_str()),
-            Some("SHA256SUMS.txt")
-        );
-
-        // Real v0.4.3 assets across all platforms.
-        assert_eq!(
-            pick_asset(&assets, "macos", "aarch64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-0.4.3-macos.dmg")
-        );
-        assert_eq!(
-            pick_asset(&assets, "windows", "x86_64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-v0.4.3-setup.exe")
-        );
-        assert_eq!(
-            pick_asset(&assets, "windows", "x86_64", true).map(|a| a.name.as_str()),
-            Some("CourseCraft-v0.4.3-portable.exe")
-        );
-        assert_eq!(
-            pick_asset(&assets, "linux", "x86_64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-v0.4.3-linux-x86_64.tar.gz")
-        );
-        assert_eq!(pick_asset(&assets, "linux", "aarch64", false), None);
-        assert_eq!(pick_asset(&assets, "freebsd", "x86_64", false), None);
-
-        // Explicit arch beats universal which beats unqualified; wrong arch is rejected.
-        let mac_assets = vec![
-            make_asset("CourseCraft-0.4.4-macos.dmg"),
-            make_asset("CourseCraft-0.4.4-macos-universal.dmg"),
-            make_asset("CourseCraft-0.4.4-macos-x86_64.dmg"),
-            make_asset("CourseCraft-0.4.4-macos-arm64.dmg"),
-        ];
-        assert_eq!(
-            pick_asset(&mac_assets, "macos", "aarch64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-0.4.4-macos-arm64.dmg")
-        );
-        assert_eq!(
-            pick_asset(&mac_assets, "macos", "x86_64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-0.4.4-macos-x86_64.dmg")
-        );
-
-        let mac_universal_vs_plain = vec![
-            make_asset("CourseCraft-0.4.4-macos.dmg"),
-            make_asset("CourseCraft-0.4.4-macos-universal.dmg"),
-        ];
-        assert_eq!(
-            pick_asset(&mac_universal_vs_plain, "macos", "aarch64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-0.4.4-macos-universal.dmg")
-        );
-
-        let mac_intel_only = vec![make_asset("CourseCraft-0.4.4-macos-intel.dmg")];
-        assert_eq!(pick_asset(&mac_intel_only, "macos", "aarch64", false), None);
-        assert_eq!(
-            pick_asset(&mac_intel_only, "macos", "x86_64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-0.4.4-macos-intel.dmg")
-        );
-
-        // Windows MSI ranking between setup.exe and portable.exe.
-        let win_msi_assets = vec![
-            make_asset("CourseCraft-v0.4.4-portable.exe"),
-            make_asset("CourseCraft-v0.4.4.msi"),
-        ];
-        assert_eq!(
-            pick_asset(&win_msi_assets, "windows", "x86_64", false).map(|a| a.name.as_str()),
-            Some("CourseCraft-v0.4.4.msi")
-        );
-        assert_eq!(
-            pick_asset(&win_msi_assets, "windows", "x86_64", true).map(|a| a.name.as_str()),
-            Some("CourseCraft-v0.4.4-portable.exe")
-        );
-    }
-
-    #[test]
-    fn up08_sha256_digest_and_sums_parsing() {
-        let lower_hex = "f6caeb20ad874ade46c8bf992cb70e777d30ae273877667de6671b4acae051e3";
-        let upper_hex = "F6CAEB20AD874ADE46C8BF992CB70E777D30AE273877667DE6671B4ACAE051E3";
-
-        // Valid sha256: digests (case-insensitive prefix and hex).
-        assert_eq!(
-            parse_sha256_digest(&format!("sha256:{lower_hex}")),
-            Some(lower_hex.to_string())
-        );
-        assert_eq!(
-            parse_sha256_digest(&format!("  SHA256:{upper_hex}  ")),
-            Some(lower_hex.to_string())
-        );
-
-        // Invalid digests.
-        assert_eq!(parse_sha256_digest(""), None);
-        assert_eq!(parse_sha256_digest(&format!("sha512:{lower_hex}")), None);
-        assert_eq!(parse_sha256_digest("sha256:abcd"), None);
-        assert_eq!(parse_sha256_digest(&format!("sha256:{lower_hex}a")), None);
-        assert_eq!(
-            parse_sha256_digest(
-                "sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
-            ),
-            None
-        );
-
-        // SHA256SUMS.txt parsing: standard two-space, binary `*`, leading `./`, comments, bad lines.
-        let sums = format!(
-            "# CourseCraft release checksums\n\
-             \n\
-             not-a-valid-hash  CourseCraft-0.4.3-macos.dmg\n\
-             {lower_hex}a  CourseCraft-0.4.3-macos.dmg\n\
-             {upper_hex}  CourseCraft-0.4.3-macos.dmg\n\
-             1111111111111111111111111111111111111111111111111111111111111111 *CourseCraft-v0.4.3-setup.exe\n\
-             2222222222222222222222222222222222222222222222222222222222222222  ./CourseCraft-v0.4.3-linux-x86_64.tar.gz\n\
-             3333333333333333333333333333333333333333333333333333333333333333 *./CourseCraft-v0.4.3-portable.exe\n"
-        );
-
-        assert_eq!(
-            parse_sha256sums_line(&sums, "CourseCraft-0.4.3-macos.dmg"),
-            Some(lower_hex.to_string())
-        );
-        assert_eq!(
-            parse_sha256sums_line(&sums, "CourseCraft-v0.4.3-setup.exe"),
-            Some("1111111111111111111111111111111111111111111111111111111111111111".to_string())
-        );
-        assert_eq!(
-            parse_sha256sums_line(&sums, "CourseCraft-v0.4.3-linux-x86_64.tar.gz"),
-            Some("2222222222222222222222222222222222222222222222222222222222222222".to_string())
-        );
-        assert_eq!(
-            parse_sha256sums_line(&sums, "CourseCraft-v0.4.3-portable.exe"),
-            Some("3333333333333333333333333333333333333333333333333333333333333333".to_string())
-        );
-        assert_eq!(parse_sha256sums_line(&sums, "missing.dmg"), None);
-        assert_eq!(parse_sha256sums_line(&sums, ""), None);
-    }
-
-    #[test]
-    fn up05_should_auto_check_daily_throttle() {
-        let base: u64 = 1_700_000_000;
-
-        // Disabled always returns false.
-        assert!(!should_auto_check(false, None, base));
-        assert!(!should_auto_check(
-            false,
-            Some(base),
-            base + CHECK_INTERVAL_SECS
-        ));
-
-        // First run (no recorded check yet) checks immediately.
-        assert!(should_auto_check(true, None, base));
-
-        // 1 second shy of 24 hours stays throttled; exactly 24 hours allows a check.
-        assert!(!should_auto_check(
-            true,
-            Some(base),
-            base + CHECK_INTERVAL_SECS - 1
-        ));
-        assert!(should_auto_check(
-            true,
-            Some(base),
-            base + CHECK_INTERVAL_SECS
-        ));
-        assert!(should_auto_check(
-            true,
-            Some(base),
-            base + CHECK_INTERVAL_SECS + 60
-        ));
-
-        // System clock moving backwards never triggers an unexpected check.
-        assert!(!should_auto_check(true, Some(base), base - 1));
-    }
-
-    #[test]
-    fn up05_env_suppression_user_agent_and_current_version() {
-        assert!(!auto_check_suppressed_by_env(None, None));
-        assert!(!auto_check_suppressed_by_env(Some(""), Some("")));
-        assert!(!auto_check_suppressed_by_env(Some("0"), Some("0")));
-        assert!(!auto_check_suppressed_by_env(Some("false"), Some("FALSE")));
-        assert!(!auto_check_suppressed_by_env(Some("False"), Some("  ")));
-
-        assert!(auto_check_suppressed_by_env(Some("true"), None));
-        assert!(auto_check_suppressed_by_env(Some("1"), None));
-        assert!(auto_check_suppressed_by_env(None, Some("1")));
-        assert!(auto_check_suppressed_by_env(None, Some("true")));
-        assert!(auto_check_suppressed_by_env(Some("0"), Some("yes")));
-
-        assert_eq!(user_agent("0.4.3"), "CourseCraft/0.4.3");
-        assert!(current_version().is_some());
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct RecordedRequest {
-        url: String,
-        accept: String,
-        user_agent: String,
-        kind: RequestKind,
-    }
-
-    struct FakeHttp {
-        requests: Mutex<Vec<RecordedRequest>>,
-        responses: Mutex<VecDeque<Result<HttpResponse, UpdateError>>>,
-    }
-
-    impl FakeHttp {
-        fn new(responses: Vec<Result<HttpResponse, UpdateError>>) -> Self {
-            Self {
-                requests: Mutex::new(Vec::new()),
-                responses: Mutex::new(VecDeque::from(responses)),
-            }
-        }
-
-        fn recorded(&self) -> Vec<RecordedRequest> {
-            self.requests.lock().expect("requests lock").clone()
-        }
-    }
-
-    impl UpdateHttp for FakeHttp {
-        fn get(
-            &self,
-            url: &str,
-            accept: &str,
-            user_agent: &str,
-            kind: RequestKind,
-        ) -> Result<HttpResponse, UpdateError> {
-            self.requests
-                .lock()
-                .expect("requests lock")
-                .push(RecordedRequest {
-                    url: url.to_string(),
-                    accept: accept.to_string(),
-                    user_agent: user_agent.to_string(),
-                    kind,
-                });
-            self.responses
-                .lock()
-                .expect("responses lock")
-                .pop_front()
-                .expect("unexpected extra HTTP request in FakeHttp")
-        }
-    }
-
-    fn ok_response(body: Vec<u8>) -> HttpResponse {
-        let len = body.len() as u64;
-        HttpResponse {
-            status: 200,
-            location: None,
-            content_length: Some(len),
-            rate_limit_remaining: Some(59),
-            body: Box::new(Cursor::new(body)),
-        }
-    }
-
-    fn redirect_response(status: u16, location: Option<&str>) -> HttpResponse {
-        HttpResponse {
-            status,
-            location: location.map(str::to_owned),
-            content_length: Some(0),
-            rate_limit_remaining: Some(59),
-            body: Box::new(Cursor::new(Vec::new())),
-        }
-    }
-
-    fn status_response(status: u16, rate_limit_remaining: Option<u64>) -> HttpResponse {
-        HttpResponse {
-            status,
-            location: None,
-            content_length: Some(0),
-            rate_limit_remaining,
-            body: Box::new(Cursor::new(Vec::new())),
-        }
-    }
-
-    struct TempTestDir {
-        path: PathBuf,
-    }
-
-    impl TempTestDir {
-        fn new(label: &str) -> Self {
-            static COUNTER: AtomicU64 = AtomicU64::new(0);
-            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "coursecraft-m35-{label}-{}-{n}",
-                std::process::id()
-            ));
-            std::fs::create_dir_all(&path).expect("create temp test dir");
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-
-        fn entries(&self) -> Vec<String> {
-            std::fs::read_dir(&self.path)
-                .expect("read temp dir")
-                .map(|e| {
-                    e.expect("dir entry")
-                        .file_name()
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .collect()
-        }
-    }
-
-    impl Drop for TempTestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.path);
-        }
-    }
-
-    fn sha256_hex(data: &[u8]) -> String {
-        let digest = ring::digest::digest(&ring::digest::SHA256, data);
-        encode_hex_lower(digest.as_ref())
-    }
-
-    struct ChunkedReader {
-        data: Vec<u8>,
-        pos: usize,
-        max_chunk: usize,
-    }
-
-    impl Read for ChunkedReader {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let remaining = self.data.len().saturating_sub(self.pos);
-            if remaining == 0 {
-                return Ok(0);
-            }
-            let take = remaining.min(buf.len()).min(self.max_chunk);
-            buf[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
-            self.pos += take;
-            Ok(take)
-        }
-    }
-
-    #[test]
-    fn up06_url_allowlist_and_redirect_resolution() {
-        let allowed = [
-            "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20",
-            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg",
-            "https://objects.githubusercontent.com/github-production-release-asset-123/file.dmg?sig=abc",
-            "https://release-assets.githubusercontent.com/asset/file.dmg",
-            "https://a.b.githubusercontent.com/asset",
-            "https://API.GITHUB.COM/repos/foo",
-            "https://github.com:443/foo",
-        ];
-        for url in allowed {
-            assert!(is_allowed_update_url(url), "should allow {url}");
-        }
-
-        let rejected = [
-            "http://github.com/ad1-kamath/coursecraft/releases",
-            "file:///etc/passwd",
-            "https://evil.com/file.dmg",
-            "https://github.com.evil.com/file.dmg",
-            "https://127.0.0.1/file.dmg",
-            "https://localhost/file.dmg",
-            "https://[::1]/file.dmg",
-            "https://githubusercontent.com/file.dmg",
-            "https://.githubusercontent.com/file.dmg",
-            "https://a..b.githubusercontent.com/file.dmg",
-            "https://-bad.githubusercontent.com/file.dmg",
-            "https://user@github.com/file.dmg",
-            "https://github.com:8443/file.dmg",
-            "https://github.com:/file.dmg",
-            "https:///file.dmg",
-            "https://github.com/a b",
-            "https://github.com/a\nb",
-            "https://github.com/a\0b",
-        ];
-        for url in rejected {
-            assert!(!is_allowed_update_url(url), "should reject {url}");
-        }
-
-        let base = "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/a.dmg";
-        let resolved_cases = [
-            (
-                "https://objects.githubusercontent.com/blob",
-                Some("https://objects.githubusercontent.com/blob"),
-            ),
-            (
-                "//objects.githubusercontent.com/blob?x=1",
-                Some("https://objects.githubusercontent.com/blob?x=1"),
-            ),
-            (
-                "/releases/step2?token=abc",
-                Some("https://github.com/releases/step2?token=abc"),
-            ),
-            ("http://objects.githubusercontent.com/blob", None),
-            ("file:///tmp/x", None),
-            ("", None),
-            ("///bad", None),
-            ("relative/path", None),
-            ("https://github.com/has space", None),
-            ("https://github.com/has\r\ncrlf", None),
-        ];
-        for (location, expected) in resolved_cases {
-            assert_eq!(
-                resolve_redirect_url(base, location).as_deref(),
-                expected,
-                "redirect location {location:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn up07_safe_filename_and_unique_download_path() {
-        // Rejected filenames.
-        assert_eq!(safe_asset_filename(""), None);
-        assert_eq!(safe_asset_filename("   "), None);
-        assert_eq!(safe_asset_filename("../evil.dmg"), None);
-        assert_eq!(safe_asset_filename("foo..bar.dmg"), None);
-        assert_eq!(safe_asset_filename("a/b.dmg"), None);
-        assert_eq!(safe_asset_filename("a\\b.dmg"), None);
-        assert_eq!(safe_asset_filename("C:evil.exe"), None);
-        assert_eq!(safe_asset_filename(".hidden"), None);
-        assert_eq!(safe_asset_filename("bad\0name.dmg"), None);
-        assert_eq!(safe_asset_filename("bad\nname.dmg"), None);
-        let too_long = format!("{}.dmg", "a".repeat(197));
-        assert_eq!(too_long.chars().count(), 201);
-        assert_eq!(safe_asset_filename(&too_long), None);
-
-        // Accepted filenames.
-        assert_eq!(
-            safe_asset_filename("CourseCraft-0.4.4-macos.dmg"),
-            Some("CourseCraft-0.4.4-macos.dmg".to_string())
-        );
-        let exact_max = format!("{}.dmg", "a".repeat(196));
-        assert_eq!(exact_max.chars().count(), 200);
-        assert_eq!(safe_asset_filename(&exact_max), Some(exact_max));
-
-        // Unique download path avoids overwriting and preserves `.tar.gz`.
-        let tmp = TempTestDir::new("up07");
-        let p0 = unique_download_path(tmp.path(), "foo.dmg");
-        assert_eq!(p0, tmp.path().join("foo.dmg"));
-        std::fs::write(&p0, b"first").expect("write p0");
-
-        let p1 = unique_download_path(tmp.path(), "foo.dmg");
-        assert_eq!(p1, tmp.path().join("foo (1).dmg"));
-        std::fs::write(&p1, b"second").expect("write p1");
-
-        let p2 = unique_download_path(tmp.path(), "foo.dmg");
-        assert_eq!(p2, tmp.path().join("foo (2).dmg"));
-        assert_eq!(std::fs::read(&p0).expect("read p0"), b"first");
-        assert_eq!(std::fs::read(&p1).expect("read p1"), b"second");
-
-        let t0 = unique_download_path(tmp.path(), "app.tar.gz");
-        assert_eq!(t0, tmp.path().join("app.tar.gz"));
-        std::fs::write(&t0, b"tar0").expect("write t0");
-
-        let t1 = unique_download_path(tmp.path(), "app.tar.gz");
-        assert_eq!(t1, tmp.path().join("app (1).tar.gz"));
-        std::fs::write(&t1, b"tar1").expect("write t1");
-
-        let t2 = unique_download_path(tmp.path(), "app.tar.gz");
-        assert_eq!(t2, tmp.path().join("app (2).tar.gz"));
-    }
-
-    #[test]
-    fn dl01_happy_path_check_and_privacy_headers() {
-        let api_url = "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20";
-        let current = semver::Version::new(0, 4, 2);
-        let http = FakeHttp::new(vec![Ok(ok_response(
-            V043_RELEASES_JSON.as_bytes().to_vec(),
-        ))]);
-
-        let outcome = check_for_update_with(&http, api_url, &current, "macos", "aarch64", false)
-            .expect("check succeeds");
-
-        let recorded = http.recorded();
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].url, api_url);
-        assert_eq!(recorded[0].accept, "application/vnd.github+json");
-        assert_eq!(recorded[0].user_agent, "CourseCraft/0.4.2");
-        assert_eq!(recorded[0].kind, RequestKind::Metadata);
-        assert!(!recorded[0].user_agent.contains("macos"));
-        assert!(!recorded[0].user_agent.contains("aarch64"));
-
-        let CheckOutcome::Available(update) = outcome else {
-            panic!("expected CheckOutcome::Available");
-        };
-        assert_eq!(update.version, "0.4.3");
-        assert_eq!(update.current_version, "0.4.2");
-        assert_eq!(
-            update.release_url,
-            "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.3"
-        );
-        assert!(update.notes_markdown.contains("Faster, lighter editor"));
-        assert_eq!(update.published_at.as_deref(), Some("2026-10-12T18:30:00Z"));
-        let asset = update.asset.expect("macOS asset matched");
-        assert_eq!(asset.name, "CourseCraft-0.4.3-macos.dmg");
-        assert_eq!(asset.size, 28_677_774);
-        assert_eq!(
-            asset.sha256_digest.as_deref(),
-            Some("f6caeb20ad874ade46c8bf992cb70e777d30ae273877667de6671b4acae051e3")
-        );
-
-        // Already at 0.4.3 -> UpToDate.
-        let http_up_to_date = FakeHttp::new(vec![Ok(ok_response(
-            V043_RELEASES_JSON.as_bytes().to_vec(),
-        ))]);
-        let same = check_for_update_with(
-            &http_up_to_date,
-            api_url,
-            &semver::Version::new(0, 4, 3),
-            "macos",
-            "aarch64",
-            false,
+    fn windows_runtime(
+        root: &std::path::Path,
+        mode: InstallMode,
+        release: Option<Release>,
+    ) -> Runtime {
+        Runtime::with_hooks(
+            mode,
+            Some(Arc::new(move || Ok(release.clone()))),
+            Some(root),
+            None,
+            None,
         )
-        .expect("up to date check succeeds");
-        assert_eq!(same, CheckOutcome::UpToDate);
+    }
 
-        // Malformed html_url falls back to the canonical releases page.
-        let bad_url_json = br#"[{"tag_name":"v0.4.4","html_url":"http://evil.com/phish"}]"#;
-        let http_bad_url = FakeHttp::new(vec![Ok(ok_response(bad_url_json.to_vec()))]);
-        let fallback =
-            check_for_update_with(&http_bad_url, api_url, &current, "macos", "aarch64", false)
-                .expect("fallback check succeeds");
-        let CheckOutcome::Available(fallback_update) = fallback else {
-            panic!("expected Available with fallback URL");
-        };
+    fn records_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("coursecraft-updates-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn frame(rt: &mut Runtime, ctx: &egui::Context) -> Action {
+        frame_with(rt, ctx, egui::RawInput::default(), true)
+    }
+
+    fn frame_with(
+        rt: &mut Runtime,
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        clean: bool,
+    ) -> Action {
+        let mut action = Action::None;
+        ctx.run_ui(input, |ui| {
+            rt.tick(ui.ctx());
+            action = rt.show_action(ui.ctx(), clean);
+        })
+        .textures_delta
+        .clear();
+        action
+    }
+
+    fn release_0_5_0() -> Release {
+        let tag = "v0.5.0";
+        let repo = UPDATE_APP.repo;
+        let names = [
+            "coursecraft-0.5.0-macos-arm64.dmg",
+            "coursecraft-0.5.0-windows-x64-setup.exe",
+            "coursecraft-0.5.0-linux-x86_64.tar.gz",
+            "coursecraft-0.5.0-linux-x86_64.AppImage",
+            "SHA256SUMS.txt",
+        ];
+        Release {
+            tag: tag.into(),
+            version: craft_update::parse_version("0.5.0"),
+            name: "CourseCraft v0.5.0".into(),
+            html_url: format!("https://github.com/{repo}/releases/tag/{tag}"),
+            repo: repo.into(),
+            assets: names
+                .iter()
+                .map(|n| Asset {
+                    name: (*n).into(),
+                    size: 1,
+                    url: format!("https://github.com/{repo}/releases/download/{tag}/{n}"),
+                    sha256: None,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_app_is_described_by_its_upstream_repository() {
+        assert_eq!(UPDATE_APP.repo, "ad1-kamath/coursecraft");
         assert_eq!(
-            fallback_update.release_url,
+            UPDATE_APP.releases_url(),
             "https://github.com/ad1-kamath/coursecraft/releases"
         );
     }
 
+    /// The file names release.yml and package-macos.sh make are the ones craft-update and
+    /// CourseCraft's Windows selector pick, with no portable Windows package.
     #[test]
-    fn dl02_rate_limits_and_offline_errors() {
-        let api_url = "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20";
-        let current = semver::Version::new(0, 4, 2);
+    fn the_release_file_names_are_the_ones_the_update_picks() {
+        let release = release_0_5_0();
+        let stems: Vec<&str> = UPDATE_APP.stems().collect();
+        for (os, arch, kind, expected) in [
+            (
+                Os::MacOs,
+                Arch::Arm64,
+                PackageKind::Dmg,
+                "coursecraft-0.5.0-macos-arm64.dmg",
+            ),
+            (
+                Os::Linux,
+                Arch::X64,
+                PackageKind::TarGz,
+                "coursecraft-0.5.0-linux-x86_64.tar.gz",
+            ),
+            (
+                Os::Linux,
+                Arch::X64,
+                PackageKind::AppImage,
+                "coursecraft-0.5.0-linux-x86_64.AppImage",
+            ),
+        ] {
+            let picked = pick_asset(&release, &stems, Platform { os, arch }, &[kind]);
+            assert_eq!(picked.map(|(a, _)| a.name.as_str()), Some(expected));
+        }
+        assert_eq!(
+            select_windows_setup_asset(&release, &stems, Arch::X64).map(|a| a.name.as_str()),
+            Some("coursecraft-0.5.0-windows-x64-setup.exe")
+        );
 
-        // HTTP 403 with X-RateLimit-Remaining: 0 -> RateLimited.
-        let http_403_rl = FakeHttp::new(vec![Ok(status_response(403, Some(0)))]);
-        let err = check_for_update_with(&http_403_rl, api_url, &current, "macos", "aarch64", false)
-            .expect_err("403 rate limited");
-        assert_eq!(err, UpdateError::RateLimited);
-        assert!(!err.user_message().is_empty());
-
-        // HTTP 403 with remaining > 0 -> HttpStatus(403).
-        let http_403_plain = FakeHttp::new(vec![Ok(status_response(403, Some(10)))]);
-        let err = check_for_update_with(
-            &http_403_plain,
-            api_url,
-            &current,
-            "macos",
-            "aarch64",
-            false,
-        )
-        .expect_err("403 non-rate-limit");
-        assert_eq!(err, UpdateError::HttpStatus(403));
-        assert!(err.user_message().contains("403"));
-
-        // HTTP 429 -> RateLimited.
-        let http_429 = FakeHttp::new(vec![Ok(status_response(429, None))]);
-        let err = check_for_update_with(&http_429, api_url, &current, "macos", "aarch64", false)
-            .expect_err("429 rate limited");
-        assert_eq!(err, UpdateError::RateLimited);
-        assert!(!err.user_message().is_empty());
-
-        // Network failure -> UpdateError::Network with calm message.
-        let http_net = FakeHttp::new(vec![Err(UpdateError::Network(
-            "dns lookup failed: 127.0.0.1".to_string(),
-        ))]);
-        let err = check_for_update_with(&http_net, api_url, &current, "macos", "aarch64", false)
-            .expect_err("network error");
-        assert!(matches!(err, UpdateError::Network(_)));
-        assert!(!err.user_message().is_empty());
-        assert!(!err.user_message().contains("127.0.0.1"));
-
-        // Timeout -> UpdateError::Timeout with calm message.
-        let http_timeout = FakeHttp::new(vec![Err(UpdateError::Timeout)]);
-        let err =
-            check_for_update_with(&http_timeout, api_url, &current, "macos", "aarch64", false)
-                .expect_err("timeout error");
-        assert_eq!(err, UpdateError::Timeout);
-        assert!(!err.user_message().is_empty());
-
-        // Oversized API response (> MAX_API_RESPONSE_BYTES) -> InvalidResponse.
-        let mut oversized = vec![b' '; MAX_API_RESPONSE_BYTES + 1];
-        oversized[0] = b'[';
-        oversized[MAX_API_RESPONSE_BYTES] = b']';
-        let http_big = FakeHttp::new(vec![Ok(ok_response(oversized))]);
-        let err = check_for_update_with(&http_big, api_url, &current, "macos", "aarch64", false)
-            .expect_err("oversized api body");
-        assert_eq!(err, UpdateError::InvalidResponse);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let yml = std::fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap();
+        for part in [
+            "coursecraft-$ver-windows-x64-setup",
+            "coursecraft-${GITHUB_REF_NAME#v}-linux-x86_64",
+            "coursecraft-$ver-linux-x86_64.AppImage",
+            "$root/bin/coursecraft",
+            "packaging/linux/coursecraft.desktop",
+            "apps/coursecraft/icons/coursecraft-1024.png",
+            "sha256sum coursecraft-* > SHA256SUMS.txt",
+        ] {
+            assert!(yml.contains(part), "release.yml lacks {part}");
+        }
+        for forbidden in ["portable.txt", "-windows-x64-portable", "-portable.zip"] {
+            assert!(
+                !yml.contains(forbidden),
+                "release.yml must not reference {forbidden}"
+            );
+        }
+        let mac = std::fs::read_to_string(root.join("scripts/package-macos.sh")).unwrap();
+        assert!(mac.contains("coursecraft-$version-macos-$arch.dmg"));
     }
 
     #[test]
-    fn dl03_redirects_valid_and_hostile() {
-        let start_url =
-            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg";
-        let payload = b"redirected-installer-bytes".to_vec();
-        let digest = sha256_hex(&payload);
-        let tmp = TempTestDir::new("dl03");
+    fn linux_asset_selection_uses_appimage_when_env_set_and_tarball_otherwise() {
+        let release = release_0_5_0();
 
-        // 2 valid HTTPS redirects (origin-relative then scheme-relative to objects.githubusercontent.com).
-        let http_valid = FakeHttp::new(vec![
-            Ok(redirect_response(302, Some("/download/hop1"))),
-            Ok(redirect_response(
-                307,
-                Some("//objects.githubusercontent.com/assets/CourseCraft.dmg"),
+        let (asset, kind) = select_linux_asset(
+            &release,
+            Arch::X64,
+            Some(OsStr::new(
+                "/home/user/Applications/coursecraft-0.4.6-linux-x86_64.AppImage",
             )),
-            Ok(ok_response(payload.clone())),
-        ]);
-        let spec = DownloadSpec {
-            url: start_url,
-            expected_size: Some(payload.len() as u64),
-            expected_sha256: Some(&digest),
-            checksums_url: None,
-            dest_dir: tmp.path(),
-            filename: "CourseCraft.dmg",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let cancel = AtomicBool::new(false);
-        let result = download_asset_verified(&http_valid, &spec, &cancel, |_, _| {})
-            .expect("2 valid redirects succeed");
-        assert_eq!(result.bytes, payload.len() as u64);
-        assert!(result.sha256_verified);
-        assert_eq!(std::fs::read(&result.path).expect("read result"), payload);
-        let hops: Vec<String> = http_valid.recorded().into_iter().map(|r| r.url).collect();
+        )
+        .expect("AppImage selected when APPIMAGE is set");
+        assert_eq!(kind, PackageKind::AppImage);
+        assert_eq!(asset.name, "coursecraft-0.5.0-linux-x86_64.AppImage");
+
+        let (asset, kind) =
+            select_linux_asset(&release, Arch::X64, None).expect("tarball when APPIMAGE unset");
+        assert_eq!(kind, PackageKind::TarGz);
+        assert_eq!(asset.name, "coursecraft-0.5.0-linux-x86_64.tar.gz");
+
+        // An empty APPIMAGE variable does not count as running from an AppImage.
+        let (asset, kind) = select_linux_asset(&release, Arch::X64, Some(OsStr::new("")))
+            .expect("tarball when APPIMAGE empty");
+        assert_eq!(kind, PackageKind::TarGz);
+        assert_eq!(asset.name, "coursecraft-0.5.0-linux-x86_64.tar.gz");
+
+        // Wrong architecture never falls back to x86_64 on Linux.
+        assert_eq!(select_linux_asset(&release, Arch::Arm64, None), None);
         assert_eq!(
-            hops,
-            vec![
-                start_url.to_string(),
-                "https://github.com/download/hop1".to_string(),
-                "https://objects.githubusercontent.com/assets/CourseCraft.dmg".to_string(),
-            ]
+            select_linux_asset(&release, Arch::Arm64, Some(OsStr::new("/tmp/a.AppImage"))),
+            None
         );
-
-        // HTTP downgrade rejected.
-        let http_downgrade = FakeHttp::new(vec![Ok(redirect_response(
-            302,
-            Some("http://objects.githubusercontent.com/assets/CourseCraft.dmg"),
-        ))]);
-        let err = follow_get_redirects(
-            &http_downgrade,
-            start_url,
-            "application/octet-stream",
-            "CourseCraft/0.4.2",
-            RequestKind::Download,
-        )
-        .err()
-        .expect("http downgrade rejected");
-        assert_eq!(err, UpdateError::DisallowedUrl);
-
-        // Disallowed host rejected without contacting evil.com.
-        let http_evil = FakeHttp::new(vec![Ok(redirect_response(
-            302,
-            Some("https://evil.com/CourseCraft.dmg"),
-        ))]);
-        let err = follow_get_redirects(
-            &http_evil,
-            start_url,
-            "application/octet-stream",
-            "CourseCraft/0.4.2",
-            RequestKind::Download,
-        )
-        .err()
-        .expect("disallowed redirect host rejected");
-        assert_eq!(err, UpdateError::DisallowedUrl);
-        assert_eq!(http_evil.recorded().len(), 1);
-
-        // Missing Location header rejected.
-        let http_missing_loc = FakeHttp::new(vec![Ok(redirect_response(302, None))]);
-        let err = follow_get_redirects(
-            &http_missing_loc,
-            start_url,
-            "application/octet-stream",
-            "CourseCraft/0.4.2",
-            RequestKind::Download,
-        )
-        .err()
-        .expect("missing location rejected");
-        assert_eq!(err, UpdateError::DisallowedUrl);
-
-        // > 5 hops (6 redirects) rejected with TooManyRedirects.
-        let http_loop = FakeHttp::new(vec![
-            Ok(redirect_response(302, Some("https://github.com/hop1"))),
-            Ok(redirect_response(302, Some("https://github.com/hop2"))),
-            Ok(redirect_response(302, Some("https://github.com/hop3"))),
-            Ok(redirect_response(302, Some("https://github.com/hop4"))),
-            Ok(redirect_response(302, Some("https://github.com/hop5"))),
-            Ok(redirect_response(302, Some("https://github.com/hop6"))),
-        ]);
-        let err = follow_get_redirects(
-            &http_loop,
-            start_url,
-            "application/octet-stream",
-            "CourseCraft/0.4.2",
-            RequestKind::Download,
-        )
-        .err()
-        .expect("too many redirects");
-        assert_eq!(err, UpdateError::TooManyRedirects);
     }
 
     #[test]
-    fn dl04_streaming_download_verifies_asset_digest() {
-        let tmp = TempTestDir::new("dl04");
-        let payload: Vec<u8> = (0..150_000_usize).map(|i| (i % 251) as u8).collect();
-        let digest = format!("sha256:{}", sha256_hex(&payload));
-        let http = FakeHttp::new(vec![Ok(ok_response(payload.clone()))]);
-        let spec = DownloadSpec {
-            url: "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg",
-            expected_size: Some(payload.len() as u64),
-            expected_sha256: Some(&digest),
-            checksums_url: None,
-            dest_dir: tmp.path(),
-            filename: "CourseCraft-0.4.3-macos.dmg",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let cancel = AtomicBool::new(false);
-        let mut progress_events = Vec::new();
-
-        let result = download_asset_verified(&http, &spec, &cancel, |done, total| {
-            progress_events.push((done, total));
-        })
-        .expect("verified download succeeds");
-
-        assert_eq!(result.path, tmp.path().join("CourseCraft-0.4.3-macos.dmg"));
-        assert_eq!(result.bytes, payload.len() as u64);
-        assert!(result.sha256_verified);
-        assert_eq!(std::fs::read(&result.path).expect("read file"), payload);
-        assert!(
-            progress_events.len() >= 2,
-            "expected multiple 64 KiB chunks"
+    fn windows_setup_selection_never_picks_portable_and_validates_urls() {
+        let mut release = release_0_5_0();
+        // Even if an older release lists a portable zip first, Windows selection picks -setup.exe.
+        release.assets.insert(
+            0,
+            Asset {
+                name: "coursecraft-0.5.0-windows-x64-portable.zip".into(),
+                size: 1,
+                url: "https://github.com/ad1-kamath/coursecraft/releases/download/v0.5.0/coursecraft-0.5.0-windows-x64-portable.zip".into(),
+                sha256: None,
+            },
         );
+        let url = windows_download_url(&UPDATE_APP, &release, Arch::X64).unwrap();
         assert_eq!(
-            progress_events.last().copied(),
-            Some((payload.len() as u64, Some(payload.len() as u64)))
+            url,
+            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.5.0/coursecraft-0.5.0-windows-x64-setup.exe"
         );
-        let entries = tmp.entries();
-        assert_eq!(entries, vec!["CourseCraft-0.4.3-macos.dmg".to_string()]);
-    }
-
-    #[test]
-    fn dl05_fallback_sha256sums_verification() {
-        let tmp = TempTestDir::new("dl05");
-        let payload = b"installer-verified-via-sha256sums".to_vec();
-        let digest = sha256_hex(&payload);
-        let sums_body = format!(
-            "# CourseCraft checksums\n\
-             0000000000000000000000000000000000000000000000000000000000000000  other.exe\n\
-             {digest}  CourseCraft-v0.4.3-setup.exe\n"
+        // Windows ARM64 falls back to x64 installer cleanly.
+        assert_eq!(
+            windows_download_url(&UPDATE_APP, &release, Arch::Arm64).as_deref(),
+            Some(url.as_str())
         );
-        let sums_url =
-            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/SHA256SUMS.txt";
-        let asset_url = "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-v0.4.3-setup.exe";
 
-        let http = FakeHttp::new(vec![
-            Ok(ok_response(sums_body.into_bytes())),
-            Ok(ok_response(payload.clone())),
-        ]);
-        let spec = DownloadSpec {
-            url: asset_url,
-            expected_size: Some(payload.len() as u64),
-            expected_sha256: None,
-            checksums_url: Some(sums_url),
-            dest_dir: tmp.path(),
-            filename: "CourseCraft-v0.4.3-setup.exe",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let cancel = AtomicBool::new(false);
-        let result = download_asset_verified(&http, &spec, &cancel, |_, _| {})
-            .expect("fallback SHA256SUMS download succeeds");
-        assert!(result.sha256_verified);
-        assert_eq!(result.bytes, payload.len() as u64);
-        assert_eq!(std::fs::read(&result.path).expect("read setup"), payload);
-
-        let recorded = http.recorded();
-        assert_eq!(recorded.len(), 2);
-        assert_eq!(recorded[0].kind, RequestKind::Checksums);
-        assert_eq!(recorded[1].kind, RequestKind::Download);
-
-        // Oversized SHA256SUMS.txt (> MAX_SUMS_BYTES) is rejected safely before downloading asset.
-        let tmp_big = TempTestDir::new("dl05-big");
-        let huge_sums = vec![b'a'; MAX_SUMS_BYTES + 1];
-        let http_big = FakeHttp::new(vec![Ok(ok_response(huge_sums))]);
-        let spec_big = DownloadSpec {
-            dest_dir: tmp_big.path(),
-            ..spec
-        };
-        let err = download_asset_verified(&http_big, &spec_big, &cancel, |_, _| {})
-            .expect_err("oversized SHA256SUMS rejected");
-        assert_eq!(err, UpdateError::InvalidResponse);
-        assert_eq!(http_big.recorded().len(), 1);
-        assert!(tmp_big.entries().is_empty());
-    }
-
-    #[test]
-    fn dl06_checksum_mismatch_truncated_and_oversized_cleanup() {
-        let asset_url =
-            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg";
-        let cancel = AtomicBool::new(false);
-
-        // 1. Checksum mismatch removes `.part` and leaves no final file.
-        let tmp_bad_hash = TempTestDir::new("dl06-hash");
-        let payload = b"tampered-installer-payload".to_vec();
-        let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-        let http_hash = FakeHttp::new(vec![Ok(ok_response(payload.clone()))]);
-        let spec_hash = DownloadSpec {
-            url: asset_url,
-            expected_size: Some(payload.len() as u64),
-            expected_sha256: Some(wrong_hash),
-            checksums_url: None,
-            dest_dir: tmp_bad_hash.path(),
-            filename: "CourseCraft.dmg",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let err = download_asset_verified(&http_hash, &spec_hash, &cancel, |_, _| {})
-            .expect_err("checksum mismatch fails");
-        assert_eq!(err, UpdateError::ChecksumMismatch);
-        assert!(tmp_bad_hash.entries().is_empty());
-
-        // 2. Truncated stream (`downloaded < expected_size`) fails and removes `.part`.
-        let tmp_trunc = TempTestDir::new("dl06-trunc");
-        let short_body = b"only-half".to_vec();
-        let http_trunc = FakeHttp::new(vec![Ok(ok_response(short_body.clone()))]);
-        let spec_trunc = DownloadSpec {
-            url: asset_url,
-            expected_size: Some(100),
-            expected_sha256: None,
-            checksums_url: None,
-            dest_dir: tmp_trunc.path(),
-            filename: "CourseCraft.dmg",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let err = download_asset_verified(&http_trunc, &spec_trunc, &cancel, |_, _| {})
-            .expect_err("truncated download fails");
-        assert_eq!(err, UpdateError::DownloadTruncated);
-        assert!(tmp_trunc.entries().is_empty());
-
-        // 3. Oversized stream (`downloaded > expected_size`) fails and removes `.part`.
-        let tmp_over = TempTestDir::new("dl06-over");
-        let extra_body = vec![0xAB_u8; 200];
-        let http_over = FakeHttp::new(vec![Ok(HttpResponse {
-            status: 200,
-            location: None,
-            content_length: None,
-            rate_limit_remaining: Some(59),
-            body: Box::new(Cursor::new(extra_body)),
-        })]);
-        let spec_over = DownloadSpec {
-            url: asset_url,
-            expected_size: Some(100),
-            expected_sha256: None,
-            checksums_url: None,
-            dest_dir: tmp_over.path(),
-            filename: "CourseCraft.dmg",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let err = download_asset_verified(&http_over, &spec_over, &cancel, |_, _| {})
-            .expect_err("oversized stream fails");
-        assert_eq!(err, UpdateError::DownloadTooLarge);
-        assert!(tmp_over.entries().is_empty());
-
-        // 4. Expected size exceeding MAX_DOWNLOAD_BYTES fails immediately.
-        let tmp_huge = TempTestDir::new("dl06-huge");
-        let http_huge = FakeHttp::new(vec![]);
-        let spec_huge = DownloadSpec {
-            url: asset_url,
-            expected_size: Some(MAX_DOWNLOAD_BYTES + 1),
-            expected_sha256: None,
-            checksums_url: None,
-            dest_dir: tmp_huge.path(),
-            filename: "CourseCraft.dmg",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let err = download_asset_verified(&http_huge, &spec_huge, &cancel, |_, _| {})
-            .expect_err("over MAX_DOWNLOAD_BYTES fails");
-        assert_eq!(err, UpdateError::DownloadTooLarge);
-        assert!(http_huge.recorded().is_empty());
-        assert!(tmp_huge.entries().is_empty());
-    }
-
-    #[test]
-    fn dl07_mid_download_cancellation_removes_part() {
-        let tmp = TempTestDir::new("dl07");
-        let payload = vec![0x5A_u8; 256 * 1024];
-        let total = payload.len() as u64;
-        let reader = ChunkedReader {
-            data: payload,
-            pos: 0,
-            max_chunk: 64 * 1024,
-        };
-        let http = FakeHttp::new(vec![Ok(HttpResponse {
-            status: 200,
-            location: None,
-            content_length: Some(total),
-            rate_limit_remaining: Some(59),
-            body: Box::new(reader),
-        })]);
-        let spec = DownloadSpec {
-            url: "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg",
-            expected_size: Some(total),
-            expected_sha256: None,
-            checksums_url: None,
-            dest_dir: tmp.path(),
-            filename: "CourseCraft.dmg",
-            user_agent: "CourseCraft/0.4.2",
-        };
-        let cancel = AtomicBool::new(false);
-        let mut chunks_seen = 0_usize;
-
-        let err = download_asset_verified(&http, &spec, &cancel, |_done, _total| {
-            chunks_seen += 1;
-            if chunks_seen == 1 {
-                cancel.store(true, Ordering::Relaxed);
-            }
-        })
-        .expect_err("mid-download cancel returns Err");
-
-        assert_eq!(err, UpdateError::Cancelled);
-        assert_eq!(chunks_seen, 1);
-        assert!(
-            tmp.entries().is_empty(),
-            "no .part or final file should remain after cancellation"
-        );
-    }
-
-    struct BlockingHttp {
-        started_tx: Mutex<Option<mpsc::Sender<()>>>,
-        release_rx: Mutex<Option<mpsc::Receiver<()>>>,
-        inner: FakeHttp,
-    }
-
-    impl BlockingHttp {
-        fn new(
-            started_tx: mpsc::Sender<()>,
-            release_rx: mpsc::Receiver<()>,
-            responses: Vec<Result<HttpResponse, UpdateError>>,
-        ) -> Self {
-            Self {
-                started_tx: Mutex::new(Some(started_tx)),
-                release_rx: Mutex::new(Some(release_rx)),
-                inner: FakeHttp::new(responses),
+        // If a release has a forged asset URL, refuse it and fall back to the release HTML page.
+        let mut forged = release_0_5_0();
+        for asset in &mut forged.assets {
+            if asset.name.ends_with("-setup.exe") {
+                asset.url = "https://evil.example/coursecraft-0.5.0-windows-x64-setup.exe".into();
             }
         }
+        assert_eq!(
+            windows_download_url(&UPDATE_APP, &forged, Arch::X64).as_deref(),
+            Some("https://github.com/ad1-kamath/coursecraft/releases/tag/v0.5.0")
+        );
+
+        // If no -setup.exe asset exists at all, fall back to the release page without error.
+        let mut no_setup = release_0_5_0();
+        no_setup.assets.retain(|a| !a.name.ends_with("-setup.exe"));
+        assert_eq!(
+            windows_download_url(&UPDATE_APP, &no_setup, Arch::X64).as_deref(),
+            Some("https://github.com/ad1-kamath/coursecraft/releases/tag/v0.5.0")
+        );
     }
 
-    impl UpdateHttp for BlockingHttp {
-        fn get(
-            &self,
-            url: &str,
-            accept: &str,
-            user_agent: &str,
-            kind: RequestKind,
-        ) -> Result<HttpResponse, UpdateError> {
-            if let Some(tx) = self.started_tx.lock().expect("started_tx lock").take() {
-                let _ = tx.send(());
+    #[test]
+    fn legacy_portable_marker_detection_checks_sibling_portable_txt() {
+        let dir = records_dir("portable-marker");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("coursecraft.exe");
+        std::fs::write(&exe, b"exe").unwrap();
+        assert!(!is_legacy_portable_at(&exe));
+        std::fs::write(dir.join("portable.txt"), b"").unwrap();
+        assert!(is_legacy_portable_at(&exe));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn windows_legacy_portable_offers_setup_exe_with_notice_and_no_error() {
+        let root = records_dir("win-portable");
+        let mut rt = windows_runtime(
+            &root,
+            InstallMode::WindowsLegacyPortable,
+            Some(release_0_5_0()),
+        );
+        let ctx = egui::Context::default();
+        rt.request_check();
+        for _ in 0..200 {
+            let action = frame(&mut rt, &ctx);
+            assert_eq!(action, Action::None, "must never silently install or close");
+            if rt.prompt_open() {
+                break;
             }
-            if let Some(rx) = self.release_rx.lock().expect("release_rx lock").take() {
-                let _ = rx.recv_timeout(Duration::from_secs(5));
-            }
-            self.inner.get(url, accept, user_agent, kind)
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
+
+        let prompt = rt
+            .prompt
+            .as_ref()
+            .expect("Windows legacy portable copy should open the update prompt");
+        assert!(
+            !prompt.is_self_updating,
+            "must not attempt PortableZip self-update"
+        );
+        assert_eq!(rt.updater.status(), &Status::Idle, "must not show an error");
+        let msg = prompt
+            .message()
+            .expect("legacy portable prompt must explain portable builds stopped");
+        assert!(msg.contains("portable"), "{msg}");
+        assert!(msg.contains("no longer published"), "{msg}");
+        assert!(msg.contains("-setup.exe"), "{msg}");
+
+        // Choosing Download points straight to the -setup.exe installer.
+        let url = windows_download_url(&UPDATE_APP, &prompt.release, Arch::X64).unwrap();
+        assert!(
+            url.ends_with("coursecraft-0.5.0-windows-x64-setup.exe"),
+            "{url}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
-    fn poll_until<F>(client: &mut UpdateClient, mut is_done: F) -> Vec<UpdateEvent>
-    where
-        F: FnMut(&[UpdateEvent]) -> bool,
-    {
-        let mut all = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            all.extend(client.poll());
-            if is_done(&all) {
-                return all;
+    #[test]
+    fn windows_setup_offers_setup_exe_without_portable_notice_or_silent_restart() {
+        let root = records_dir("win-setup");
+        let mut rt = windows_runtime(&root, InstallMode::WindowsSetup, Some(release_0_5_0()));
+        let ctx = egui::Context::default();
+        rt.request_check();
+        for _ in 0..200 {
+            let action = frame(&mut rt, &ctx);
+            assert_eq!(action, Action::None, "must never silently install or close");
+            if rt.prompt_open() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let prompt = rt
+            .prompt
+            .as_ref()
+            .expect("Windows installer copy should open the update prompt");
+        assert!(!prompt.is_self_updating);
+        assert_eq!(rt.updater.status(), &Status::Idle);
+        assert_eq!(prompt.message(), None);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_offered_release_opens_the_prompt() {
+        let mut rt = Runtime::with_mode(InstallMode::CraftUpdate, None);
+        let ctx = egui::Context::default();
+        assert!(!rt.prompt_open());
+        rt.offer(
+            craft_update::Release {
+                tag: "v99.0.0".into(),
+                ..Default::default()
+            },
+            false,
+        );
+        ctx.run_ui(egui::RawInput::default(), |ui| rt.show(ui.ctx(), true))
+            .textures_delta
+            .clear();
+        assert!(rt.prompt_open());
+        // Offering an update never silently installs or closes the app.
+        assert_eq!(rt.updater.status(), &Status::Idle);
+    }
+
+    fn wait_for_prompt(rt: &mut Runtime, ctx: &egui::Context) {
+        for _ in 0..200 {
+            assert_eq!(frame(rt, ctx), Action::None);
+            if rt.prompt_open() {
+                return;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        all
+        panic!("prompt did not open in time");
+    }
+
+    fn wait_until(pred: impl Fn() -> bool, msg: &str) {
+        for _ in 0..200 {
+            if pred() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("{msg}");
     }
 
     #[test]
-    fn dl08_update_client_background_worker_and_dedup() {
-        let ctx = egui::Context::default();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
+    fn closing_prompt_while_downloading_cancels_update_and_allows_retry() {
+        let root = records_dir("cancel-inflight");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let swapped = Arc::new(AtomicUsize::new(0));
+        let cancelled_seen = Arc::new(AtomicBool::new(false));
+        let installed_on_exit = Arc::new(AtomicBool::new(false));
+        let allow_finish = Arc::new(AtomicBool::new(false));
 
-        let payload: Vec<u8> = (0..(320 * 1024_usize)).map(|i| (i % 251) as u8).collect();
-        let payload_sha256 = sha256_hex(&payload);
-        let asset_url = "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg";
-        let release_json = format!(
-            r#"[{{
-                "tag_name": "v0.4.3",
-                "name": "CourseCraft 0.4.3",
-                "body": "Notes",
-                "html_url": "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.3",
-                "draft": false,
-                "prerelease": true,
-                "assets": [{{
-                    "name": "CourseCraft-0.4.3-macos.dmg",
-                    "browser_download_url": "{asset_url}",
-                    "size": {},
-                    "digest": "sha256:{payload_sha256}"
-                }}]
-            }}]"#,
-            payload.len()
-        );
-
-        let chunked = ChunkedReader {
-            data: payload.clone(),
-            pos: 0,
-            max_chunk: 64 * 1024,
-        };
-        let download_resp = HttpResponse {
-            status: 200,
-            location: None,
-            content_length: Some(payload.len() as u64),
-            rate_limit_remaining: Some(59),
-            body: Box::new(chunked),
-        };
-
-        let http = Arc::new(BlockingHttp::new(
-            started_tx,
-            release_rx,
-            vec![
-                Ok(ok_response(release_json.into_bytes())),
-                Ok(download_resp),
-            ],
-        ));
-        let mut client = UpdateClient::with_http_and_env(
-            http,
-            semver::Version::new(0, 4, 2),
-            "macos",
-            "aarch64",
-            false,
-        );
-        assert_eq!(client.busy(), UpdateBusy::Idle);
-
-        // Start check: returns immediately and marks worker Checking.
-        assert!(client.start_check(true, &ctx));
-        assert_eq!(client.busy(), UpdateBusy::Checking);
-        started_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("worker started HTTP check");
-
-        // Concurrent check and download requests are deduplicated while busy.
-        assert!(!client.start_check(false, &ctx));
-        assert!(client.poll().is_empty());
-        assert_eq!(client.busy(), UpdateBusy::Checking);
-
-        // Release blocked check response and wait for CheckFinished.
-        release_tx.send(()).expect("release check");
-        let events = poll_until(&mut client, |evts| {
-            evts.iter()
-                .any(|e| matches!(e, UpdateEvent::CheckFinished { .. }))
-        });
-        assert_eq!(client.busy(), UpdateBusy::Idle);
-        assert_eq!(events.len(), 1);
-        let resolved_asset = match &events[0] {
-            UpdateEvent::CheckFinished {
-                manual: true,
-                result: Ok(CheckOutcome::Available(update)),
-            } => {
-                assert_eq!(update.version, "0.4.3");
-                update.asset.clone().expect("matched macOS asset")
-            }
-            other => panic!("unexpected check event: {other:?}"),
-        };
-
-        // Start background download and verify progress + verified completion.
-        let tmp = TempTestDir::new("dl08");
-        assert!(client.start_download(resolved_asset, None, tmp.path().to_path_buf(), &ctx));
-        assert_eq!(client.busy(), UpdateBusy::Downloading);
-        assert!(!client.start_check(true, &ctx));
-
-        let dl_events = poll_until(&mut client, |evts| {
-            evts.iter()
-                .any(|e| matches!(e, UpdateEvent::DownloadFinished(_)))
-        });
-        assert_eq!(client.busy(), UpdateBusy::Idle);
-
-        let progress_bytes: Vec<u64> = dl_events
-            .iter()
-            .filter_map(|e| match e {
-                UpdateEvent::DownloadProgress { downloaded, .. } => Some(*downloaded),
-                _ => None,
+        let runner: InstallRunner = {
+            let attempts = Arc::clone(&attempts);
+            let swapped = Arc::clone(&swapped);
+            let cancelled_seen = Arc::clone(&cancelled_seen);
+            let installed_on_exit = Arc::clone(&installed_on_exit);
+            let allow_finish = Arc::clone(&allow_finish);
+            Arc::new(move |_release, stop| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                while !allow_finish.load(Ordering::SeqCst) {
+                    if let Err(err) = stop.check() {
+                        cancelled_seen.store(true, Ordering::SeqCst);
+                        return Err(err);
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if let Err(err) = stop.check() {
+                    cancelled_seen.store(true, Ordering::SeqCst);
+                    return Err(err);
+                }
+                swapped.fetch_add(1, Ordering::SeqCst);
+                Ok(ReadyUpdate::Simulated(Arc::clone(&installed_on_exit)))
             })
-            .collect();
+        };
+
+        let mut rt = Runtime::with_hooks(
+            InstallMode::CraftUpdate,
+            Some(Arc::new(|| Ok(Some(release_0_5_0())))),
+            Some(&root),
+            Some(Arc::new(|_| true)),
+            Some(runner),
+        );
+        let ctx = egui::Context::default();
+
+        // 1. Discover update and start an explicit Update and Restart.
+        rt.request_check();
+        wait_for_prompt(&mut rt, &ctx);
+        assert!(rt.prompt.as_ref().is_some_and(|p| p.is_self_updating));
+
+        rt.start_install(&ctx);
+        assert!(rt.prompt.as_ref().is_some_and(|p| p.is_installing));
+        wait_until(
+            || attempts.load(Ordering::SeqCst) == 1,
+            "first install attempt did not start",
+        );
+
+        // 2. While download is in flight, close the prompt via Escape (same StartupPromptResponse::Later
+        //    as clicking Later / Dismiss / ×).
+        let esc = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(frame_with(&mut rt, &ctx, esc, true), Action::None);
+        assert!(!rt.prompt_open(), "prompt closes immediately");
+        assert!(rt.install.is_none(), "in-flight install handle is dropped");
+        wait_until(
+            || cancelled_seen.load(Ordering::SeqCst),
+            "in-flight worker must receive Stop::cancel()",
+        );
+
+        // Even after ticking and exiting, the app must NOT close, swap, or install on exit.
+        for _ in 0..5 {
+            assert_eq!(frame(&mut rt, &ctx), Action::None);
+        }
+        assert_eq!(swapped.load(Ordering::SeqCst), 0, "binary must not swap");
+        rt.start_pending_update();
         assert!(
-            progress_bytes.len() >= 2,
-            "expected first and final progress updates, got {progress_bytes:?}"
-        );
-        assert_eq!(progress_bytes.last().copied(), Some(payload.len() as u64));
-
-        let finished = dl_events
-            .iter()
-            .find_map(|e| match e {
-                UpdateEvent::DownloadFinished(res) => Some(res),
-                _ => None,
-            })
-            .expect("DownloadFinished event");
-        let done = finished.as_ref().expect("download succeeded");
-        assert_eq!(done.bytes, payload.len() as u64);
-        assert!(done.sha256_verified);
-        assert_eq!(std::fs::read(&done.path).expect("read downloaded"), payload);
-        assert_eq!(
-            tmp.entries(),
-            vec!["CourseCraft-0.4.3-macos.dmg".to_string()]
-        );
-    }
-
-    #[test]
-    fn dl08_update_client_cancel_download() {
-        let ctx = egui::Context::default();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let payload = vec![0x42_u8; 64 * 1024];
-
-        let http = Arc::new(BlockingHttp::new(
-            started_tx,
-            release_rx,
-            vec![Ok(ok_response(payload.clone()))],
-        ));
-        let mut client = UpdateClient::with_http_and_env(
-            http,
-            semver::Version::new(0, 4, 2),
-            "macos",
-            "aarch64",
-            false,
-        );
-        let tmp = TempTestDir::new("dl08-cancel");
-        let asset = ResolvedAsset {
-            name: "CourseCraft-0.4.3-macos.dmg".to_string(),
-            download_url:
-                "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg"
-                    .to_string(),
-            size: payload.len() as u64,
-            sha256_digest: None,
-        };
-
-        assert!(client.start_download(asset, None, tmp.path().to_path_buf(), &ctx));
-        started_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("download started");
-        client.cancel_download();
-        release_tx.send(()).expect("unblock download");
-
-        let events = poll_until(&mut client, |evts| {
-            evts.iter()
-                .any(|e| matches!(e, UpdateEvent::DownloadFinished(_)))
-        });
-        assert_eq!(client.busy(), UpdateBusy::Idle);
-        assert!(matches!(
-            events.last(),
-            Some(UpdateEvent::DownloadFinished(Err(UpdateError::Cancelled)))
-        ));
-        assert!(tmp.entries().is_empty());
-    }
-
-    #[test]
-    fn dl08_platform_helpers_and_ureq_config() {
-        let home = Path::new("/home/alex");
-
-        let standard = "# xdg user dirs\n\
-            XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n\
-            XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n";
-        assert_eq!(
-            parse_xdg_download_dir(standard, home),
-            Some(PathBuf::from("/home/alex/Downloads"))
+            !installed_on_exit.load(Ordering::SeqCst),
+            "cancelled update must not install on exit"
         );
 
-        let custom_spaces = "XDG_DOWNLOAD_DIR=\"$HOME/My Downloads\"\n";
-        assert_eq!(
-            parse_xdg_download_dir(custom_spaces, home),
-            Some(PathBuf::from("/home/alex/My Downloads"))
-        );
+        // 3. A later explicit Update and Restart can start again and complete cleanly.
+        allow_finish.store(true, Ordering::SeqCst);
+        rt.request_check();
+        wait_for_prompt(&mut rt, &ctx);
+        rt.start_install(&ctx);
 
-        let braced = "XDG_DOWNLOAD_DIR=\"${HOME}/dl\"\n";
-        assert_eq!(
-            parse_xdg_download_dir(braced, home),
-            Some(PathBuf::from("/home/alex/dl"))
-        );
-
-        let absolute = "XDG_DOWNLOAD_DIR=\"/mnt/shared/downloads\"\n";
-        assert_eq!(
-            parse_xdg_download_dir(absolute, home),
-            Some(PathBuf::from("/mnt/shared/downloads"))
-        );
-
-        let unquoted = "XDG_DOWNLOAD_DIR=$HOME/Incoming\n";
-        assert_eq!(
-            parse_xdg_download_dir(unquoted, home),
-            Some(PathBuf::from("/home/alex/Incoming"))
-        );
-
-        let invalid = "# XDG_DOWNLOAD_DIR=\"$HOME/Commented\"\n\
-            XDG_DOWNLOAD_DIR=\"relative/path\"\n\
-            XDG_DOWNLOAD_DIR=\"\"\n";
-        assert_eq!(parse_xdg_download_dir(invalid, home), None);
-
-        // Portable executable detection checks only the file stem, ASCII case-insensitively.
-        assert!(exe_path_is_portable(Path::new(
-            "CourseCraft-v0.4.3-portable.exe"
-        )));
-        assert!(exe_path_is_portable(Path::new(
-            "/opt/CourseCraft-PORTABLE.exe"
-        )));
-        assert!(!exe_path_is_portable(Path::new(
-            "CourseCraft-v0.4.3-setup.exe"
-        )));
-        assert!(!exe_path_is_portable(Path::new(
-            "/Applications/CourseCraft.app/Contents/MacOS/coursecraft"
-        )));
-        assert!(!exe_path_is_portable(Path::new(
-            "/tmp/portable/coursecraft"
-        )));
-        assert!(!exe_path_is_portable(Path::new("")));
-    }
-
-    #[test]
-    fn dl08_ureq_config_and_timeout_mapping() {
-        // Verify agent configs construct cleanly offline and apply exact per-kind timeouts.
-        let ua = "CourseCraft/0.4.3";
-        for kind in [RequestKind::Metadata, RequestKind::Checksums] {
-            let cfg = UreqHttp::build_config(kind, ua);
-            assert_eq!(cfg.max_redirects(), 0);
-            assert!(!cfg.http_status_as_error());
-            assert!(cfg.https_only());
-            assert_eq!(cfg.timeouts().connect, Some(Duration::from_secs(10)));
-            assert_eq!(cfg.timeouts().global, Some(Duration::from_secs(15)));
-            assert_eq!(cfg.timeouts().recv_body, None);
-            let _ = UreqHttp::build_agent(kind, ua);
-        }
-        let dl_cfg = UreqHttp::build_config(RequestKind::Download, ua);
-        assert_eq!(dl_cfg.max_redirects(), 0);
-        assert!(!dl_cfg.http_status_as_error());
-        assert!(dl_cfg.https_only());
-        assert_eq!(dl_cfg.timeouts().connect, Some(Duration::from_secs(10)));
-        assert_eq!(dl_cfg.timeouts().global, None);
-        // Download must NOT cap total body duration; it uses a 30 s per-read timeout so
-        // large installers on slow connections succeed while stalled reads still time out.
-        assert_eq!(dl_cfg.timeouts().recv_body, None);
-        assert_eq!(dl_cfg.timeout_per_read(), Some(Duration::from_secs(30)));
-        assert_eq!(
-            dl_cfg.timeouts().recv_response,
-            Some(Duration::from_secs(30))
-        );
-        let _ = UreqHttp::build_agent(RequestKind::Download, ua);
-
-        // Verify ureq timeout errors wrapped via BodyReader (`into_io()`) map to Timeout
-        // and clean up `.part` files.
-        assert_eq!(
-            super::map_ureq_error(ureq::Error::Timeout(ureq::Timeout::Global)),
-            UpdateError::Timeout
-        );
-        assert_eq!(
-            super::map_ureq_error(ureq::Error::RequireHttpsOnly("http://x".to_string())),
-            UpdateError::DisallowedUrl
-        );
-
-        struct UreqTimeoutReader;
-        impl Read for UreqTimeoutReader {
-            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-                Err(ureq::Error::Timeout(ureq::Timeout::PerRead).into_io())
+        let mut close_requested = false;
+        for _ in 0..200 {
+            if frame(&mut rt, &ctx) == Action::Close {
+                close_requested = true;
+                break;
             }
+            std::thread::sleep(Duration::from_millis(5));
         }
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(swapped.load(Ordering::SeqCst), 1);
+        assert!(
+            close_requested,
+            "explicit retry must complete and ask to close"
+        );
+        rt.start_pending_update();
+        assert!(
+            installed_on_exit.load(Ordering::SeqCst),
+            "explicit retry must start pending update on exit"
+        );
 
-        let tmp = TempTestDir::new("dl08-ureq-timeout");
-        let http = FakeHttp::new(vec![Ok(HttpResponse {
-            status: 200,
-            location: None,
-            content_length: Some(1024),
-            rate_limit_remaining: Some(59),
-            body: Box::new(UreqTimeoutReader),
-        })]);
-        let spec = DownloadSpec {
-            url: "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg",
-            expected_size: Some(1024),
-            expected_sha256: None,
-            checksums_url: None,
-            dest_dir: tmp.path(),
-            filename: "CourseCraft.dmg",
-            user_agent: ua,
-        };
-        let cancel = AtomicBool::new(false);
-        let err = download_asset_verified(&http, &spec, &cancel, |_, _| {})
-            .expect_err("ureq per-read timeout should fail download");
-        assert_eq!(err, UpdateError::Timeout);
-        assert!(tmp.entries().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_start_after_an_update_reports_it_until_dismissed() {
+        let root = records_dir("installed");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("data").join("self-update-done.txt"), VERSION).unwrap();
+        let mut rt = runtime_with_records(&root);
+        let ctx = egui::Context::default();
+        frame(&mut rt, &ctx);
+        assert!(
+            matches!(rt.updater.status(), Status::Updated(_)),
+            "{:?}",
+            rt.updater.status()
+        );
+        rt.answer(CheckResultResponse::Close);
+        assert_eq!(rt.updater.status(), &Status::Idle);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_requested_check_with_nothing_newer_says_so() {
+        let root = records_dir("uptodate");
+        let mut rt = runtime_with_records(&root);
+        rt.enabled = false;
+        let ctx = egui::Context::default();
+        rt.request_check();
+        for _ in 0..200 {
+            frame(&mut rt, &ctx);
+            if !matches!(rt.updater.status(), Status::Checking) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(rt.updater.status(), &Status::UpToDate);
+        rt.answer(CheckResultResponse::CheckAgain);
+        assert!(rt.check_requested);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

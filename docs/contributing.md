@@ -18,6 +18,25 @@
 2. Document it in `docs/spec/triggers.md` (mark **[verify]** until checked by observation).
 3. Add a runtime test that drives it through `Player::handle`.
 
+## Add or wire a UI control
+
+The editor's layout is specified in `docs/ui/` (start at `docs/ui/README.md`).
+
+1. Find the control in `docs/ui/ribbon.md` or `docs/ui/contextual-tabs.md`. If it is not there,
+   add it first in the matching task group.
+2. If it edits the course, add the engine command first (above). UIs only dispatch.
+3. In the ribbon spec, change its action from `NotYet(..)` to the command or UI action. A planned
+   control whose feature is missing stays in place, drawn disabled with its reason (`NotPlanned`
+   controls stay in the spec but are hidden from the UI).
+4. Update its status in the doc table and the feature's row and summary in
+   `docs/ui/feature-parity.md`.
+5. Labels follow the naming conventions in `docs/ui/README.md` › Clean-room.
+6. Every user-facing string is English in the code and goes through `tl!` (or `tid`, `trn`,
+   `fmt`); never concatenate sentences. Translations go to the craft-i18n data repository, not
+   here (`docs/ui/localization.md`).
+7. Use `craft-ui` components (panes, docking, tabs, buttons, combos, number fields) before writing
+   a new widget; generic additions go upstream to craft-libs.
+
 ## Clean-room rules
 
 - Study other authoring tools for **behaviour only**: what happens when you click, the order triggers fire in. Design our own look and layout from `DESIGN.md`.

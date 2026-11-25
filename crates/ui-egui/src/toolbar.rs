@@ -354,6 +354,28 @@ pub fn preview_slide(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
     requests.push(EditorRequest::Preview { slide: slide_id });
 }
 
+/// A click on a Format Painter button: click arms it once, double-click keeps it
+/// armed, a click while armed turns it off. Shared by the toolbar and the ribbon.
+pub(crate) fn format_painter_clicked(editor: &mut Editor, painter_resp: &egui::Response) {
+    if painter_resp.double_clicked() {
+        editor.arm_format_painter(true);
+        if let Some(p) = editor.ui.format_painter.as_mut() {
+            p.sticky = true;
+            p.just_double_clicked = true;
+        }
+    } else if painter_resp.clicked() {
+        if let Some(p) = editor.ui.format_painter.as_mut() {
+            if p.just_double_clicked {
+                p.just_double_clicked = false;
+            } else {
+                editor.ui.format_painter = None;
+            }
+        } else {
+            editor.arm_format_painter(false);
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Toolbar display
 // ----------------------------------------------------------------------------
@@ -546,23 +568,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         painter_enabled,
         &painter_tooltip,
     );
-    if painter_resp.double_clicked() {
-        editor.arm_format_painter(true);
-        if let Some(p) = editor.ui.format_painter.as_mut() {
-            p.sticky = true;
-            p.just_double_clicked = true;
-        }
-    } else if painter_resp.clicked() {
-        if let Some(p) = editor.ui.format_painter.as_mut() {
-            if p.just_double_clicked {
-                p.just_double_clicked = false;
-            } else {
-                editor.ui.format_painter = None;
-            }
-        } else {
-            editor.arm_format_painter(false);
-        }
-    }
+    format_painter_clicked(editor, &painter_resp);
 
     // 2. Right group: Undo, Redo, separator, and inspector toggles (Format, Animate, Slide, Course)
     let mut right_ui = ui.new_child(

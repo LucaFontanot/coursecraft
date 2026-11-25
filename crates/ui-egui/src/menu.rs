@@ -530,6 +530,17 @@ pub fn adapter(editor: &Editor, id: &str) -> Option<Json> {
                 "objects": editor.selection.ids(),
             }))
         }
+        "group.set_interactive" => {
+            if editor.ui.editing_state.is_some() {
+                return None;
+            }
+            let (slide_id, group_id, is_interactive) = selected_group_interactive_info(editor)?;
+            Some(serde_json::json!({
+                "slide": slide_id,
+                "group": group_id,
+                "interactive": !is_interactive,
+            }))
+        }
         _ => None,
     }
 }
@@ -619,6 +630,15 @@ pub fn adapter_reason(editor: &Editor, id: &str) -> &'static str {
                 ""
             }
         }
+        "group.set_interactive" => {
+            if editor.ui.master_view {
+                "Not available in slide masters"
+            } else if editor.ui.editing_state.is_some() {
+                crate::STATE_LOCK_TOOLTIP
+            } else {
+                "Select a group first"
+            }
+        }
         _ => "Command not yet implemented",
     }
 }
@@ -653,8 +673,6 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
 
-            const FILE_OPS_DISABLED_MSG: &str =
-                "Opening and saving files is desktop-only in this version";
             let desktop_file_ops = editor.file_ops_available && !cfg!(target_arch = "wasm32");
 
             if menu_button(
@@ -880,9 +898,10 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             }
         });
 
-        // 2. Other categories from the registry
+        // 2. Other categories from the registry. Insert lives on the ribbon's
+        // Insert and Slides tabs while the ribbon is on.
         for category in categories {
-            if category == "File" {
+            if category == "File" || (category == "Insert" && editor.ui.ribbon.visible) {
                 continue;
             }
             if category == "Edit" {
@@ -912,6 +931,15 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
             ui.checkbox(&mut editor.ui.show_media_library, "Media library");
+            ui.checkbox(&mut editor.ui.ribbon.visible, tl!("Ribbon"))
+                .on_hover_text(tl!(
+                    "Commands in tabs above the slide. Off shows the older toolbar."
+                ));
+            ui.checkbox(&mut editor.ui.dock.enabled, tl!("Docked Panels"))
+                .on_hover_text(tl!(
+                    "Move, tab, float and close the panels. Off keeps them fixed."
+                ));
+            panels_menu(editor, ui);
             if menu_button(
                 ui,
                 "Course map",
@@ -1091,6 +1119,31 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
     }
 }
 
+/// View › Panels: show or hide each docked panel, and reset the arrangement.
+pub(crate) fn panels_menu(editor: &mut Editor, ui: &mut Ui) {
+    let docked = editor.ui.dock.enabled;
+    ui.add_enabled_ui(docked, |ui| {
+        ui.menu_button(tl!("Panels"), |ui| {
+            for panel in crate::dock::Panel::ALL {
+                if panel == crate::dock::Panel::Canvas {
+                    continue;
+                }
+                let mut open = crate::dock::is_open(editor, panel);
+                if ui.checkbox(&mut open, tl!(panel.label())).changed() {
+                    crate::dock::set_open(editor, panel, open);
+                }
+            }
+            ui.separator();
+            if ui.button(tl!("Reset Panel Layout")).clicked() {
+                crate::dock::reset(editor);
+                ui.close();
+            }
+        })
+        .response
+        .on_disabled_hover_text(tl!("Turn on Docked Panels first"));
+    });
+}
+
 /// Shared menu items for both the top-level **Preview** menu and the toolbar's
 /// Preview caret popup.
 pub(crate) fn show_preview_menu_items(
@@ -1187,7 +1240,6 @@ pub(crate) fn show_preview_menu_items(
 fn show_project_help_items(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) {
     use crate::project_links::REPO_URL;
     use crate::report::{open_feature_request, open_link};
-    use crate::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
 
     if ui.button("Report a problem…").clicked() {
         editor.open_report();
@@ -1201,24 +1253,9 @@ fn show_project_help_items(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<
         open_link(ui.ctx(), REPO_URL);
         ui.close();
     }
-    if editor.updates_available {
-        let mut btn = Button::new("Check for updates…");
-        if editor.ui.update.has_available_hint() {
-            let p = coursecraft_render::palette(ui.ctx());
-            btn = btn.shortcut_text(egui::RichText::new("Update available").color(p.accent_text));
-        }
-        if ui.add(btn).clicked() {
-            editor.ui.update.open = true;
-            if !matches!(
-                editor.ui.update.download,
-                UpdateDownloadState::Downloading { .. }
-            ) && !editor.ui.update.has_available_hint()
-            {
-                editor.ui.update.status = UpdateCheckStatus::Checking;
-                requests.push(EditorRequest::CheckForUpdates);
-            }
-            ui.close();
-        }
+    if editor.updates_available && ui.button("Check for updates…").clicked() {
+        requests.push(EditorRequest::CheckForUpdates);
+        ui.close();
     }
 }
 
@@ -1249,6 +1286,64 @@ fn format_undo_redo_label(prefix: &str, name: &str) -> String {
             format!("{prefix} {}{}", first.to_ascii_lowercase(), chars.as_str())
         }
         _ => format!("{prefix} {name}"),
+    }
+}
+
+/// Why file and publish commands are disabled where there is no file system.
+pub(crate) const FILE_OPS_DISABLED_MSG: &str =
+    "Opening and saving files is desktop-only in this version";
+
+/// Whether Cut, Copy and Paste can run now, each with its disabled reason.
+/// The Edit menu and the ribbon's Clipboard group share these rules.
+pub(crate) struct ClipboardRules {
+    pub cut: Result<(), &'static str>,
+    pub copy: Result<(), &'static str>,
+    pub paste: Result<(), &'static str>,
+}
+
+pub(crate) fn clipboard_rules(editor: &Editor) -> ClipboardRules {
+    let has_objects = editor.selection.object.is_some();
+    let has_slide = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .is_some();
+    let navigator = editor.ui.last_active_area == crate::ActiveArea::Navigator;
+    if editor.ui.master_view {
+        let reason = Err("Not available in slide masters");
+        return ClipboardRules {
+            cut: reason,
+            copy: reason,
+            paste: reason,
+        };
+    }
+    let can_cut_slide = editor.session.course.slides().count() > 1;
+    let cut = if (navigator && has_slide && can_cut_slide) || (!navigator && has_objects) {
+        Ok(())
+    } else if navigator {
+        Err("Can't cut the only slide")
+    } else {
+        Err("Select an object first")
+    };
+    let copy = if (navigator && has_slide) || (!navigator && has_objects) {
+        Ok(())
+    } else {
+        Err("Select something first")
+    };
+    let paste = if editor.ui.clipboard.is_some() || editor.file_ops_available {
+        Ok(())
+    } else {
+        Err("Nothing to paste")
+    };
+    ClipboardRules { cut, copy, paste }
+}
+
+/// Paste: through the system clipboard on the desktop, else the editor's own.
+pub(crate) fn paste_now(editor: &mut Editor, ctx: &egui::Context) {
+    if editor.file_ops_available {
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+    } else {
+        crate::clipboard::paste_private(editor);
     }
 }
 
@@ -1284,31 +1379,13 @@ fn show_edit_menu(
     }
     ui.separator();
 
-    let has_objects = editor.selection.object.is_some();
-    let has_slide = editor
-        .session
-        .course
-        .slide(&editor.selection.slide)
-        .is_some();
-    let navigator = editor.ui.last_active_area == crate::ActiveArea::Navigator;
-    let master_view = editor.ui.master_view;
-    let can_cut_slide = editor.session.course.slides().count() > 1;
-
-    let cut_enabled =
-        !master_view && ((navigator && has_slide && can_cut_slide) || (!navigator && has_objects));
-    let cut_reason = if master_view {
-        "Not available in slide masters"
-    } else if navigator {
-        "Can't cut the only slide"
-    } else {
-        "Select an object first"
-    };
+    let rules = clipboard_rules(editor);
     if menu_button(
         ui,
         "Cut",
         Some(shortcut_for_action(ShortcutAction::Cut)),
-        cut_enabled,
-        Some(cut_reason),
+        rules.cut.is_ok(),
+        rules.cut.err(),
     )
     .clicked()
     {
@@ -1316,18 +1393,12 @@ fn show_edit_menu(
         ui.close();
     }
 
-    let copy_enabled = !master_view && ((navigator && has_slide) || (!navigator && has_objects));
-    let copy_reason = if master_view {
-        "Not available in slide masters"
-    } else {
-        "Select something first"
-    };
     if menu_button(
         ui,
         "Copy",
         Some(shortcut_for_action(ShortcutAction::Copy)),
-        copy_enabled,
-        Some(copy_reason),
+        rules.copy.is_ok(),
+        rules.copy.err(),
     )
     .clicked()
     {
@@ -1335,28 +1406,16 @@ fn show_edit_menu(
         ui.close();
     }
 
-    let paste_enabled =
-        !master_view && (editor.ui.clipboard.is_some() || editor.file_ops_available);
-    let paste_reason = if master_view {
-        "Not available in slide masters"
-    } else {
-        "Nothing to paste"
-    };
     if menu_button(
         ui,
         "Paste",
         Some(shortcut_for_action(ShortcutAction::Paste)),
-        paste_enabled,
-        Some(paste_reason),
+        rules.paste.is_ok(),
+        rules.paste.err(),
     )
     .clicked()
     {
-        if editor.file_ops_available {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-        } else {
-            crate::clipboard::paste_private(editor);
-        }
+        paste_now(editor, ui.ctx());
         ui.close();
     }
 
@@ -1396,6 +1455,16 @@ fn show_edit_menu(
             render_registry_menu_item(editor, ui, cmd, label, action_to_run);
         }
     }
+}
+
+/// The Arrange menu's entries (order, group, align, distribute), for the ribbon.
+pub(crate) fn arrange_menu_items(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    action_to_run: &mut Option<(&'static str, serde_json::Value)>,
+    requests: &mut Vec<EditorRequest>,
+) {
+    render_category_menu_items(editor, ui, "Arrange", action_to_run, requests);
 }
 
 fn render_category_menu_items(
@@ -1659,7 +1728,7 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
     }
 }
 
-fn selected_group_interactive_info(editor: &Editor) -> Option<(String, String, bool)> {
+pub(crate) fn selected_group_interactive_info(editor: &Editor) -> Option<(String, String, bool)> {
     if editor.ui.master_view || !editor.selection.is_one_group(&editor.session.course) {
         return None;
     }
@@ -1712,9 +1781,9 @@ fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool)
 
     if let Some((slide_id, group_id, is_interactive)) = selected_group_interactive_info(editor) {
         let label = if is_interactive {
-            "Remove button behaviour"
+            tl!("Remove button behaviour")
         } else {
-            "Make button from group"
+            tl!("Make button from group")
         };
         if menu_button(ui, label, None, true, None).clicked() {
             editor.run(
@@ -2207,9 +2276,9 @@ fn render_arrange_extras(
 ) {
     if let Some((slide_id, group_id, is_interactive)) = selected_group_interactive_info(editor) {
         let label = if is_interactive {
-            "Remove button behaviour"
+            tl!("Remove button behaviour")
         } else {
-            "Make button from group"
+            tl!("Make button from group")
         };
         if menu_button(ui, label, None, true, None).clicked() {
             *action_to_run = Some((

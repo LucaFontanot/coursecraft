@@ -11,8 +11,6 @@ use crate::snap::LineSnaps;
 
 /// Thickness of a ruler strip in screen points.
 pub const RULER_SIZE: f32 = 18.0;
-/// Grid spacing in slide pixels.
-pub const GRID_STEP: f32 = 20.0;
 /// The grid is hidden when its zoomed spacing is below this many screen points.
 pub const MIN_GRID_SCREEN: f32 = 6.0;
 /// How close a press must be to a guide to grab it, in screen points.
@@ -118,7 +116,7 @@ pub fn snap_lines(settings: &EditorSettings) -> LineSnaps {
         }
     }
     if settings.snap_to_grid {
-        lines.grid = Some(GRID_STEP);
+        lines.grid = Some(settings.grid_step());
     }
     lines
 }
@@ -146,8 +144,9 @@ pub fn draw_grid(editor: &Editor, painter: &Painter, t: &SlideTransform) {
     if !editor.session.course.editor.show_grid {
         return;
     }
+    let step = editor.session.course.editor.grid_step();
     let scale = t.scale();
-    if !scale.is_finite() || scale <= 0.0 || GRID_STEP * scale < MIN_GRID_SCREEN {
+    if !scale.is_finite() || scale <= 0.0 || step * scale < MIN_GRID_SCREEN {
         return;
     }
     let p = palette(painter.ctx());
@@ -156,15 +155,15 @@ pub fn draw_grid(editor: &Editor, painter: &Painter, t: &SlideTransform) {
     if w <= 0.0 || h <= 0.0 {
         return;
     }
-    let cols = (w / GRID_STEP).floor() as usize;
-    let rows = (h / GRID_STEP).floor() as usize;
+    let cols = (w / step).floor() as usize;
+    let rows = (h / step).floor() as usize;
     if cols.saturating_mul(rows) > 40_000 {
         return;
     }
     let clip = painter.clip_rect();
     for row in 0..=rows {
         for col in 0..=cols {
-            let pt = t.to_screen_pos(pos2(col as f32 * GRID_STEP, row as f32 * GRID_STEP));
+            let pt = t.to_screen_pos(pos2(col as f32 * step, row as f32 * step));
             if clip.contains(pt) {
                 painter.circle_filled(pt, 0.9, p.border_strong);
             }

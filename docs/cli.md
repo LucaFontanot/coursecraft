@@ -274,6 +274,7 @@ slide.paste          -                        -          {"scene"?: id, "after"?
 slide.set_duration   -                        -          {"slide": id, "ms": u32}
 slide.set_background -                        -          {"slide": id, "background": color|null}
 slide.set_transition -                        -          {"slide": id, "transition": Transition|null}
+slide.set_transition_all -                    -          {"transition": Transition|null}
 slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
 slide.add_cue        -                        -          {"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}
 slide.set_cue        -                        -          {"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}
@@ -317,7 +318,7 @@ object.set_rotation  -                        -          {"slide": id, "object"?
 object.flip          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "axis": "horizontal"|"vertical"}
 object.lock          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "locked": bool}
 object.hide_in_editor -                       -          {"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}
-view.set             -                        -          {"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}
+view.set             -                        -          {"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "grid_spacing"?: number, "show_guides"?: bool}
 view.guides.add      -                        -          {"vertical": bool, "at": number}
 view.guides.move     -                        -          {"index": usize, "at": number}
 view.guides.remove   -                        -          {"index": usize}

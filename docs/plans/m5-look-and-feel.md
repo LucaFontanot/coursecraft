@@ -28,11 +28,11 @@ Both themes meet WCAG AA for text roles on their surfaces; this is unit-tested. 
 | `text_secondary` | `#A8A8B0` | `#5E5E66` | labels, section headers |
 | `text_tertiary` | `#8E8E96` | `#6E6E75` | placeholders, hints, timecodes |
 | `text_disabled` | `#55555B` | `#B4B4BA` | disabled |
-| `accent` | `#0A6CFF` | `#0066E0` | primary buttons, selection handles, active tab (white text on it ≥ 4.5:1) |
-| `accent_hover` | `#2B80FF` | `#1A75E6` | |
-| `accent_pressed` | `#0058D6` | `#0055BD` | |
-| `accent_text` | `#4D9DFF` | `#0066E0` | accent used as text or icons on panel |
-| `accent_subtle` | `#1C3556` | `#DCEBFF` | selected row or thumbnail fill, text selection |
+| `accent` | `#0B7F72` | `#0B7F72` | primary buttons, selection handles, active tab, File tab and File page column (white text on it ≥ 4.5:1). Teal from the app icon (`#12A594`), darkened for contrast; was blue `#0A6CFF` / `#0066E0` until 2026-11-23 |
+| `accent_hover` | `#0E8C7E` | `#0E8C7E` | |
+| `accent_pressed` | `#096A5F` | `#08695F` | |
+| `accent_text` | `#3CCFBC` | `#08695F` | accent used as text or icons on panel |
+| `accent_subtle` | `#163C38` | `#D4F0EC` | selected row or thumbnail fill, text selection |
 | `success` | `#30D158` | `#1F9D44` | |
 | `warning` | `#FFD60A` | `#B36B00` | |
 | `danger` | `#FF453A` | `#D70015` | |

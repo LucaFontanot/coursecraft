@@ -42,6 +42,53 @@ impl InspectorTab {
     }
 }
 
+/// The inspector's tab row (Format, Animate, Slide, Course), drawn in its
+/// header when the ribbon replaces the toolbar that used to switch them.
+fn inspector_tabs(editor: &mut crate::Editor, ui: &mut Ui) {
+    let tabs = [
+        (
+            InspectorTab::Format,
+            coursecraft_render::Icon::SlidersHorizontal,
+        ),
+        (InspectorTab::Animate, coursecraft_render::Icon::Sparkle),
+        (InspectorTab::Slide, coursecraft_render::Icon::Presentation),
+        (
+            InspectorTab::Course,
+            coursecraft_render::Icon::GraduationCap,
+        ),
+    ];
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let available = ui.available_width();
+        let width = ((available - 6.0) / 4.0).floor().max(24.0);
+        // Names when they fit in a quarter of the panel each, else icons.
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let fits = tabs.iter().all(|(tab, _)| {
+            ui.painter()
+                .layout_no_wrap(tl!(tab.name()).to_owned(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+                + 2.0 * ui.spacing().button_padding.x
+                <= width
+        });
+        for (tab, icon) in tabs {
+            let active = editor.ui.inspector_tab == tab;
+            let name = tl!(tab.name());
+            let text = if fits {
+                RichText::new(name)
+            } else {
+                coursecraft_render::icon(icon, 15.0)
+            };
+            let resp = ui
+                .add_sized([width, 24.0], egui::Button::selectable(active, text))
+                .on_hover_text(craft_i18n::fmt(tl!("{tab} inspector"), &[("tab", name)]));
+            if resp.clicked() {
+                editor.ui.inspector_tab = tab;
+            }
+        }
+    });
+}
+
 /// Local edit buffers for the properties panel.
 ///
 /// Buffers are reset whenever the selection or `session.revision` changes,
@@ -134,6 +181,12 @@ pub struct PropertiesState {
     pub line_spacing_seen: f32,
     /// Whether the custom line-spacing DragValue inside the ComboBox popup was interacted with.
     pub line_spacing_editing: bool,
+    /// Space before and after the paragraph (Text panel), as typed, and the
+    /// value last read from the course.
+    pub space_before: f32,
+    pub space_before_seen: f32,
+    pub space_after: f32,
+    pub space_after_seen: f32,
     /// Snapshot of active canvas inline-edit `(slide, object, selection_range, cursor_pos)`.
     pub inline_selection: Option<crate::InlineEditSelection>,
     /// Pending style overrides toggled at a caret (no selection), applied to the next typed chars.
@@ -423,6 +476,10 @@ impl Default for PropertiesState {
             line_spacing_custom: 1.0,
             line_spacing_seen: f32::NAN,
             line_spacing_editing: false,
+            space_before: 0.0,
+            space_before_seen: f32::NAN,
+            space_after: 0.0,
+            space_after_seen: f32::NAN,
             inline_selection: None,
             pending_caret_style: None,
             add_font_requested: false,
@@ -684,6 +741,8 @@ impl PropertiesState {
         self.text_size_seen = f32::NAN;
         self.text_letter_spacing_seen = f32::NAN;
         self.line_spacing_seen = f32::NAN;
+        self.space_before_seen = f32::NAN;
+        self.space_after_seen = f32::NAN;
 
         if let Some(ref obj_id) = selection.object
             && let Some((obj, _)) = slide.object(obj_id)
@@ -1612,69 +1671,8 @@ pub(crate) fn color_swatch_picker(
         .id(popup_id)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            let max_h = (ui.ctx().content_rect().height() - 24.0).max(160.0);
-            egui::ScrollArea::vertical()
-                .id_salt((popup_id, "color_picker_scroll"))
-                .max_height(max_h)
-                .auto_shrink([true, true])
-                .show(ui, |ui| {
-                    ui.spacing_mut().slider_width = 220.0;
-                    let eyedropper = ui
-                        .add(
-                            egui::Button::new(coursecraft_render::icon_text(
-                                coursecraft_render::Icon::Target,
-                                "Eyedropper",
-                            ))
-                            .min_size(egui::vec2(120.0, 0.0)),
-                        )
-                        .on_hover_text("Pick a colour from anywhere in the window (Esc cancels)");
-                    if eyedropper.clicked() {
-                        egui::Popup::close_id(ui.ctx(), popup_id);
-                        crate::eyedropper::start_pick(ui.ctx(), field_key.clone());
-                    }
-                    ui.add_space(4.0);
-                    let palette: Vec<(String, String)> = ui
-                        .ctx()
-                        .data(|d| d.get_temp(palette_colors_id()))
-                        .unwrap_or_default();
-                    if let Some(hex) = swatch_row(ui, "Palette", &palette) {
-                        *color_hex = hex;
-                        pending = true;
-                        swatch_picked = true;
-                    }
-                    let theme: Vec<(String, String)> = ui
-                        .ctx()
-                        .data(|d| d.get_temp(theme_colors_id()))
-                        .unwrap_or_default();
-                    if let Some(hex) = swatch_row(ui, "Theme", &theme) {
-                        *color_hex = hex;
-                        pending = true;
-                        swatch_picked = true;
-                    }
-                    let recent: Vec<(String, String)> = recent_colors(ui.ctx())
-                        .into_iter()
-                        .map(|hex| (hex.clone(), hex))
-                        .collect();
-                    if let Some(hex) = swatch_row(ui, "Recent", &recent) {
-                        *color_hex = hex;
-                        pending = true;
-                        swatch_picked = true;
-                    }
-                    // "No fill" and an empty field have no colour to start from, and
-                    // dragging from invisible would stay invisible.
-                    let mut color = match parsed {
-                        Some(color) if color.a() > 0 || pending => color,
-                        _ => Color32::WHITE,
-                    };
-                    if egui::color_picker::color_picker_color32(
-                        ui,
-                        &mut color,
-                        egui::color_picker::Alpha::OnlyBlend,
-                    ) {
-                        *color_hex = color_to_hex(color);
-                        pending = true;
-                    }
-                });
+            swatch_picked |=
+                color_picker_body(ui, color_hex, parsed, popup_id, &field_key, &mut pending);
         });
     let picked = swatch_picked || (pending && !ui.input(|i| i.pointer.any_down()));
     if picked {
@@ -1683,6 +1681,87 @@ pub(crate) fn color_swatch_picker(
     }
     ui.data_mut(|d| d.insert_temp(pending_id, pending));
     picked
+}
+
+/// The inside of a colour popup: the eyedropper, the palette, theme and recent
+/// swatches, and the colour wheel. Shared by [`color_swatch_picker`] and the
+/// ribbon's Font Color. Returns true when a swatch was picked; dragging the
+/// wheel writes `color_hex` and sets `pending` until the pointer is released.
+/// The eyedropper closes the popup; its pick arrives through
+/// `eyedropper::take_pending(field_key)` on a later frame.
+pub(crate) fn color_picker_body(
+    ui: &mut Ui,
+    color_hex: &mut String,
+    parsed: Option<Color32>,
+    id_salt: egui::Id,
+    field_key: &str,
+    pending: &mut bool,
+) -> bool {
+    let mut swatch_picked = false;
+    let max_h = (ui.ctx().content_rect().height() - 24.0).max(160.0);
+    egui::ScrollArea::vertical()
+        .id_salt((id_salt, "color_picker_scroll"))
+        .max_height(max_h)
+        .auto_shrink([true, true])
+        .show(ui, |ui| {
+            ui.spacing_mut().slider_width = 220.0;
+            let eyedropper = ui
+                .add(
+                    egui::Button::new(coursecraft_render::icon_text(
+                        coursecraft_render::Icon::Target,
+                        "Eyedropper",
+                    ))
+                    .min_size(egui::vec2(120.0, 0.0)),
+                )
+                .on_hover_text("Pick a colour from anywhere in the window (Esc cancels)");
+            if eyedropper.clicked() {
+                ui.close();
+                crate::eyedropper::start_pick(ui.ctx(), field_key.to_owned());
+            }
+            ui.add_space(4.0);
+            let palette: Vec<(String, String)> = ui
+                .ctx()
+                .data(|d| d.get_temp(palette_colors_id()))
+                .unwrap_or_default();
+            if let Some(hex) = swatch_row(ui, "Palette", &palette) {
+                *color_hex = hex;
+                *pending = true;
+                swatch_picked = true;
+            }
+            let theme: Vec<(String, String)> = ui
+                .ctx()
+                .data(|d| d.get_temp(theme_colors_id()))
+                .unwrap_or_default();
+            if let Some(hex) = swatch_row(ui, "Theme", &theme) {
+                *color_hex = hex;
+                *pending = true;
+                swatch_picked = true;
+            }
+            let recent: Vec<(String, String)> = recent_colors(ui.ctx())
+                .into_iter()
+                .map(|hex| (hex.clone(), hex))
+                .collect();
+            if let Some(hex) = swatch_row(ui, "Recent", &recent) {
+                *color_hex = hex;
+                *pending = true;
+                swatch_picked = true;
+            }
+            // "No fill" and an empty field have no colour to start from, and
+            // dragging from invisible would stay invisible.
+            let mut color = match parsed {
+                Some(color) if color.a() > 0 || *pending => color,
+                _ => Color32::WHITE,
+            };
+            if egui::color_picker::color_picker_color32(
+                ui,
+                &mut color,
+                egui::color_picker::Alpha::OnlyBlend,
+            ) {
+                *color_hex = color_to_hex(color);
+                *pending = true;
+            }
+        });
+    swatch_picked
 }
 
 /// Most recent colours kept for the picker.
@@ -2213,7 +2292,7 @@ fn tri_bool(all_true: bool, any_true: bool) -> Option<bool> {
 /// Tri-state `(bold, italic, underline)` for a character range `[start, end)`.
 /// Returns `Some(true)` if all selected chars have the style, `Some(false)` if
 /// none do, and `None` (Mixed) when runs disagree.
-fn style_tri_for_range(
+pub(crate) fn style_tri_for_range(
     runs: &[TextRun],
     style: &TextStyle,
     range: (usize, usize),
@@ -2262,7 +2341,7 @@ fn style_tri_for_range(
 }
 
 /// Tri-state `(strikethrough, superscript, subscript)` for `[start, end)`.
-fn effects_tri_for_range(
+pub(crate) fn effects_tri_for_range(
     runs: &[TextRun],
     style: &TextStyle,
     range: (usize, usize),
@@ -2379,7 +2458,7 @@ fn effects_for_range(
 }
 
 /// The font named by the run at `cursor_char`, if any.
-fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
+pub(crate) fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
     run_at_caret(runs, cursor_char)
         .and_then(|run| run.font.clone())
         .or_else(|| runs.iter().rev().find_map(|run| run.font.clone()))
@@ -2393,7 +2472,9 @@ fn link_at_char(runs: &[TextRun], cursor_char: usize) -> Option<coursecraft_cour
 }
 
 /// Render the segmented inspector panel (Format · Animate · Slide · Course).
-pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
+/// Bring the shared inspector state up to date for this frame: the selection,
+/// the canvas text selection, spelling. Returns whether the selection changed.
+fn prepare(editor: &mut Editor, ui: &Ui) -> bool {
     let selection_changed = editor.ui.properties.last_synced_selection != editor.selection;
     editor.ui.properties.sync(
         &editor.session.course,
@@ -2436,10 +2517,17 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
     props.spell_add.clear();
     props.spell_ignore.clear();
 
+    selection_changed
+}
+
+pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui, docked: Option<InspectorTab>) {
+    let tab = docked.unwrap_or(editor.ui.inspector_tab);
+    let selection_changed = prepare(editor, ui);
     let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
     let p = coursecraft_render::palette(ui.ctx());
 
-    // 1. Pinned inspector header: the current tab's name (the toolbar switches tabs).
+    // 1. Pinned inspector header: with the ribbon, the four inspector tabs; with
+    // the older toolbar (which switches them), the current tab's name.
     egui::Frame::NONE
         .fill(p.panel)
         .inner_margin(egui::Margin::symmetric(
@@ -2447,6 +2535,23 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
             8,
         ))
         .show(ui, |ui| {
+            // Docked, the dock tab names the inspector and switches it.
+            if docked.is_some() {
+                if tab == InspectorTab::Format {
+                    ui.horizontal(|ui| show_arrange_icons(editor, ui, &mut actions_to_run));
+                }
+                return;
+            }
+            if editor.ui.ribbon.visible {
+                inspector_tabs(editor, ui);
+                if editor.ui.inspector_tab == InspectorTab::Format
+                    && editor.selection.object.is_some()
+                {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| show_arrange_icons(editor, ui, &mut actions_to_run));
+                }
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.label(coursecraft_render::title(editor.ui.inspector_tab.name()));
                 if editor.ui.inspector_tab == InspectorTab::Format
@@ -2463,7 +2568,7 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
     // 2. ScrollArea with panel padding
     let avail_w = ui.available_width();
     let mut scroll = egui::ScrollArea::vertical()
-        .id_salt("properties_panel_scroll")
+        .id_salt(("properties_panel_scroll", tab.name()))
         .max_width(avail_w)
         .auto_shrink([false, false]);
     if selection_changed {
@@ -2483,7 +2588,7 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
                     .spacing()
                     .text_edit_width
                     .min((inner_w - LABEL_COL_WIDTH - 16.0).max(40.0));
-                match editor.ui.inspector_tab {
+                match tab {
                     InspectorTab::Format => show_format_tab(editor, ui, &mut actions_to_run),
                     InspectorTab::Animate => show_animate_tab(editor, ui, &mut actions_to_run),
                     InspectorTab::Slide => show_slide_tab(editor, ui, &mut actions_to_run),
@@ -2493,6 +2598,316 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
         ui.add_space(coursecraft_render::PANEL_MARGIN);
     });
 
+    finish(editor, actions_to_run);
+}
+
+/// The Text settings panel (`docs/ui/panels.md`): Font, Paragraph and Text Box
+/// for the selected text box or shape text. It holds every text setting the
+/// Format inspector has, through the same controls, and the ones only this
+/// panel has (space before and after a paragraph). A setting not built yet is
+/// drawn disabled with its reason.
+pub fn show_text_panel(editor: &mut Editor, ui: &mut Ui) {
+    prepare(editor, ui);
+    let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
+    let avail_w = ui.available_width();
+    egui::ScrollArea::vertical()
+        .id_salt("text_panel_scroll")
+        .max_width(avail_w)
+        // In a floating window the space is whatever the window is sized to.
+        .max_height(ui.available_height())
+        // A launcher's jump to a section lands at once, not over several frames.
+        .animated(false)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(coursecraft_render::PANEL_MARGIN);
+            let inner_w = (avail_w - 2.0 * coursecraft_render::PANEL_MARGIN).max(40.0);
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(
+                    coursecraft_render::PANEL_MARGIN as i8,
+                    0,
+                ))
+                .show(ui, |ui| {
+                    ui.set_max_width(inner_w);
+                    ui.spacing_mut().text_edit_width = ui
+                        .spacing()
+                        .text_edit_width
+                        .min((inner_w - LABEL_COL_WIDTH - 16.0).max(40.0));
+                    text_panel_sections(editor, ui, &mut actions_to_run);
+                });
+            ui.add_space(coursecraft_render::PANEL_MARGIN);
+        });
+    let mut synced_inline_text = None;
+    if !actions_to_run.is_empty()
+        && let Some(edit) = editor.ui.inline_edit.as_ref().filter(|e| {
+            e.state_name.is_none() && e.extra_id.is_none() && !e.is_button && e.buffer != e.original
+        })
+        && actions_to_run.iter().any(|(cmd, params)| {
+            *cmd != "text.set"
+                && params.get("slide").and_then(Json::as_str) == Some(edit.slide.as_str())
+                && params.get("object").and_then(Json::as_str) == Some(edit.object.as_str())
+        })
+    {
+        let mut params = serde_json::json!({
+            "slide": edit.slide,
+            "object": edit.object,
+            "text": edit.buffer,
+        });
+        if let Some((row, column)) = edit.cell {
+            params["row"] = serde_json::json!(row);
+            params["column"] = serde_json::json!(column);
+        }
+        actions_to_run.insert(0, ("text.set", params));
+        synced_inline_text = Some(edit.buffer.clone());
+    }
+    finish(editor, actions_to_run);
+    if let (Some(buf), Some(edit)) = (synced_inline_text, editor.ui.inline_edit.as_mut()) {
+        edit.original = buf;
+    }
+}
+
+/// The text the Text panel edits, with any state being edited applied.
+struct TextTarget<'a> {
+    style: std::borrow::Cow<'a, TextStyle>,
+    base_style: std::borrow::Cow<'a, TextStyle>,
+    runs: &'a [TextRun],
+    paragraphs: &'a [Paragraph],
+    text: &'a str,
+    autofit: Option<Autofit>,
+    /// True for a point-text object (width fits content, no fixed wrap width).
+    point_text: bool,
+    /// Shape text that has no text yet: the paragraph controls wait for some.
+    empty_shape: bool,
+}
+
+/// A row for a setting that is not built yet: drawn disabled with its reason.
+fn not_yet_row(ui: &mut Ui, label: &str, feature: &str) {
+    inspector_row(ui, label, |ui| {
+        ui.add_enabled_ui(false, |ui| ui.label(tl!("Not available yet")))
+            .response
+            .on_disabled_hover_text(format!("{} {feature}", tl!("Not available yet:")));
+    });
+}
+
+fn text_panel_sections(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+) {
+    use crate::panels::{Section, section_header};
+    use std::borrow::Cow;
+
+    let focus = &mut editor.ui.panels;
+    let props = &mut editor.ui.properties;
+    let lists = &editor.ui.properties_lists;
+    let system_fonts = editor.ui.system_fonts.as_deref();
+    let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
+    let mut action_to_run: Option<(&'static str, Json)> = None;
+
+    let slide = editor.session.course.slide(&editor.selection.slide);
+    let obj = if editor.selection.is_multi() {
+        None
+    } else {
+        slide.and_then(|slide| {
+            editor
+                .selection
+                .object
+                .as_ref()
+                .and_then(|id| slide.object(id))
+                .map(|(obj, _)| obj)
+        })
+    };
+    let state = obj.and_then(|obj| {
+        editor
+            .ui
+            .editing_state
+            .as_ref()
+            .filter(|s| s.slide_id == editor.selection.slide && s.object_id == obj.id)
+            .and_then(|s| obj.states.iter().find(|st| st.name == s.state_name))
+    });
+    let state_ctx = match (slide, obj, state) {
+        (Some(slide), Some(obj), Some(state)) => Some(StateEditCtx {
+            slide_id: &slide.id,
+            object_id: &obj.id,
+            state_name: &state.name,
+            state,
+        }),
+        _ => None,
+    };
+    let target = obj.and_then(|obj| match &obj.kind {
+        ObjectKind::Text {
+            text,
+            style,
+            runs,
+            paragraphs,
+            autofit,
+            point_text,
+            ..
+        } => {
+            let mut eff = state
+                .and_then(|s| s.text_style.as_ref())
+                .unwrap_or(style)
+                .clone();
+            if let Some(state) = state
+                && state.text_style.is_none()
+                && let Some(c) = &state.fill
+            {
+                eff.color = c.clone();
+            }
+            Some(TextTarget {
+                style: Cow::Owned(eff),
+                base_style: Cow::Borrowed(style),
+                runs: state.and_then(|s| s.runs.as_deref()).unwrap_or(runs),
+                paragraphs: state
+                    .and_then(|s| s.paragraphs.as_deref())
+                    .unwrap_or(paragraphs),
+                text: state.and_then(|s| s.text.as_deref()).unwrap_or(text),
+                autofit: Some(state.and_then(|s| s.autofit).unwrap_or(*autofit)),
+                point_text: *point_text,
+                empty_shape: false,
+            })
+        }
+        ObjectKind::Shape {
+            shape, fill, text, ..
+        } if coursecraft_course::shape_allows_text(*shape) => {
+            let fill = state.and_then(|s| s.fill.as_ref()).unwrap_or(fill);
+            let (base, runs, paragraphs, body, autofit): (Cow<'_, TextStyle>, _, _, &str, _) =
+                match text {
+                    Some(t) => (
+                        Cow::Borrowed(&t.style),
+                        t.runs.as_slice(),
+                        t.paragraphs.as_slice(),
+                        t.text.as_str(),
+                        Some(t.autofit),
+                    ),
+                    None => (
+                        Cow::Owned(default_shape_text_style(fill)),
+                        &[][..],
+                        &[][..],
+                        "",
+                        None,
+                    ),
+                };
+            Some(TextTarget {
+                style: match state.and_then(|s| s.text_style.as_ref()) {
+                    Some(style) => Cow::Borrowed(style),
+                    None => base.clone(),
+                },
+                base_style: base,
+                runs: state.and_then(|s| s.runs.as_deref()).unwrap_or(runs),
+                paragraphs: state
+                    .and_then(|s| s.paragraphs.as_deref())
+                    .unwrap_or(paragraphs),
+                text: state.and_then(|s| s.text.as_deref()).unwrap_or(body),
+                autofit: state.and_then(|s| s.autofit).or(autofit),
+                point_text: false,
+                empty_shape: text.is_none(),
+            })
+        }
+        _ => None,
+    });
+    let route = |action: (&'static str, Json), target: &TextTarget<'_>| match &state_ctx {
+        Some(ctx) => route_text_set_to_state(action, ctx, &target.base_style),
+        None => action,
+    };
+
+    if target.is_none() {
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(tl!(
+                "Select a text box, or a shape that holds text, to change its text."
+            ))
+            .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+        );
+    }
+    // The ids keep this panel's text box apart from the Format inspector's,
+    // which may be on screen at the same time.
+    let prefix = if obj.is_some_and(|o| matches!(o.kind, ObjectKind::Shape { .. })) {
+        "shape@text_panel"
+    } else {
+        "text@text_panel"
+    };
+
+    section_header(focus, ui, Section::Font);
+    if let (Some(target), Some(slide), Some(obj)) = (&target, slide, obj) {
+        {
+            if let Some(action) = show_text_controls(
+                ui,
+                props,
+                &slide.id,
+                &obj.id,
+                &target.style,
+                target.runs,
+                target.text,
+                prefix,
+                &lists.font_families,
+                None,
+                target.autofit,
+                target.point_text,
+                false,
+                system_fonts,
+                &mut font_requests,
+            ) {
+                action_to_run = Some(route(action, target));
+            }
+        }
+    }
+    not_yet_row(ui, tl!("Caps"), tl!("all caps and small caps"));
+    not_yet_row(ui, tl!("Highlight"), tl!("text highlight colour"));
+    not_yet_row(ui, tl!("Underline"), tl!("underline styles"));
+
+    section_header(focus, ui, Section::Paragraph);
+    match (&target, slide, obj) {
+        (Some(target), Some(slide), Some(obj)) if !target.empty_shape => {
+            if let Some(action) = show_paragraph_controls(
+                ui,
+                props,
+                &slide.id,
+                &obj.id,
+                target.runs,
+                target.paragraphs,
+                &lists.slides,
+                target.text,
+                prefix,
+                None,
+                true,
+            ) {
+                action_to_run = Some(route(action, target));
+            }
+        }
+        (Some(_), _, _) => {
+            ui.label(
+                RichText::new(tl!("Type some text first."))
+                    .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+            );
+        }
+        _ => {}
+    }
+    not_yet_row(ui, tl!("Tab stops"), tl!("tab stops"));
+
+    section_header(focus, ui, Section::TextBox);
+    if let (Some(target), Some(slide), Some(obj)) = (&target, slide, obj)
+        && let Some(action) = show_text_box_controls(
+            ui,
+            &slide.id,
+            &obj.id,
+            &target.style,
+            prefix,
+            target.autofit,
+            target.point_text,
+        )
+    {
+        action_to_run = Some(route(action, target));
+    }
+    not_yet_row(ui, tl!("Columns"), tl!("text columns"));
+
+    editor.pending_requests.append(&mut font_requests);
+    if let Some(action) = action_to_run {
+        actions_to_run.push(action);
+    }
+}
+
+/// Run what the inspector or a settings panel asked for this frame.
+fn finish(editor: &mut Editor, mut actions_to_run: Vec<(&'static str, Json)>) {
     let spell_add = std::mem::take(&mut editor.ui.properties.spell_add);
     for word in spell_add {
         editor.add_spell_word(&word);
@@ -3230,7 +3645,7 @@ fn parse_finite(value: &str) -> Option<f32> {
 }
 
 /// A default shape text style that contrasts with the fill, centred both ways.
-fn default_shape_text_style(fill: &Color) -> TextStyle {
+pub(crate) fn default_shape_text_style(fill: &Color) -> TextStyle {
     let dark = Color("#1F1F1F".to_owned());
     let light = Color("#FFFFFF".to_owned());
     let color = match coursecraft_course::parse_color(fill) {
@@ -3354,10 +3769,10 @@ fn show_multi_properties(
         ui.add_space(coursecraft_render::SPACE_SM);
         let mut interactive = interactive_group.is_some();
         let cb = ui
-            .checkbox(&mut interactive, "Act as one button")
-            .on_hover_text(
-                "Share hover, down, selected, visited, and disabled states across all objects in this group",
-            );
+            .checkbox(&mut interactive, tl!("Act as one button"))
+            .on_hover_text(tl!(
+                "Share hover, down, selected, visited, and disabled states across all objects in this group"
+            ));
         if cb.changed() {
             actions_to_run.push((
                 "group.set_interactive",
@@ -3372,7 +3787,7 @@ fn show_multi_properties(
         if let Some(ref group) = interactive_group {
             ui.add_space(coursecraft_render::SPACE_SM);
 
-            inspector_row(ui, "Name", |ui| {
+            inspector_row(ui, tl!("Name"), |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 let r = ui.add_sized(
                     [rem_w, coursecraft_render::CONTROL_COMPACT],
@@ -3391,7 +3806,7 @@ fn show_multi_properties(
                 }
             });
 
-            inspector_row(ui, "Initial state", |ui| {
+            inspector_row(ui, tl!("Initial state"), |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 let mut current_state = group.initial_state.clone();
                 crate::widgets::styled_combo(ui, "prop_group_initial_state", rem_w)
@@ -3417,7 +3832,7 @@ fn show_multi_properties(
                     });
             });
 
-            inspector_row(ui, "Accessible description", |ui| {
+            inspector_row(ui, tl!("Accessible description"), |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 let r = ui.add_sized(
                     [rem_w, coursecraft_render::CONTROL_COMPACT],
@@ -3443,7 +3858,7 @@ fn show_multi_properties(
                 }
             });
 
-            inspector_row(ui, "Focus order", |ui| {
+            inspector_row(ui, tl!("Focus order"), |ui| {
                 let mut order = props.group_focus_order.unwrap_or(0);
                 let r = ui.add(DragValue::new(&mut order).speed(1.0));
                 if r.changed() {
@@ -3467,10 +3882,10 @@ fn show_multi_properties(
                 if ui
                     .add_enabled(
                         props.group_focus_order.is_some(),
-                        egui::Button::new("Clear")
+                        egui::Button::new(tl!("Clear"))
                             .min_size(vec2(24.0, coursecraft_render::CONTROL_COMPACT)),
                     )
-                    .on_disabled_hover_text("No focus order set")
+                    .on_disabled_hover_text(tl!("No focus order set"))
                     .clicked()
                 {
                     props.group_focus_order = None;
@@ -3488,7 +3903,7 @@ fn show_multi_properties(
             ui.add_space(coursecraft_render::SPACE_SM);
             if ui
                 .add(
-                    egui::Button::new("Add trigger…")
+                    egui::Button::new(tl!("Add trigger…"))
                         .min_size(vec2(0.0, coursecraft_render::CONTROL_COMPACT)),
                 )
                 .clicked()
@@ -4516,6 +4931,7 @@ fn show_slide_tab(
     // The pinned inspector header already reads "Slide"; don't repeat it as a caption.
     let mut narrate_requested = false;
     let bool_names = crate::course_settings::bool_variable_names(&editor.session.course);
+    let show_notes = !crate::panels::is_shown(editor, crate::dock::Panel::Notes);
     if let Some(act) = show_slide_properties(
         &mut editor.ui.properties,
         slide,
@@ -4523,6 +4939,7 @@ fn show_slide_tab(
         is_master,
         &mut narrate_requested,
         &bool_names,
+        show_notes,
     ) {
         actions_to_run.push(act);
     }
@@ -4586,6 +5003,186 @@ fn show_course_tab(
     });
 }
 
+fn show_autofit_row(
+    ui: &mut Ui,
+    slide_id: &str,
+    obj_id: &str,
+    id_prefix: &str,
+    autofit: Autofit,
+) -> Option<(&'static str, Json)> {
+    let mut action_to_run = None;
+    inspector_row(ui, tl!("Autofit"), |ui| {
+        let selected = if autofit == Autofit::Shrink {
+            tl!("Shrink text on overflow")
+        } else {
+            tl!("Off")
+        };
+        let mut chosen = None;
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, ("autofit", id_prefix, obj_id), rem_w)
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(autofit == Autofit::None, tl!("Off"))
+                    .clicked()
+                {
+                    chosen = Some(Autofit::None);
+                }
+                if ui
+                    .selectable_label(autofit == Autofit::Shrink, tl!("Shrink text on overflow"))
+                    .clicked()
+                {
+                    chosen = Some(Autofit::Shrink);
+                }
+            });
+        if let Some(value) = chosen
+            && value != autofit
+        {
+            action_to_run = Some((
+                "object.set_autofit",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": obj_id,
+                    "autofit": if value == Autofit::Shrink { "shrink" } else { "none" },
+                }),
+            ));
+        }
+    });
+    action_to_run
+}
+
+fn show_text_box_rows(
+    ui: &mut Ui,
+    slide_id: &str,
+    obj_id: &str,
+    style: &TextStyle,
+    point_text: bool,
+) -> Option<(&'static str, Json)> {
+    let mut action_to_run = None;
+    inspector_row(ui, tl!("VAlign"), |ui| {
+        let cur_valign = style.valign;
+        for (valign, name) in [
+            (VAlign::Top, "top"),
+            (VAlign::Middle, "middle"),
+            (VAlign::Bottom, "bottom"),
+        ] {
+            let label = match valign {
+                VAlign::Top => tl!("Top"),
+                VAlign::Middle => tl!("Middle"),
+                VAlign::Bottom => tl!("Bottom"),
+            };
+            if ui.selectable_label(cur_valign == valign, label).clicked() && cur_valign != valign {
+                action_to_run = Some((
+                    "text.set_paragraph",
+                    serde_json::json!({ "slide": slide_id, "object": obj_id, "valign": name }),
+                ));
+            }
+        }
+    });
+
+    inspector_row(ui, tl!("Wrap"), |ui| {
+        let mut wrap = style.wrap;
+        let resp = ui.checkbox(&mut wrap, tl!("Wrap text"));
+        let resp = if point_text {
+            resp.on_hover_text(tl!(
+                "Fits width to text. Turn on wrap or drag a side handle for fixed width."
+            ))
+        } else {
+            resp
+        };
+        if resp.changed() {
+            action_to_run = Some((
+                "text.set_paragraph",
+                serde_json::json!({ "slide": slide_id, "object": obj_id, "wrap": wrap }),
+            ));
+        }
+    });
+
+    inspector_row(ui, tl!("Direction"), |ui| {
+        let cur_dir = style.direction;
+        for (dir, name, label) in [
+            (
+                coursecraft_course::TextDirection::Horizontal,
+                "horizontal",
+                tl!("Horiz"),
+            ),
+            (
+                coursecraft_course::TextDirection::Vertical,
+                "vertical",
+                tl!("Vert 90"),
+            ),
+            (
+                coursecraft_course::TextDirection::Vertical270,
+                "vertical270",
+                tl!("Vert 270"),
+            ),
+        ] {
+            if ui.selectable_label(cur_dir == dir, label).clicked() && cur_dir != dir {
+                action_to_run = Some((
+                    "text.set_paragraph",
+                    serde_json::json!({ "slide": slide_id, "object": obj_id, "direction": name }),
+                ));
+            }
+        }
+    });
+
+    inspector_row(ui, tl!("Insets"), |ui| {
+        let mut ins = style.insets.unwrap_or_default();
+        let mut changed = false;
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for pair in [
+                [("L", &mut ins.left), ("T", &mut ins.top)],
+                [("R", &mut ins.right), ("B", &mut ins.bottom)],
+            ] {
+                ui.horizontal(|ui| {
+                    for (label, val) in pair {
+                        ui.label(label);
+                        let r = ui.add(
+                            DragValue::new(val)
+                                .speed(0.5)
+                                .range(0.0..=200.0)
+                                .max_decimals(1)
+                                .suffix(" px"),
+                        );
+                        if r.changed() {
+                            changed = true;
+                        }
+                    }
+                });
+            }
+        });
+        if changed {
+            action_to_run = Some((
+                "text.set_paragraph",
+                serde_json::json!({ "slide": slide_id, "object": obj_id, "insets": ins }),
+            ));
+        }
+    });
+    action_to_run
+}
+
+fn show_text_box_controls(
+    ui: &mut Ui,
+    slide_id: &str,
+    obj_id: &str,
+    style: &TextStyle,
+    id_prefix: &str,
+    autofit: Option<Autofit>,
+    point_text: bool,
+) -> Option<(&'static str, Json)> {
+    let mut action_to_run = None;
+    if let Some(autofit) = autofit
+        && let Some(action) = show_autofit_row(ui, slide_id, obj_id, id_prefix, autofit)
+    {
+        action_to_run = Some(action);
+    }
+    if let Some(action) = show_text_box_rows(ui, slide_id, obj_id, style, point_text) {
+        action_to_run = Some(action);
+    }
+    action_to_run
+}
+
 /// The Text panel controls, shared by text objects and shape text.
 ///
 /// `current_text` is the text being edited and `id_prefix` keeps the text box's
@@ -4605,6 +5202,7 @@ fn show_text_controls(
     cell: Option<(usize, usize)>,
     autofit: Option<Autofit>,
     point_text: bool,
+    include_box_controls: bool,
     system_fonts: Option<&[crate::SystemFontChoice]>,
     font_requests: &mut Vec<crate::EditorRequest>,
 ) -> Option<(&'static str, Json)> {
@@ -4773,44 +5371,11 @@ fn show_text_controls(
         }
     });
 
-    if let Some(autofit) = autofit {
-        inspector_row(ui, "Autofit", |ui| {
-            let selected = if autofit == Autofit::Shrink {
-                "Shrink text on overflow"
-            } else {
-                "Off"
-            };
-            let mut chosen = None;
-            let rem_w = ui.available_width().max(30.0);
-            crate::widgets::styled_combo(ui, ("autofit", id_prefix, obj_id), rem_w)
-                .selected_text(selected)
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(autofit == Autofit::None, "Off")
-                        .clicked()
-                    {
-                        chosen = Some(Autofit::None);
-                    }
-                    if ui
-                        .selectable_label(autofit == Autofit::Shrink, "Shrink text on overflow")
-                        .clicked()
-                    {
-                        chosen = Some(Autofit::Shrink);
-                    }
-                });
-            if let Some(value) = chosen
-                && value != autofit
-            {
-                action_to_run = Some((
-                    "object.set_autofit",
-                    serde_json::json!({
-                        "slide": slide_id,
-                        "object": obj_id,
-                        "autofit": if value == Autofit::Shrink { "shrink" } else { "none" },
-                    }),
-                ));
-            }
-        });
+    if include_box_controls
+        && let Some(autofit) = autofit
+        && let Some(action) = show_autofit_row(ui, slide_id, obj_id, id_prefix, autofit)
+    {
+        action_to_run = Some(action);
     }
 
     // Formatting toolbar
@@ -5090,106 +5655,11 @@ fn show_text_controls(
         }
     });
 
-    inspector_row(ui, "VAlign", |ui| {
-        let cur_valign = style.valign;
-        for (valign, name) in [
-            (VAlign::Top, "top"),
-            (VAlign::Middle, "middle"),
-            (VAlign::Bottom, "bottom"),
-        ] {
-            let label = match valign {
-                VAlign::Top => "Top",
-                VAlign::Middle => "Middle",
-                VAlign::Bottom => "Bottom",
-            };
-            if ui.selectable_label(cur_valign == valign, label).clicked() && cur_valign != valign {
-                action_to_run = Some((
-                    "text.set_paragraph",
-                    serde_json::json!({ "slide": slide_id, "object": obj_id, "valign": name }),
-                ));
-            }
-        }
-    });
-
-    inspector_row(ui, "Wrap", |ui| {
-        let mut wrap = style.wrap;
-        let resp = ui.checkbox(&mut wrap, "Wrap text");
-        let resp = if point_text {
-            resp.on_hover_text(
-                "Fits width to text. Turn on wrap or drag a side handle for fixed width.",
-            )
-        } else {
-            resp
-        };
-        if resp.changed() {
-            action_to_run = Some((
-                "text.set_paragraph",
-                serde_json::json!({ "slide": slide_id, "object": obj_id, "wrap": wrap }),
-            ));
-        }
-    });
-
-    inspector_row(ui, "Direction", |ui| {
-        let cur_dir = style.direction;
-        for (dir, name, label) in [
-            (
-                coursecraft_course::TextDirection::Horizontal,
-                "horizontal",
-                "Horiz",
-            ),
-            (
-                coursecraft_course::TextDirection::Vertical,
-                "vertical",
-                "Vert 90",
-            ),
-            (
-                coursecraft_course::TextDirection::Vertical270,
-                "vertical270",
-                "Vert 270",
-            ),
-        ] {
-            if ui.selectable_label(cur_dir == dir, label).clicked() && cur_dir != dir {
-                action_to_run = Some((
-                    "text.set_paragraph",
-                    serde_json::json!({ "slide": slide_id, "object": obj_id, "direction": name }),
-                ));
-            }
-        }
-    });
-
-    inspector_row(ui, "Insets", |ui| {
-        let mut ins = style.insets.unwrap_or_default();
-        let mut changed = false;
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for pair in [
-                [("L", &mut ins.left), ("T", &mut ins.top)],
-                [("R", &mut ins.right), ("B", &mut ins.bottom)],
-            ] {
-                ui.horizontal(|ui| {
-                    for (label, val) in pair {
-                        ui.label(label);
-                        let r = ui.add(
-                            DragValue::new(val)
-                                .speed(0.5)
-                                .range(0.0..=200.0)
-                                .max_decimals(1)
-                                .suffix(" px"),
-                        );
-                        if r.changed() {
-                            changed = true;
-                        }
-                    }
-                });
-            }
-        });
-        if changed {
-            action_to_run = Some((
-                "text.set_paragraph",
-                serde_json::json!({ "slide": slide_id, "object": obj_id, "insets": ins }),
-            ));
-        }
-    });
+    if include_box_controls
+        && let Some(action) = show_text_box_rows(ui, slide_id, obj_id, style, point_text)
+    {
+        action_to_run = Some(action);
+    }
 
     inspector_row(ui, "Text content", |ui| {
         let rem_w = ui.available_width().max(30.0);
@@ -5287,6 +5757,7 @@ fn show_paragraph_controls(
     current_text: &str,
     id_prefix: &str,
     cell: Option<(usize, usize)>,
+    full: bool,
 ) -> Option<(&'static str, Json)> {
     let mut action_to_run = None;
     let text_edit_id = egui::Id::unique(("prop_text_body", id_prefix));
@@ -5441,6 +5912,42 @@ fn show_paragraph_controls(
             action_to_run = Some(("text.set_paragraphs", params));
         }
     });
+
+    if full {
+        let before = current_paragraph.space_before;
+        let after = current_paragraph.space_after;
+        for (label, key, value) in [
+            ("Space before", "space_before", before),
+            ("Space after", "space_after", after),
+        ] {
+            let (buf, seen) = if key == "space_before" {
+                (&mut props.space_before, &mut props.space_before_seen)
+            } else {
+                (&mut props.space_after, &mut props.space_after_seen)
+            };
+            if seen.is_nan() || (value - *seen).abs() > 0.001 {
+                *buf = value;
+                *seen = value;
+            }
+            inspector_row(ui, tl!(label), |ui| {
+                let r = ui.add(
+                    DragValue::new(buf)
+                        .speed(0.5)
+                        .range(0.0..=200.0)
+                        .suffix(" px"),
+                );
+                let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (r.drag_stopped() || r.lost_focus() || enter)
+                    && buf.is_finite()
+                    && (*buf - value).abs() > 0.001
+                {
+                    let mut params = paragraph_base();
+                    params[key] = serde_json::json!(*buf);
+                    action_to_run = Some(("text.set_paragraphs", params));
+                }
+            });
+        }
+    }
 
     inspector_row(ui, "Link", |ui| {
         if ui.button("Link…").clicked() {
@@ -6532,6 +7039,7 @@ fn show_table_controls(
             Some((row, column)),
             None,
             false,
+            true,
             system_fonts,
             font_requests,
         ) {
@@ -6548,6 +7056,7 @@ fn show_table_controls(
             &cell.text,
             "table_cell",
             Some((row, column)),
+            false,
         ) {
             actions.push(action);
         }
@@ -7943,6 +8452,7 @@ fn show_object_properties(
                 None,
                 Some(eff_autofit),
                 *point_text,
+                true,
                 system_fonts,
                 &mut font_requests,
             ) {
@@ -8229,95 +8739,18 @@ fn show_object_properties(
             let eff_fill = state_ctx_ref
                 .and_then(|ctx| ctx.state.fill.as_ref())
                 .unwrap_or(fill);
-            let has_fill = eff_fill.0 != "#00000000";
-            let fill_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.fill.is_some());
-            inspector_row_state(
+            shape_fill_rows(
                 ui,
-                "Fill",
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
                 state_ctx_ref,
-                fill_overridden,
-                "Fill",
-                serde_json::json!({ "fill": null }),
+                &lists.media_names,
                 actions_to_run,
-                |ui| {
-                    let mut checked = has_fill;
-                    if ui.checkbox(&mut checked, "").changed() {
-                        let next = if !checked {
-                            "#00000000".to_owned()
-                        } else if props.shape_fill.trim().is_empty()
-                            || props.shape_fill.trim() == "#00000000"
-                        {
-                            "#D0D7DE".to_owned()
-                        } else {
-                            props.shape_fill.trim().to_owned()
-                        };
-                        props.shape_fill = next.clone();
-                        if let Some(ctx) = state_ctx_ref {
-                            action_to_run =
-                                Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
-                        } else {
-                            let mut kind = kind_with(*shape, &next);
-                            if !checked {
-                                kind["fill_style"] = Json::Null;
-                            }
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                    if has_fill {
-                        let (cr, valid_color) =
-                            show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
-                        props.color_rect = Some(cr.rect);
-                        if is_committed(&cr, ui)
-                            && valid_color
-                            && props.shape_fill.trim() != eff_fill.0
-                        {
-                            if let Some(ctx) = state_ctx_ref {
-                                action_to_run = Some(patch_state_action(
-                                    ctx,
-                                    serde_json::json!({ "fill": props.shape_fill.trim() }),
-                                ));
-                            } else {
-                                action_to_run = Some((
-                                    "object.update",
-                                    serde_json::json!({
-                                        "slide": slide.id,
-                                        "object": obj.id,
-                                        "kind": kind_with(*shape, props.shape_fill.trim()),
-                                    }),
-                                ));
-                            }
-                        }
-                    }
-                },
+                &mut action_to_run,
             );
-
-            if has_fill {
-                let base_fill_style_some = matches!(
-                    &obj.kind,
-                    ObjectKind::Shape {
-                        fill_style: Some(_),
-                        ..
-                    }
-                );
-                show_fill_style_editor(
-                    ui,
-                    props,
-                    &eff_fill.0,
-                    &slide.id,
-                    &obj.id,
-                    &lists.media_names,
-                    state_ctx_ref,
-                    base_fill_style_some,
-                    actions_to_run,
-                );
-            }
 
             if !adjust.is_empty() {
                 ui.add_enabled_ui(!state_edit_locked, |ui| {
@@ -8341,168 +8774,18 @@ fn show_object_properties(
             }
 
             inspector_separator(ui);
-            let shape_outline_overridden = state_ctx_ref
-                .is_some_and(|ctx| ctx.state.outline.is_some() || ctx.state.clear_outline);
-            let build_shape_outline = |props: &PropertiesState| {
-                outline_json(
-                    &props.shape_outline_color,
-                    props.shape_outline_width,
-                    props.shape_outline_dash,
-                    &props.shape_outline_dash_pattern,
-                    props.shape_outline_join,
-                )
-            };
-            inspector_row_state(
+            shape_outline_rows(
                 ui,
-                "Outline",
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
+                outline,
                 state_ctx_ref,
-                shape_outline_overridden,
-                "Outline",
-                serde_json::json!({ "outline": null, "clear_outline": false }),
                 actions_to_run,
-                |ui| {
-                    let mut has_outline = props.shape_outline_enabled;
-                    if ui.checkbox(&mut has_outline, "").changed() {
-                        props.shape_outline_enabled = has_outline;
-                        if let Some(ctx) = state_ctx_ref {
-                            let patch = if has_outline {
-                                serde_json::json!({ "outline": build_shape_outline(props) })
-                            } else if outline.is_some() {
-                                serde_json::json!({ "clear_outline": true })
-                            } else {
-                                serde_json::json!({ "outline": null, "clear_outline": false })
-                            };
-                            action_to_run = Some(patch_state_action(ctx, patch));
-                        } else {
-                            let out_json = if has_outline {
-                                build_shape_outline(props)
-                            } else {
-                                Json::Null
-                            };
-                            let mut kind = kind_with(*shape, &fill.0);
-                            kind["outline"] = out_json;
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                },
+                &mut action_to_run,
             );
-
-            if props.shape_outline_enabled {
-                inspector_row(ui, "Colour", |ui| {
-                    let (cr, valid_color) = show_color_field(
-                        ui,
-                        "",
-                        &mut props.shape_outline_color,
-                        "prop_shape_outline_color",
-                    );
-                    props.color_rect = Some(cr.rect);
-                    if is_committed(&cr, ui) && valid_color {
-                        if let Some(ctx) = state_ctx_ref {
-                            action_to_run = Some(patch_state_action(
-                                ctx,
-                                serde_json::json!({ "outline": build_shape_outline(props) }),
-                            ));
-                        } else {
-                            let mut kind = kind_with(*shape, &fill.0);
-                            kind["outline"] = build_shape_outline(props);
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                });
-
-                inspector_row(ui, "Width", |ui| {
-                    let rem_w = ui.available_width().max(30.0);
-                    let r = add_drag_left(
-                        ui,
-                        [rem_w, coursecraft_render::CONTROL_COMPACT],
-                        DragValue::new(&mut props.shape_outline_width)
-                            .speed(0.25)
-                            .range(0.0..=50.0)
-                            .suffix(" px"),
-                    );
-                    let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (r.drag_stopped() || r.lost_focus() || enter)
-                        && props.shape_outline_width.is_finite()
-                        && (0.0..=50.0).contains(&props.shape_outline_width)
-                    {
-                        if let Some(ctx) = state_ctx_ref {
-                            action_to_run = Some(patch_state_action(
-                                ctx,
-                                serde_json::json!({ "outline": build_shape_outline(props) }),
-                            ));
-                        } else {
-                            let mut kind = kind_with(*shape, &fill.0);
-                            kind["outline"] = build_shape_outline(props);
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                });
-
-                if show_dash_controls(
-                    ui,
-                    "prop_shape_outline",
-                    &mut props.shape_outline_dash,
-                    &mut props.shape_outline_dash_pattern,
-                    &mut props.shape_outline_dash_length,
-                    &mut props.shape_outline_gap,
-                ) {
-                    if let Some(ctx) = state_ctx_ref {
-                        action_to_run = Some(patch_state_action(
-                            ctx,
-                            serde_json::json!({ "outline": build_shape_outline(props) }),
-                        ));
-                    } else {
-                        let mut kind = kind_with(*shape, &fill.0);
-                        kind["outline"] = build_shape_outline(props);
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind,
-                            }),
-                        ));
-                    }
-                }
-                if show_corners_control(ui, "prop_shape_outline", &mut props.shape_outline_join) {
-                    if let Some(ctx) = state_ctx_ref {
-                        action_to_run = Some(patch_state_action(
-                            ctx,
-                            serde_json::json!({ "outline": build_shape_outline(props) }),
-                        ));
-                    } else {
-                        action_to_run = Some((
-                            "object.set_outline_join",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "join": props.shape_outline_join,
-                            }),
-                        ));
-                    }
-                }
-            }
 
             if coursecraft_course::shape_allows_text(*shape) {
                 inspector_separator(ui);
@@ -8544,6 +8827,7 @@ fn show_object_properties(
                     None,
                     eff_autofit,
                     false,
+                    true,
                     system_fonts,
                     &mut font_requests,
                 ) {
@@ -9673,6 +9957,7 @@ fn show_object_properties(
                 eff_text,
                 "text",
                 None,
+                false,
             ) {
                 action_to_run = Some(match state_ctx_ref {
                     Some(ctx) => route_text_set_to_state(action, ctx, style),
@@ -9705,6 +9990,7 @@ fn show_object_properties(
                 eff_text,
                 "shape",
                 None,
+                false,
             ) {
                 action_to_run = Some(match state_ctx_ref {
                     Some(ctx) => route_text_set_to_state(action, ctx, &text.style),
@@ -9746,6 +10032,433 @@ fn show_object_properties(
     }
 }
 
+/// The Shape Style settings panel: Fill, Outline and Effects of the selected
+/// object, drawn with the Format inspector's own rows (state edits included).
+/// Fill and Outline are for shapes; Effects are for any object.
+pub fn show_shape_style_panel(editor: &mut Editor, ui: &mut Ui) {
+    prepare(editor, ui);
+    let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
+    let avail_w = ui.available_width();
+    egui::ScrollArea::vertical()
+        .id_salt("shape_style_panel_scroll")
+        .max_width(avail_w)
+        .max_height(ui.available_height())
+        .animated(false)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::same(coursecraft_render::PANEL_MARGIN as i8))
+                .show(ui, |ui| {
+                    shape_style_sections(editor, ui, &mut actions_to_run)
+                });
+        });
+    finish(editor, actions_to_run);
+}
+
+fn shape_style_sections(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+) {
+    use crate::panels::{Section, section_header};
+    let focus = &mut editor.ui.panels;
+    let props = &mut editor.ui.properties;
+    let lists = &editor.ui.properties_lists;
+    let slide = editor.session.course.slide(&editor.selection.slide);
+    let obj = if editor.selection.is_multi() {
+        None
+    } else {
+        slide.and_then(|slide| {
+            editor
+                .selection
+                .object
+                .as_ref()
+                .and_then(|id| slide.object(id))
+                .map(|(obj, _)| obj)
+        })
+    };
+    let (Some(slide), Some(obj)) = (slide, obj) else {
+        section_header(focus, ui, Section::Fill);
+        ui.label(
+            RichText::new(tl!("Select one object to style it."))
+                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+        );
+        return;
+    };
+    let state = editor
+        .ui
+        .editing_state
+        .as_ref()
+        .filter(|s| s.slide_id == editor.selection.slide && s.object_id == obj.id)
+        .and_then(|s| obj.states.iter().find(|st| st.name == s.state_name));
+    let state_ctx = state.map(|state| StateEditCtx {
+        slide_id: &slide.id,
+        object_id: &obj.id,
+        state_name: &state.name,
+        state,
+    });
+    let state_ctx_ref = state_ctx.as_ref();
+    let mut action_to_run: Option<(&'static str, Json)> = None;
+    match &obj.kind {
+        ObjectKind::Shape {
+            shape,
+            fill,
+            outline,
+            ..
+        } => {
+            section_header(focus, ui, Section::Fill);
+            shape_fill_rows(
+                ui,
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
+                state_ctx_ref,
+                &lists.media_names,
+                actions_to_run,
+                &mut action_to_run,
+            );
+            inspector_separator(ui);
+            section_header(focus, ui, Section::Outline);
+            shape_outline_rows(
+                ui,
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
+                outline,
+                state_ctx_ref,
+                actions_to_run,
+                &mut action_to_run,
+            );
+        }
+        _ => {
+            section_header(focus, ui, Section::Fill);
+            ui.label(
+                RichText::new(tl!(
+                    "Fill and outline are for shapes; the Format panel styles this object."
+                ))
+                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+            );
+        }
+    }
+    // Draws its own Effects heading.
+    show_effect_controls(
+        ui,
+        props,
+        &slide.id,
+        &obj.id,
+        state_ctx_ref,
+        obj.shadow.is_some(),
+        obj.glow.is_some(),
+        actions_to_run,
+    );
+    if let Some(action) = action_to_run {
+        actions_to_run.push(action);
+    }
+}
+
+/// A shape's Fill rows: the fill on or off, its colour, and the fill style
+/// (gradient, picture). Shared by the Format inspector and the Shape Style panel.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn shape_fill_rows(
+    ui: &mut Ui,
+    props: &mut PropertiesState,
+    slide: &coursecraft_course::Slide,
+    obj: &coursecraft_course::Object,
+    shape: &ShapeKind,
+    fill: &Color,
+    state_ctx_ref: Option<&StateEditCtx<'_>>,
+    media_names: &[String],
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+    action_to_run: &mut Option<(&'static str, Json)>,
+) {
+    let base_kind = serde_json::to_value(&obj.kind).unwrap_or(Json::Null);
+    let kind_with = |shape: ShapeKind, fill: &str| -> Json {
+        let mut kind = base_kind.clone();
+        kind["shape"] = serde_json::json!(shape);
+        kind["fill"] = serde_json::json!(fill);
+        kind
+    };
+    let eff_fill = state_ctx_ref
+        .and_then(|ctx| ctx.state.fill.as_ref())
+        .unwrap_or(fill);
+    let has_fill = eff_fill.0 != "#00000000";
+    let fill_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.fill.is_some());
+    inspector_row_state(
+        ui,
+        "Fill",
+        state_ctx_ref,
+        fill_overridden,
+        "Fill",
+        serde_json::json!({ "fill": null }),
+        actions_to_run,
+        |ui| {
+            let mut checked = has_fill;
+            if ui.checkbox(&mut checked, "").changed() {
+                let next = if !checked {
+                    "#00000000".to_owned()
+                } else if props.shape_fill.trim().is_empty()
+                    || props.shape_fill.trim() == "#00000000"
+                {
+                    "#D0D7DE".to_owned()
+                } else {
+                    props.shape_fill.trim().to_owned()
+                };
+                props.shape_fill = next.clone();
+                if let Some(ctx) = state_ctx_ref {
+                    *action_to_run =
+                        Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
+                } else {
+                    let mut kind = kind_with(*shape, &next);
+                    if !checked {
+                        kind["fill_style"] = Json::Null;
+                    }
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+            if has_fill {
+                let (cr, valid_color) =
+                    show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
+                props.color_rect = Some(cr.rect);
+                if is_committed(&cr, ui) && valid_color && props.shape_fill.trim() != eff_fill.0 {
+                    if let Some(ctx) = state_ctx_ref {
+                        *action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ "fill": props.shape_fill.trim() }),
+                        ));
+                    } else {
+                        *action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": kind_with(*shape, props.shape_fill.trim()),
+                            }),
+                        ));
+                    }
+                }
+            }
+        },
+    );
+
+    if has_fill {
+        let base_fill_style_some = matches!(
+            &obj.kind,
+            ObjectKind::Shape {
+                fill_style: Some(_),
+                ..
+            }
+        );
+        show_fill_style_editor(
+            ui,
+            props,
+            &eff_fill.0,
+            &slide.id,
+            &obj.id,
+            media_names,
+            state_ctx_ref,
+            base_fill_style_some,
+            actions_to_run,
+        );
+    }
+}
+
+/// A shape's Outline rows: on or off, colour, width, dash and corners. Shared
+/// by the Format inspector and the Shape Style panel.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn shape_outline_rows(
+    ui: &mut Ui,
+    props: &mut PropertiesState,
+    slide: &coursecraft_course::Slide,
+    obj: &coursecraft_course::Object,
+    shape: &ShapeKind,
+    fill: &Color,
+    outline: &Option<coursecraft_course::Outline>,
+    state_ctx_ref: Option<&StateEditCtx<'_>>,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+    action_to_run: &mut Option<(&'static str, Json)>,
+) {
+    let base_kind = serde_json::to_value(&obj.kind).unwrap_or(Json::Null);
+    let kind_with = |shape: ShapeKind, fill: &str| -> Json {
+        let mut kind = base_kind.clone();
+        kind["shape"] = serde_json::json!(shape);
+        kind["fill"] = serde_json::json!(fill);
+        kind
+    };
+    let shape_outline_overridden =
+        state_ctx_ref.is_some_and(|ctx| ctx.state.outline.is_some() || ctx.state.clear_outline);
+    let build_shape_outline = |props: &PropertiesState| {
+        outline_json(
+            &props.shape_outline_color,
+            props.shape_outline_width,
+            props.shape_outline_dash,
+            &props.shape_outline_dash_pattern,
+            props.shape_outline_join,
+        )
+    };
+    inspector_row_state(
+        ui,
+        "Outline",
+        state_ctx_ref,
+        shape_outline_overridden,
+        "Outline",
+        serde_json::json!({ "outline": null, "clear_outline": false }),
+        actions_to_run,
+        |ui| {
+            let mut has_outline = props.shape_outline_enabled;
+            if ui.checkbox(&mut has_outline, "").changed() {
+                props.shape_outline_enabled = has_outline;
+                if let Some(ctx) = state_ctx_ref {
+                    let patch = if has_outline {
+                        serde_json::json!({ "outline": build_shape_outline(props) })
+                    } else if outline.is_some() {
+                        serde_json::json!({ "clear_outline": true })
+                    } else {
+                        serde_json::json!({ "outline": null, "clear_outline": false })
+                    };
+                    *action_to_run = Some(patch_state_action(ctx, patch));
+                } else {
+                    let out_json = if has_outline {
+                        build_shape_outline(props)
+                    } else {
+                        Json::Null
+                    };
+                    let mut kind = kind_with(*shape, &fill.0);
+                    kind["outline"] = out_json;
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+        },
+    );
+
+    if props.shape_outline_enabled {
+        inspector_row(ui, "Colour", |ui| {
+            let (cr, valid_color) = show_color_field(
+                ui,
+                "",
+                &mut props.shape_outline_color,
+                "prop_shape_outline_color",
+            );
+            props.color_rect = Some(cr.rect);
+            if is_committed(&cr, ui) && valid_color {
+                if let Some(ctx) = state_ctx_ref {
+                    *action_to_run = Some(patch_state_action(
+                        ctx,
+                        serde_json::json!({ "outline": build_shape_outline(props) }),
+                    ));
+                } else {
+                    let mut kind = kind_with(*shape, &fill.0);
+                    kind["outline"] = build_shape_outline(props);
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+        });
+
+        inspector_row(ui, "Width", |ui| {
+            let rem_w = ui.available_width().max(30.0);
+            let r = add_drag_left(
+                ui,
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                DragValue::new(&mut props.shape_outline_width)
+                    .speed(0.25)
+                    .range(0.0..=50.0)
+                    .suffix(" px"),
+            );
+            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (r.drag_stopped() || r.lost_focus() || enter)
+                && props.shape_outline_width.is_finite()
+                && (0.0..=50.0).contains(&props.shape_outline_width)
+            {
+                if let Some(ctx) = state_ctx_ref {
+                    *action_to_run = Some(patch_state_action(
+                        ctx,
+                        serde_json::json!({ "outline": build_shape_outline(props) }),
+                    ));
+                } else {
+                    let mut kind = kind_with(*shape, &fill.0);
+                    kind["outline"] = build_shape_outline(props);
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+        });
+
+        if show_dash_controls(
+            ui,
+            "prop_shape_outline",
+            &mut props.shape_outline_dash,
+            &mut props.shape_outline_dash_pattern,
+            &mut props.shape_outline_dash_length,
+            &mut props.shape_outline_gap,
+        ) {
+            if let Some(ctx) = state_ctx_ref {
+                *action_to_run = Some(patch_state_action(
+                    ctx,
+                    serde_json::json!({ "outline": build_shape_outline(props) }),
+                ));
+            } else {
+                let mut kind = kind_with(*shape, &fill.0);
+                kind["outline"] = build_shape_outline(props);
+                *action_to_run = Some((
+                    "object.update",
+                    serde_json::json!({
+                        "slide": slide.id,
+                        "object": obj.id,
+                        "kind": kind,
+                    }),
+                ));
+            }
+        }
+        if show_corners_control(ui, "prop_shape_outline", &mut props.shape_outline_join) {
+            if let Some(ctx) = state_ctx_ref {
+                *action_to_run = Some(patch_state_action(
+                    ctx,
+                    serde_json::json!({ "outline": build_shape_outline(props) }),
+                ));
+            } else {
+                *action_to_run = Some((
+                    "object.set_outline_join",
+                    serde_json::json!({
+                        "slide": slide.id,
+                        "object": obj.id,
+                        "join": props.shape_outline_join,
+                    }),
+                ));
+            }
+        }
+    }
+}
+
 fn show_slide_properties(
     props: &mut PropertiesState,
     slide: &coursecraft_course::Slide,
@@ -9753,6 +10466,7 @@ fn show_slide_properties(
     is_master: bool,
     narrate_requested: &mut bool,
     bool_names: &[String],
+    show_notes: bool,
 ) -> Option<(&'static str, Json)> {
     let mut action_to_run = None;
 
@@ -9930,34 +10644,80 @@ fn show_slide_properties(
                 }
             });
         }
-        // Notes take the full width, so they are comfortable to read and write.
-        let p = coursecraft_render::palette(ui.ctx());
-        ui.horizontal(|ui| {
-            ui.label(coursecraft_render::body("Notes").color(p.text_secondary));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::quiet_button(ui, "Narrate…", crate::QuietTone::Accent, true).clicked() {
-                    *narrate_requested = true;
-                }
-            });
-        });
-        let r = ui.add_sized(
-            [ui.available_width(), 52.0],
-            TextEdit::multiline(&mut props.slide_notes)
-                .id_salt("prop_slide_notes")
-                .desired_rows(3),
-        );
-        if is_committed(&r, ui) && props.slide_notes != slide.notes {
-            action_to_run = Some((
-                "slide.update",
-                serde_json::json!({
-                    "slide": slide.id,
-                    "notes": props.slide_notes.trim(),
-                }),
-            ));
+        // With the Notes panel open the notes live there instead of duplicating them here.
+        if show_notes && let Some(act) = notes_editor(ui, props, slide, narrate_requested, 52.0) {
+            action_to_run = Some(act);
         }
     }
 
     action_to_run
+}
+
+/// The slide's notes, full width: a "Notes" caption with Narrate…, then the
+/// text, at least `height` tall. Shared by the Slide inspector and the Notes panel.
+fn notes_editor(
+    ui: &mut Ui,
+    props: &mut PropertiesState,
+    slide: &coursecraft_course::Slide,
+    narrate_requested: &mut bool,
+    height: f32,
+) -> Option<(&'static str, Json)> {
+    let p = coursecraft_render::palette(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(coursecraft_render::body(tl!("Notes")).color(p.text_secondary));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if crate::quiet_button(ui, tl!("Narrate…"), crate::QuietTone::Accent, true).clicked()
+            {
+                *narrate_requested = true;
+            }
+        });
+    });
+    let r = ui.add_sized(
+        [ui.available_width(), height.max(52.0)],
+        TextEdit::multiline(&mut props.slide_notes)
+            .id_salt("prop_slide_notes")
+            .desired_rows(3),
+    );
+    (is_committed(&r, ui) && props.slide_notes != slide.notes).then(|| {
+        (
+            "slide.update",
+            serde_json::json!({
+                "slide": slide.id,
+                "notes": props.slide_notes.trim(),
+            }),
+        )
+    })
+}
+
+/// The Notes dock panel: the current slide's notes, filling the panel.
+pub fn show_notes_panel(editor: &mut Editor, ui: &mut Ui) {
+    prepare(editor, ui);
+    let slide_id = editor.selection.slide.clone();
+    let Some(slide) = editor.session.course.slide(&slide_id) else {
+        ui.add_space(8.0);
+        ui.label(tl!("Select a slide to write its notes."));
+        return;
+    };
+    let mut actions_to_run = Vec::new();
+    let mut narrate_requested = false;
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::same(coursecraft_render::PANEL_MARGIN as i8))
+        .show(ui, |ui| {
+            let height = ui.available_height() - 28.0;
+            if let Some(act) = notes_editor(
+                ui,
+                &mut editor.ui.properties,
+                slide,
+                &mut narrate_requested,
+                height,
+            ) {
+                actions_to_run.push(act);
+            }
+        });
+    if narrate_requested {
+        editor.open_narration_from_notes(&slide_id);
+    }
+    finish(editor, actions_to_run);
 }
 
 /// "Course default / <on_label> / <off_label>". Returns the new choice (`None` clears it).

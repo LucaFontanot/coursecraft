@@ -374,9 +374,109 @@ Plan by Gemini 4 Neon: `docs/testing/m37-plan.md`; report: `docs/testing/m37-rep
 - Interactive groups: a group can act as one button with one shared state, one click trigger, one Tab stop, one focus ring and one screen-reader button.
 - Released as 0.4.6.
 
+## M38 Ribbon UI (in progress)
+
+CourseCraft's tabbed ribbon and dockable panel workspace. Plan and full inventory:
+`docs/ui/` (start at `docs/ui/README.md`). Feature-level status: `docs/ui/feature-parity.md`
+(2026-11-24: 110 built, 38 partly, 59 not yet, 12 not planned). Layout and look follow
+`DESIGN.md`. Hand checks: `docs/release-checklist.md` § 9.
+
+0. **Foundation** (owner decision 2026-11-23): the new UI is built on `craft-ui` and localized
+   with `craft-i18n`, both from `storytold/craft-libs`, pinned to one rev, with DeckCraft's egui
+   fork patch. `build.rs` embeds the craft-i18n catalogs when `CRAFT_I18N_DIR` is set (English
+   otherwise); `tl!` for every interface string; Preferences › Language. See
+   `docs/ui/implementation.md` § 0 and `docs/ui/localization.md`. **Built (2026-11-23):**
+   craft-libs `63196e66`, the fork patch, `crates/ui-egui/build.rs`, `crates/ui-egui/src/i18n.rs`
+   and the Language picker; the Preferences window is the first one drawn through `tl!`. Still
+   open: the before/after look at the web player in a browser.
+1. Workspace on `craft-ui` docking and panes with today's panels inside. Ribbon drawn from one
+   declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), ribbon widgets ported from DeckCraft
+   onto `craft-ui`; Home first, beside the old toolbar. **Ribbon part built (2026-11-23):**
+   `crates/ui-egui/src/ribbon/` (`spec.rs`, `widgets.rs`, `mod.rs`), View › Ribbon, Home in both
+   variants, the other tabs drawn with a "being built" note. **Docking built (2026-11-23):**
+   `crates/ui-egui/src/dock.rs` hosts slides, canvas, timeline and Inspector in a
+   `craft_ui::docking` workspace, with Reset Panel Layout. **Saved and on by default
+   (2026-11-23):** the arrangement goes to `prefs.json`, View › Panels closes and reopens
+   panels, and Preferences › Interface turns the ribbon and docking off.
+2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
+   built controls wired and planned unbuilt controls **drawn disabled** with a "Not available yet"
+   tooltip (`NotPlanned` placeholders stay in the spec and are hidden from the UI); the shared
+   New Slide ▾ menu. **Insert, Slides and View built (2026-11-23)**, with a
+   quick access toolbar (Save, Undo, Redo), Ctrl+F1, and groups that shrink to one button when
+   the window is narrow. The ribbon replaces the flat toolbar and the menu bar's Insert menu;
+   Format, Animate, Slide and Course are dock panels of their own, and the AI controls have
+   their own tab. Design, Transitions,
+   Animations and Help followed: their buttons open the dialog or inspector that does the work
+   until the galleries are wired. Then the File page (from the File tab; the menu bar is no
+   longer drawn under the ribbon) and the view tabs row (Course Map, then each opened slide).
+   The launch screen is the File page's Start section, and Design, Transitions and Animations
+   have their galleries (2026-11-24).
+3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide
+   Master, Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
+   **Contextual tabs built (2026-11-24):** `CONTEXT_TABS` in `ribbon/spec.rs` and
+   `ribbon/contextual.rs`: each shows for its selection under a coloured caption, opens by itself
+   right after the object is inserted, and goes back to Home when deselected; X, Y, Width and
+   Height fields, Edit Points, Crop, Replace and Reset Picture, Replace media, Import Captions,
+   the table's rows, columns, header row and split, Shuffle Answers. Slide Master mode has its
+   tab and strip. Still open: Feedback Layouts, Question form view and the Preview tab strips.
+4. File page (the welcome screen restyled: start actions, Recent with thumbnails, Close project).
+5. Shell: view tabs for open slides, status bar, right panel (Triggers over Slide Layers), Slide
+   Properties in the Course Map, collapsible and undockable panels, Reset Panels, tooltips with
+   shortcut and help, complete right-click menus.
+6. Dialog front-ends over existing commands: Trigger, Insert Slide / Insert Question, Player
+   Properties, Publish.
+7. Settings panels (`docs/ui/panels.md`): every ↘ launcher opens a closable dock panel with all
+   the settings of its category, in place of modal dialogs. M38 builds the registry, the
+   launcher wiring and Grid and Guides; the category panels follow in M39–M43, then
+   customization (sections, pinning, workspaces). **Built (2026-11-23):** the registry, every
+   launcher opening a panel, saved layouts that survive new panels, and the Text panel (Font ↘,
+   Paragraph ↘), which also opens by itself when text editing starts on the canvas.
+
+The milestones after M38 switch the disabled buttons on, one area at a time. Each one moves rows
+in `docs/ui/feature-parity.md` to ✅ and flips the matching `NotYet` actions in the ribbon spec.
+Order follows what testers ask for; this is the default.
+
+## M39 Text and formatting gaps (planned)
+
+Clear formatting, text shadow, change case, highlight colour (new run field), text direction,
+numbering styles, vertical alignment in the ribbon, paste options (keep source, text only, Paste
+Special), the Text and Size and Position settings panels that the Font, Paragraph and Size and
+Position ↘ launchers open (`docs/ui/panels.md`), Create New Theme Fonts dialog, slide
+number field, symbol picker, insert variable reference, focus order dialog.
+
+## M40 Pictures, buttons and media polish (planned)
+
+Brightness and contrast, picture styles, crop to shape, zoom picture, recolor photos, reset
+picture, reflection and soft edges, change shape, button icons (gallery, align, colour, remove),
+selection groups, On Click pre-filled, callout shapes, export picture/audio/video, audio and
+video editor beyond trim, captions add/export/delete, compression, video in a new window, webcam
+recording, a bundled open-licence icon set.
+
+## M41 Structure, masters and questions (planned)
+
+Start section (model field and runtime rule in `docs/spec/triggers.md`), reset slide
+to layout, master Preserve / Title / Insert Placeholder, hide background graphics, feedback layouts,
+swipe gestures (editor and player), custom mouse cursor, convert slide to custom question, question
+form view, feedback and scoring by choice, media per choice and feedback.
+
+## M42 Animation and timeline depth (planned)
+
+Full entrance/exit gallery, emphasis animations, animation painter, sequence by paragraph with
+build steps on the timeline, transition effect options and Apply to All, path options, camera
+zoom, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
+C adds a cue point while playing, Course Map scene collapse and branch lines.
+
+## M43 Preview and AI ribbon (planned)
+
+Preview device sizes and orientations, Replay scopes, Edit Slide and Inspect (variables and
+trigger log from the simulator), publish quality, LRS beside an LMS, editable player text labels,
+save and import player settings. The AI group through the user's own agent: quiz, question and
+summary from course content, insert and edit text, image, sound effects and music, and an AI panel.
+
 ## After the first release
 
-- More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
+- Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M38 (`docs/ui/localization.md`).
+- More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Right-to-left interface languages wait for a mirrored layout. Until then, testing uses English and the other scripts the bundled font supports.
 - Phone-friendly, scrolling lessons, once CourseCraft can compete with Storyline 360. This is where it starts to stand apart from the competition.
 
 ## Later

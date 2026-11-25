@@ -33,6 +33,8 @@ pub mod prefs;
 pub mod preview_server;
 pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod recent_previews;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod system_fonts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod template_library;
@@ -56,7 +58,6 @@ mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod u16_shell_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod updates_ui_tests;
 #[cfg(test)]
 mod versions_tests;
 
@@ -146,6 +147,9 @@ struct EditorApp {
     /// One background agent check or action at a time, on the desktop.
     #[cfg(not(target_arch = "wasm32"))]
     agents: agents::AgentClient,
+    /// Thumbnails of the recent courses, read in the background.
+    #[cfg(not(target_arch = "wasm32"))]
+    recent_previews: recent_previews::RecentPreviews,
     #[cfg(not(target_arch = "wasm32"))]
     project: Project,
     #[cfg(not(target_arch = "wasm32"))]
@@ -209,18 +213,9 @@ struct EditorApp {
     /// Local HTTP server for "Open in browser" after a publish.
     #[cfg(not(target_arch = "wasm32"))]
     preview_server: Option<preview_server::PreviewServer>,
-    /// Background desktop update checker and verified downloader.
+    /// The Craft suite's update check, prompt and self-update (`craft_update`).
     #[cfg(not(target_arch = "wasm32"))]
-    updates: updates::UpdateClient,
-    /// Latest resolved update from GitHub, if a newer version is available.
-    #[cfg(not(target_arch = "wasm32"))]
-    available_update: Option<updates::ResolvedUpdate>,
-    /// Verified installer saved to Downloads, for "Show in folder".
-    #[cfg(not(target_arch = "wasm32"))]
-    downloaded_update_path: Option<PathBuf>,
-    /// True when the user opened a manual check while a check was already in flight.
-    #[cfg(not(target_arch = "wasm32"))]
-    manual_update_check_pending: bool,
+    updates: updates::Runtime,
     /// A file returned by the export save dialog in tests instead of opening a dialog.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     test_export_path: Option<PathBuf>,
@@ -245,9 +240,6 @@ struct EditorApp {
     /// A folder returned by Open Folder in tests instead of opening a native dialog.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     test_open_folder_path: Option<PathBuf>,
-    /// Destination folder override for update downloads in tests.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    test_downloads_dir: Option<PathBuf>,
     /// The egui context control requests repaint, so an idle editor still answers them.
     #[cfg(not(target_arch = "wasm32"))]
     repaint_ctx: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>>,
@@ -384,34 +376,6 @@ fn autosave_time_str(auto_path: &Path) -> String {
         .unwrap_or_else(|_| "recent session".to_string())
 }
 
-/// Current wall-clock timestamp in Unix seconds (0 if the system clock precedes the Unix epoch).
-#[cfg(not(target_arch = "wasm32"))]
-fn now_unix_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-}
-
-/// Convert a desktop [`updates::ResolvedUpdate`] into the pure-UI [`UpdateInfo`] payload.
-#[cfg(not(target_arch = "wasm32"))]
-fn resolved_to_update_info(
-    resolved: &updates::ResolvedUpdate,
-) -> coursecraft_ui_egui::update_dialog::UpdateInfo {
-    coursecraft_ui_egui::update_dialog::UpdateInfo {
-        version: resolved.version.clone(),
-        current_version: resolved.current_version.clone(),
-        release_url: resolved.release_url.clone(),
-        notes_markdown: resolved.notes_markdown.clone(),
-        asset: resolved.asset.as_ref().map(|a| {
-            coursecraft_ui_egui::update_dialog::UpdateAssetInfo {
-                name: a.name.clone(),
-                size: a.size,
-            }
-        }),
-        published_at: resolved.published_at.clone(),
-    }
-}
-
 /// Wakes the editor's UI thread when a control request arrives.
 #[cfg(not(target_arch = "wasm32"))]
 fn control_waker(
@@ -460,6 +424,8 @@ impl EditorApp {
         );
         editor.set_automation_enabled(prefs.automation_enabled);
         editor.set_theme_pref(prefs.theme.into());
+        editor.set_language(&prefs.language);
+        editor.set_layout_prefs(&prefs.layout());
         editor.set_coach_marks_done(prefs.coach_marks_done);
         editor.set_preferences(prefs.autosave_minutes_clamped(), prefs.default_slide.size());
         editor.set_versions_to_keep(prefs.versions_to_keep_clamped());
@@ -518,6 +484,8 @@ impl EditorApp {
             editor,
             ai: ai::AiClient::new(),
             agents: agents::AgentClient::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_previews: recent_previews::RecentPreviews::default(),
             project,
             prefs,
             config_dir,
@@ -542,10 +510,7 @@ impl EditorApp {
             system_font_index: None,
             published_path: None,
             preview_server: None,
-            updates: updates::UpdateClient::new(),
-            available_update: None,
-            downloaded_update_path: None,
-            manual_update_check_pending: false,
+            updates: updates::Runtime::default(),
             #[cfg(test)]
             test_export_path: None,
             #[cfg(test)]
@@ -562,8 +527,6 @@ impl EditorApp {
             test_open_path: None,
             #[cfg(test)]
             test_open_folder_path: None,
-            #[cfg(test)]
-            test_downloads_dir: None,
             repaint_ctx,
         }
     }
@@ -711,11 +674,8 @@ impl EditorApp {
         if let Some(note) = self.config_dir.as_deref().and_then(crash::read_crash_note) {
             self.editor.set_crash_note(Some(note));
         }
-        if !cfg!(test)
-            && !updates::is_ci_or_headless_env()
-            && let Some(ctx) = self.repaint_ctx.lock().ok().and_then(|g| g.clone())
-        {
-            self.maybe_start_auto_update_check(&ctx, now_unix_secs());
+        if !cfg!(test) && !updates::suppressed_by_env() {
+            self.updates.set_enabled(self.prefs.auto_check_updates);
         }
         if blank {
             self.editor.ui.show_welcome = false;
@@ -1246,6 +1206,14 @@ impl EditorApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    /// Write the preferences file, when there is a config folder.
+    fn persist_prefs(&self) {
+        if let Some(ref dir) = self.config_dir {
+            let _ = prefs::save_prefs(dir, &self.prefs);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn is_blocked_file_request(&self, req: &EditorRequest) -> bool {
         let modal_open = self.pending_action.is_some()
             || self.conflict_prompt.is_some()
@@ -1523,6 +1491,16 @@ impl EditorApp {
                     let _ = prefs::save_prefs(dir, &self.prefs);
                 }
             }
+            EditorRequest::SaveLayout(layout) => {
+                self.prefs.set_layout(layout);
+                self.persist_prefs();
+            }
+            EditorRequest::SetLanguage(setting) => {
+                self.editor.set_language(&setting);
+                self.prefs.language.clone_from(&self.editor.language);
+                self.persist_prefs();
+                ctx.request_repaint();
+            }
             EditorRequest::SetTheme(theme_pref) => {
                 self.prefs.theme = theme_pref.into();
                 self.editor.set_theme_pref(theme_pref);
@@ -1596,11 +1574,7 @@ impl EditorApp {
             EditorRequest::AddSystemFont { family, apply } => {
                 self.add_system_font(&family, apply);
             }
-            EditorRequest::CheckForUpdates => self.start_manual_update_check(ctx),
-            EditorRequest::DownloadUpdate => self.start_update_download(ctx),
-            EditorRequest::CancelUpdateDownload => self.updates.cancel_download(),
-            EditorRequest::SkipUpdateVersion(ver) => self.skip_update_version(ver),
-            EditorRequest::RevealDownloadedUpdate => self.reveal_downloaded_update(),
+            EditorRequest::CheckForUpdates => self.updates.request_check(),
             EditorRequest::SetAutoCheckUpdates(enabled) => self.set_auto_check_updates(enabled),
         }
     }
@@ -2329,226 +2303,12 @@ impl EditorApp {
         }
     }
 
-    /// Start a silent startup update check if enabled and the daily interval has elapsed.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn maybe_start_auto_update_check(&mut self, ctx: &egui::Context, now_unix: u64) {
-        if updates::should_auto_check(
-            self.prefs.auto_check_updates,
-            self.prefs.last_update_check_unix,
-            now_unix,
-        ) {
-            let _ = self.updates.start_check(false, ctx);
-        }
-    }
-
-    /// Open the Software update dialog and trigger a manual GitHub Releases check.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn start_manual_update_check(&mut self, ctx: &egui::Context) {
-        use coursecraft_ui_egui::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
-        self.editor.ui.update.open = true;
-        match self.updates.busy() {
-            updates::UpdateBusy::Downloading => {}
-            updates::UpdateBusy::Checking => {
-                // Promote the in-flight silent startup check so its outcome populates the dialog.
-                self.manual_update_check_pending = true;
-                self.editor.ui.update.status = UpdateCheckStatus::Checking;
-                self.editor.ui.update.download = UpdateDownloadState::Idle;
-            }
-            updates::UpdateBusy::Idle => {
-                self.editor.ui.update.download = UpdateDownloadState::Idle;
-                if self.updates.start_check(true, ctx) {
-                    self.manual_update_check_pending = true;
-                    self.editor.ui.update.status = UpdateCheckStatus::Checking;
-                } else {
-                    self.editor.ui.update.status = UpdateCheckStatus::Error(
-                        "Couldn't check for updates right now. Try again or open the releases page in your browser."
-                            .to_owned(),
-                    );
-                }
-            }
-        }
-    }
-
-    /// Resolve the destination directory for verified installer downloads.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn update_downloads_dir(&self) -> Option<PathBuf> {
-        #[cfg(test)]
-        {
-            self.test_downloads_dir.clone()
-        }
-        #[cfg(not(test))]
-        {
-            updates::downloads_dir()
-        }
-    }
-
-    /// Start streaming and verifying the matched installer asset in the background.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn start_update_download(&mut self, ctx: &egui::Context) {
-        let Some(resolved) = self.available_update.as_ref() else {
-            return;
-        };
-        let Some(asset) = resolved.asset.clone() else {
-            return;
-        };
-        let checksums_url = resolved.checksums_url.clone();
-        let Some(dest_dir) = self.update_downloads_dir() else {
-            self.editor.ui.update.download =
-                coursecraft_ui_egui::update_dialog::UpdateDownloadState::Failed(
-                    "Couldn't locate your Downloads folder. Open the releases page in your browser instead."
-                        .to_owned(),
-                );
-            return;
-        };
-        let total = Some(asset.size);
-        if self
-            .updates
-            .start_download(asset, checksums_url, dest_dir, ctx)
-        {
-            self.downloaded_update_path = None;
-            self.editor.ui.update.download =
-                coursecraft_ui_egui::update_dialog::UpdateDownloadState::Downloading {
-                    downloaded: 0,
-                    total,
-                };
-        }
-    }
-
-    /// Remember a skipped release version in `prefs.json` and close the update dialog.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn skip_update_version(&mut self, version: String) {
-        self.prefs.skipped_update_version = Some(version.clone());
-        self.save_prefs();
-        self.editor.ui.update.dismissed_version = Some(version);
-        self.editor.ui.update.open = false;
-    }
-
-    /// Reveal the verified installer in the system file manager (never runs or opens it).
-    #[cfg(not(target_arch = "wasm32"))]
-    fn reveal_downloaded_update(&mut self) {
-        if let Some(ref path) = self.downloaded_update_path
-            && let Err(message) = reveal_in_folder(path)
-        {
-            self.editor.set_status(message);
-        }
-    }
-
     /// Persist the automatic update check preference.
     #[cfg(not(target_arch = "wasm32"))]
     fn set_auto_check_updates(&mut self, enabled: bool) {
         self.prefs.auto_check_updates = enabled;
         self.editor.set_auto_check_updates(enabled);
         self.save_prefs();
-    }
-
-    /// Drain background update check and download events without blocking the UI.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn poll_updates(&mut self, ctx: &egui::Context) {
-        let events = self.updates.poll();
-        if events.is_empty() {
-            return;
-        }
-        for event in events {
-            match event {
-                updates::UpdateEvent::CheckFinished { manual, result } => {
-                    self.handle_update_check_finished(manual, result);
-                }
-                updates::UpdateEvent::DownloadProgress { downloaded, total } => {
-                    self.editor.ui.update.download =
-                        coursecraft_ui_egui::update_dialog::UpdateDownloadState::Downloading {
-                            downloaded,
-                            total,
-                        };
-                }
-                updates::UpdateEvent::DownloadFinished(result) => {
-                    self.handle_update_download_finished(result);
-                }
-            }
-        }
-        ctx.request_repaint();
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn handle_update_check_finished(
-        &mut self,
-        manual: bool,
-        result: Result<updates::CheckOutcome, updates::UpdateError>,
-    ) {
-        use coursecraft_ui_egui::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
-        let manual = manual || std::mem::take(&mut self.manual_update_check_pending);
-        match result {
-            Ok(updates::CheckOutcome::UpToDate) => {
-                self.prefs.last_update_check_unix = Some(now_unix_secs());
-                self.save_prefs();
-                self.available_update = None;
-                self.downloaded_update_path = None;
-                if manual {
-                    self.editor.ui.update.status = UpdateCheckStatus::UpToDate;
-                }
-            }
-            Ok(updates::CheckOutcome::Available(resolved)) => {
-                self.prefs.last_update_check_unix = Some(now_unix_secs());
-                self.save_prefs();
-                if !manual
-                    && self.prefs.skipped_update_version.as_deref()
-                        == Some(resolved.version.as_str())
-                {
-                    return;
-                }
-                let info = resolved_to_update_info(&resolved);
-                self.available_update = Some(resolved);
-                self.downloaded_update_path = None;
-                self.editor.ui.update.status = UpdateCheckStatus::Available(info);
-                self.editor.ui.update.download = UpdateDownloadState::Idle;
-                if manual {
-                    self.editor.ui.update.dismissed_version = None;
-                } else if self.restore_prompt.is_none()
-                    && !self.editor.ui.report.crash_prompt
-                    && self.editor.session.revision == 0
-                {
-                    self.editor.ui.update.open = true;
-                }
-            }
-            Err(err) => {
-                if matches!(err, updates::UpdateError::RateLimited) {
-                    self.prefs.last_update_check_unix = Some(now_unix_secs());
-                    self.save_prefs();
-                }
-                if manual {
-                    self.editor.ui.update.status = UpdateCheckStatus::Error(err.user_message());
-                }
-            }
-        }
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn handle_update_download_finished(
-        &mut self,
-        result: Result<updates::DownloadResult, updates::UpdateError>,
-    ) {
-        use coursecraft_ui_egui::update_dialog::UpdateDownloadState;
-        match result {
-            Ok(done) => {
-                let filename = done
-                    .path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("CourseCraft-update")
-                    .to_owned();
-                self.downloaded_update_path = Some(done.path);
-                self.editor.ui.update.download = UpdateDownloadState::Verified {
-                    filename,
-                    folder_display: "Downloads".to_owned(),
-                    sha256_verified: done.sha256_verified,
-                };
-            }
-            Err(updates::UpdateError::Cancelled) => {
-                self.editor.ui.update.download = UpdateDownloadState::Idle;
-            }
-            Err(err) => {
-                self.editor.ui.update.download = UpdateDownloadState::Failed(err.user_message());
-            }
-        }
     }
 }
 
@@ -3177,6 +2937,13 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
 }
 
 impl eframe::App for EditorApp {
+    /// The window is closing for good: a ready update's helper starts now and installs it once
+    /// the process has exited.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn on_exit(&mut self) {
+        self.updates.start_pending_update();
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show_app(ui);
     }
@@ -3205,12 +2972,15 @@ impl EditorApp {
             // 2. Periodic autosave
             self.update_autosave(ui.ctx());
 
+            // 2a. Thumbnails of the recent courses on the start page
+            self.recent_previews.update(&mut self.editor, ui.ctx());
+
             // 2b. Background publish results
             self.poll_publish(ui.ctx());
             self.poll_export(ui.ctx());
             self.poll_export_review(ui.ctx());
             self.poll_system_fonts(ui.ctx());
-            self.poll_updates(ui.ctx());
+            self.updates.tick(ui.ctx());
 
             // 3. System theme synchronization
             let desired_mode = self.prefs.theme.resolve(ui.ctx());
@@ -3285,6 +3055,11 @@ impl EditorApp {
             }
 
             self.handle_dropped_files(ui.ctx());
+
+            // The update prompt and the result of a requested check. An installation starts,
+            // and a ready update asks the window to close, only while nothing is unsaved.
+            let clean = !self.project.is_dirty(&self.editor.session);
+            self.updates.show(ui.ctx(), clean);
 
             if ui.ctx().input(|i| !i.raw.hovered_files.is_empty()) {
                 let screen = ui.ctx().content_rect();
@@ -3693,6 +3468,10 @@ impl EditorApp {
                             }
                         });
                     }
+                    EditorRequest::SetLanguage(setting) => {
+                        self.editor.set_language(&setting);
+                        ui.ctx().request_repaint();
+                    }
                     EditorRequest::SetTheme(theme_pref) => {
                         self.editor.set_theme_pref(theme_pref);
                         let mode = theme_pref.resolve(ui.ctx());
@@ -3852,8 +3631,20 @@ fn cli_with_player(mut args: Vec<std::ffi::OsString>) -> std::process::ExitCode 
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> std::process::ExitCode {
-    // `CourseCraft cli ...` and `CourseCraft mcp ...` run the agent tools with no window.
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // The update helper: a copy started by an update to install it once the app has exited.
+    if let Some(done) =
+        craft_update::self_update::finish(&updates::UPDATE_APP, args.get(1..).unwrap_or_default())
+    {
+        return match done {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("CourseCraft update helper failed: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+    // `CourseCraft cli ...` and `CourseCraft mcp ...` run the agent tools with no window.
     let tool = args.get(1).and_then(|a| a.to_str()).map(str::to_owned);
     let tool_args = || {
         let name = format!("coursecraft {}", tool.as_deref().unwrap_or_default());

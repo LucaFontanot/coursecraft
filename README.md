@@ -30,19 +30,18 @@ The sample course "Healthy Habits at Work" was built entirely with `coursecraft-
 
 ## Get CourseCraft
 
-Download the latest version from the **Releases** page of this repository: a `.dmg` for macOS on Apple Silicon, a Windows installer (`-setup.exe`) or portable `.exe` (`-portable.exe`), or a `.tar.gz` for Linux (x86-64; built automatically but less tested, so reports are welcome). It's free, with no account and no subscription.
+Download the latest version from the **Releases** page of this repository: a `.dmg` for macOS on Apple Silicon, a Windows installer (`-setup.exe`), or an `.AppImage` or `.tar.gz` for Linux (x86-64; built automatically but less tested, so reports are welcome). It's free, with no account and no subscription.
 
 The first time you open it:
 - **macOS** says it can't check the app, because it isn't signed with a paid Apple developer account. Right-click the app and choose Open, or go to System Settings → Privacy & Security → Open Anyway.
 - **Windows** SmartScreen may warn about an unknown publisher. Choose More info → Run anyway.
-- **Linux:** unpack the archive and run `./coursecraft`. It needs GTK 3, which most desktops already have.
+- **Linux:** make the `.AppImage` executable (`chmod +x coursecraft-*.AppImage`) and run it, or unpack the `.tar.gz` archive and run `bin/coursecraft` in its folder. Both need GTK 3, which most desktops already have.
 
-There is no automatic update. Help → Check for Updates opens the Releases page. What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+CourseCraft checks for a newer version when it starts (turn that off in Preferences), and Help → Check for Updates checks on demand. On macOS (`.app`) and Linux (`.AppImage` or unpacked `.tar.gz`), where your copy can update itself, it offers Update and Restart after verifying the release's `SHA256SUMS.txt`; on Windows it offers the `-setup.exe` installer for you to download and run (users on an older portable build are guided to the installer). Nothing installs or restarts without your confirmation. What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ### Install on Windows
 
-- **Installer (`CourseCraft-<version>-setup.exe`):** Recommended for most users. Installs per user into `%LOCALAPPDATA%\Programs\CourseCraft` without administrator rights, adds a Start menu shortcut (and an optional desktop shortcut), and registers an uninstaller in Windows **Settings → Apps**.
-- **Portable (`CourseCraft-<version>-portable.exe`):** A standalone single executable that runs directly from wherever you save it (for example, a folder or USB drive) with no installation step.
+- **Installer (`coursecraft-<version>-windows-x64-setup.exe`):** Installs per user into `%LOCALAPPDATA%\Programs\CourseCraft` without administrator rights, adds a Start menu shortcut (and an optional desktop shortcut), and registers an uninstaller in Windows **Settings → Apps**.
 - **Settings and logs:** Preferences, saved project version history, and crash notes (`last-crash.txt`) are stored in `%APPDATA%\CourseCraft`.
 
 Built to the conventions of the [ArtCraft](https://github.com/storytold) Crafting Apps: native egui/wgpu, the same code on the web via WebAssembly, every action a command, and no crashes.
@@ -115,7 +114,7 @@ Choose Help > Report a Problem to tell us what went wrong, or Help > Suggest a F
 - **What is shared.** Your two answers, plus (if you leave "Include technical details" on) the CourseCraft version, your OS and CPU, whether this is the desktop or web app, the last 20 status messages from this session, and a note about the last crash if there was one. All of it is shown in the window before you send anything.
 - **What is never shared.** Course content, file names, file paths, user names, AI keys and settings. Paths and file names in messages are replaced with `<path>` and `<file>`.
 - **After a crash.** The desktop app writes a short `last-crash.txt` (time, version, OS, panic message and location, paths removed) to its settings folder. On the next start it asks whether to report it, and deletes the file once you report or dismiss it.
-- Help > Check for Updates only opens the releases page. CourseCraft makes no network calls to look for updates.
+- **Updates.** The desktop app checks GitHub Releases for a newer version at start (which you can turn off in Preferences) or when you choose Help > Check for Updates. Downloads are verified against the release's `SHA256SUMS.txt`, and nothing installs or restarts without your confirmation.
 
 ## Workspace
 
@@ -137,14 +136,17 @@ Choose Help > Report a Problem to tell us what went wrong, or Help > Suggest a F
 | `coursecraft-player` | Desktop and web player |
 | `coursecraft-cli`, `coursecraft-mcp` | Headless tool and MCP server; agents start at [docs/cli.md](docs/cli.md) |
 
-See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md).
+See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md). The editor's
+layout (a tabbed ribbon grouping commands by task, with every planned button already in
+place) is specified in [docs/ui/](docs/ui/README.md); what CourseCraft can and cannot do yet,
+feature by feature, is in [docs/ui/feature-parity.md](docs/ui/feature-parity.md).
 
 ## Help and contributing
 
 - **Questions and ideas:** the Discussions tab of this repository.
 - **Bugs:** Help → Report a Problem in the app, or open an issue.
 - **Security problems:** report privately, see [SECURITY.md](SECURITY.md).
-- **Code:** read [docs/contributing.md](docs/contributing.md) (and [AGENTS.md](AGENTS.md) if you use an AI agent), then open a pull request. Every pull request runs `cargo xtask ci`, the same checks you can run yourself.
+- **Code:** read [docs/contributing.md](docs/contributing.md) (and [AGENTS.md](AGENTS.md) if you use an AI agent), then open a pull request. Editor UI work starts at [docs/ui/README.md](docs/ui/README.md). Every pull request runs `cargo xtask ci`, the same checks you can run yourself.
 - Be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License

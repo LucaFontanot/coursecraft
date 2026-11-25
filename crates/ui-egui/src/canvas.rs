@@ -6461,12 +6461,20 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let toggle_italic = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::I));
     let toggle_underline = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::U));
     let panel_right = ui.max_rect().max.x;
-    let clicked_outside = ui.input(|i| {
-        i.pointer.primary_pressed()
-            && !menu_open_at_start
-            && i.pointer
-                .interact_pos()
-                .is_some_and(|pos| !rect.contains(pos) && pos.x < panel_right)
+    // Read the press first: `layer_id_at` takes the context lock `input` holds.
+    let press = ui.input(|i| {
+        (i.pointer.primary_pressed() && !menu_open_at_start)
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    });
+    let clicked_outside = press.is_some_and(|pos| {
+        !rect.contains(pos)
+            && pos.x < panel_right
+            // The ribbon and its menus format the text being edited.
+            && !editor.ui.ribbon.rect.contains(pos)
+            && !ui.ctx().layer_id_at(pos).is_some_and(|layer| {
+                matches!(layer.order, egui::Order::Foreground | egui::Order::Tooltip)
+            })
     });
     let yielded_to_panel = update_inline_edit_panel_yield(editor, ui, rect, panel_right);
 
@@ -6503,26 +6511,16 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
 
     update_inline_edit_buffer(editor, &edit, &style, &buffer);
     if point_text && buffer != edit.buffer {
-        let (next_runs, next_paragraphs) = editor
-            .ui
-            .inline_edit
-            .as_ref()
-            .map_or((&synced_runs[..], &synced_paragraphs[..]), |state| {
-                (state.live_runs.as_slice(), state.live_paragraphs.as_slice())
-            });
-        let (next_w, next_h) = measure_point_text_box_size(
+        update_point_text_live_bounds(
+            editor,
             ui.ctx(),
             &buffer,
             &style,
-            next_runs,
-            next_paragraphs,
+            &synced_runs,
+            &synced_paragraphs,
             &theme_font,
+            base_slide_rect,
         );
-        let next_rect =
-            anchor_point_text_rect(base_slide_rect, next_w, next_h, style.align, style.valign);
-        editor.ui.inline_edit_measured_size = Some((buffer.clone(), (next_w, next_h)));
-        editor.ui.inline_edit_live_rect = Some(next_rect);
-        ui.ctx().request_repaint();
     }
     if output.response.has_focus()
         && let Some(cr) = cursor_range
@@ -6537,7 +6535,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             Some((edit.slide.clone(), edit.object.clone(), sel_range, cpos));
     }
     if (toggle_bold || toggle_italic || toggle_underline) && !escaped {
-        apply_inline_edit_style_shortcut(
+        dispatch_inline_edit_format_shortcuts(
             editor,
             &edit,
             &buffer,
@@ -6551,6 +6549,67 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         cancel_inline_edit(editor);
     } else if cmd_enter || button_enter || clicked_outside {
         commit_inline_edit(editor);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_point_text_live_bounds(
+    editor: &mut Editor,
+    ctx: &egui::Context,
+    buffer: &str,
+    style: &coursecraft_course::TextStyle,
+    synced_runs: &[coursecraft_course::TextRun],
+    synced_paragraphs: &[coursecraft_course::Paragraph],
+    theme_font: &str,
+    base_slide_rect: Rect,
+) {
+    let (next_runs, next_paragraphs) = editor
+        .ui
+        .inline_edit
+        .as_ref()
+        .map_or((synced_runs, synced_paragraphs), |state| {
+            (state.live_runs.as_slice(), state.live_paragraphs.as_slice())
+        });
+    let (next_w, next_h) =
+        measure_point_text_box_size(ctx, buffer, style, next_runs, next_paragraphs, theme_font);
+    let next_rect =
+        anchor_point_text_rect(base_slide_rect, next_w, next_h, style.align, style.valign);
+    editor.ui.inline_edit_measured_size = Some((buffer.to_owned(), (next_w, next_h)));
+    editor.ui.inline_edit_live_rect = Some(next_rect);
+    ctx.request_repaint();
+}
+
+fn dispatch_inline_edit_format_shortcuts(
+    editor: &mut Editor,
+    edit: &InlineEdit,
+    buffer: &str,
+    cursor_range: Option<egui::text::CCursorRange>,
+    toggle_bold: bool,
+    toggle_italic: bool,
+    toggle_underline: bool,
+) {
+    if crate::text_format::targets(editor).is_ok() {
+        // The same path as the ribbon's Bold, Italic and Underline.
+        for (on, change) in [
+            (toggle_bold, crate::text_format::Change::Bold),
+            (toggle_italic, crate::text_format::Change::Italic),
+            (toggle_underline, crate::text_format::Change::Underline),
+        ] {
+            if on {
+                crate::text_format::apply(editor, &change);
+            }
+        }
+    } else {
+        // Text inside a state: its own runs, not yet in `text_format`.
+        apply_inline_edit_style_shortcut(
+            editor,
+            edit,
+            buffer,
+            cursor_range,
+            toggle_bold,
+            toggle_italic,
+            toggle_underline,
+        );
     }
 }
 

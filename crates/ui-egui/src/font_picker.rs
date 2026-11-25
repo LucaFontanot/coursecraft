@@ -28,6 +28,8 @@ pub struct FontPickerState {
     pub pending_scroll_offset: Option<f32>,
     pub scroll_apply_frames: u8,
     pub visible_range: std::ops::Range<usize>,
+    /// The frame [`show_font_list`] last drew the list in.
+    pub shown_frame: Option<u64>,
 }
 
 /// Which section a font row belongs to.
@@ -321,303 +323,376 @@ pub fn show_font_picker(
         .id(popup_id)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            if system_fonts.is_none() && !*system_fonts_list_requested {
-                *system_fonts_list_requested = true;
-                font_requests.push(crate::EditorRequest::ListSystemFonts);
-            }
-
-            let screen = ui.ctx().content_rect();
-            let popup_w = FONT_PICKER_WIDTH.min((screen.width() - 16.0).max(220.0));
-            let popup_max_h = FONT_PICKER_MAX_HEIGHT.min((screen.height() - 16.0).max(200.0));
-            ui.set_min_width(popup_w);
-            ui.set_max_width(popup_w);
-            ui.set_max_height(popup_max_h);
-
-            // Sticky search field at the top.
-            let search_resp = ui.add(
-                TextEdit::singleline(search_query)
-                    .hint_text("Search fonts")
-                    .desired_width(f32::INFINITY)
-                    .id_salt(("font_picker_search", id_prefix)),
-            );
-            if just_opened {
-                search_resp.request_focus();
-            }
-            ui.add_space(4.0);
-
-            let rows = build_rows(
+            action = font_list_body(
+                ui,
+                id_prefix,
+                &mut state,
+                just_opened,
                 shown_font,
                 font_families,
                 recent_fonts,
                 system_fonts,
+                system_fonts_list_requested,
                 search_query,
+                font_requests,
             );
-            let row_height = 24.0;
-            let row_stride = row_height + ui.spacing().item_spacing.y;
-            // Reserve vertical space for sticky search (~28px), spacing (4px),
-            // bottom separator + "Add font…" button (~34px), and popup margins (~18px).
-            let scroll_max_h = (popup_max_h - 84.0).max(100.0);
-
-            if just_opened {
-                let current_idx = rows
-                    .iter()
-                    .position(|r| {
-                        matches!(
-                            r,
-                            FontRow::Font {
-                                is_current: true,
-                                ..
-                            }
-                        )
-                    })
-                    .or_else(|| rows.iter().position(is_font_row));
-                state.highlighted = current_idx;
-                state.last_query = search_query.clone();
-                if let Some(idx) = current_idx {
-                    #[allow(clippy::cast_precision_loss)]
-                    let center_y = idx as f32 * row_stride;
-                    state.pending_scroll_offset =
-                        Some((center_y - (scroll_max_h - row_stride) * 0.5).max(0.0));
-                    // Apply for 2 frames so ScrollArea has content_size on frame 2.
-                    state.scroll_apply_frames = 2;
-                }
-            } else if *search_query != state.last_query {
-                state.last_query = search_query.clone();
-                state.highlighted = rows.iter().position(is_font_row);
-                state.pending_scroll_offset = Some(0.0);
-                state.scroll_apply_frames = 1;
-            }
-
-            // Keyboard navigation: Esc closes, Up/Down move highlight, Enter picks.
-            let (esc, down, up, enter) = ui.input(|i| {
-                (
-                    i.key_pressed(Key::Escape),
-                    i.key_pressed(Key::ArrowDown),
-                    i.key_pressed(Key::ArrowUp),
-                    i.key_pressed(Key::Enter),
-                )
-            });
-
-            if esc {
-                ui.close();
-            } else {
-                if down {
-                    let next = next_font_row(&rows, state.highlighted, 1);
-                    if let Some(idx) = next {
-                        state.highlighted = Some(idx);
-                        if idx + 1 > state.visible_range.end {
-                            #[allow(clippy::cast_precision_loss)]
-                            let target = ((idx + 1) as f32 * row_stride - scroll_max_h).max(0.0);
-                            state.pending_scroll_offset = Some(target);
-                            state.scroll_apply_frames = 1;
-                        }
-                    }
-                } else if up {
-                    let prev = next_font_row(&rows, state.highlighted, -1);
-                    if let Some(idx) = prev {
-                        state.highlighted = Some(idx);
-                        if idx < state.visible_range.start {
-                            #[allow(clippy::cast_precision_loss)]
-                            let target = idx as f32 * row_stride;
-                            state.pending_scroll_offset = Some(target);
-                            state.scroll_apply_frames = 1;
-                        }
-                    }
-                }
-
-                if enter
-                    && let Some(idx) = state.highlighted
-                    && let Some(FontRow::Font { name, section, .. }) = rows.get(idx)
-                {
-                    let chosen_name = name.clone();
-                    remember_recent_font(recent_fonts, &chosen_name);
-                    action = Some(match section {
-                        FontSection::System => FontPickerAction::PickSystem(chosen_name),
-                        FontSection::Course | FontSection::Recent => {
-                            if font_families
-                                .iter()
-                                .any(|f| f.eq_ignore_ascii_case(&chosen_name))
-                                || chosen_name.eq_ignore_ascii_case("Inter")
-                            {
-                                FontPickerAction::PickCourseOrRecent(chosen_name)
-                            } else {
-                                FontPickerAction::PickSystem(chosen_name)
-                            }
-                        }
-                    });
-                    ui.close();
-                }
-            }
-
-            // One single virtualised vertical scroll area.
-            let mut scroll = egui::ScrollArea::vertical()
-                .id_salt(("font_picker_scroll", id_prefix))
-                .max_height(scroll_max_h)
-                .auto_shrink([false, true]);
-            if let Some(offset) = state.pending_scroll_offset {
-                scroll = scroll.vertical_scroll_offset(offset);
-                if state.scroll_apply_frames > 1 {
-                    state.scroll_apply_frames -= 1;
-                    ui.ctx().request_repaint();
-                } else {
-                    state.pending_scroll_offset = None;
-                    state.scroll_apply_frames = 0;
-                }
-            }
-
-            let mut loads_this_frame = 0usize;
-            let mut budget_exhausted = false;
-            let p = palette(ui.ctx());
-
-            scroll.show_rows(ui, row_height, rows.len(), |ui, row_range| {
-                state.visible_range = row_range.clone();
-                let row_w = ui.available_width();
-                for idx in row_range {
-                    let row = &rows[idx];
-                    match row {
-                        FontRow::Header(title) => {
-                            let (rect, _) =
-                                ui.allocate_exact_size(vec2(row_w, row_height), Sense::hover());
-                            let galley = ui.painter().layout_no_wrap(
-                                (*title).to_owned(),
-                                FontId::proportional(SIZE_SMALL),
-                                p.text_secondary,
-                            );
-                            ui.painter().galley(
-                                pos2(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5),
-                                galley,
-                                p.text_secondary,
-                            );
-                        }
-                        FontRow::Status(msg) => {
-                            let (rect, _) =
-                                ui.allocate_exact_size(vec2(row_w, row_height), Sense::hover());
-                            let galley = ui.painter().layout_no_wrap(
-                                (*msg).to_owned(),
-                                FontId::proportional(SIZE_SMALL),
-                                p.text_secondary,
-                            );
-                            ui.painter().galley(
-                                pos2(rect.left() + 8.0, rect.center().y - galley.size().y * 0.5),
-                                galley,
-                                p.text_secondary,
-                            );
-                        }
-                        FontRow::Font {
-                            name,
-                            section,
-                            embedding_restricted,
-                            is_current,
-                        } => {
-                            let (rect, mut resp) =
-                                ui.allocate_exact_size(vec2(row_w, row_height), Sense::click());
-                            let is_highlighted = state.highlighted == Some(idx);
-                            if *is_current || is_highlighted {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    CornerRadius::same(RADIUS_SM as u8),
-                                    p.accent_subtle,
-                                );
-                            } else if resp.hovered() {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    CornerRadius::same(RADIUS_SM as u8),
-                                    p.hover,
-                                );
-                            }
-
-                            let badge_reserve = if *embedding_restricted { 68.0 } else { 12.0 };
-                            let text_max_w = (rect.width() - badge_reserve - 8.0).max(20.0);
-                            let font = preview_font_for_row(
-                                ui.ctx(),
-                                name,
-                                *section,
-                                &mut loads_this_frame,
-                                &mut budget_exhausted,
-                            );
-                            let mut job = egui::text::LayoutJob::single_section(
-                                name.clone(),
-                                egui::TextFormat {
-                                    font_id: font,
-                                    color: p.text,
-                                    ..Default::default()
-                                },
-                            );
-                            job.wrap = egui::text::TextWrapping {
-                                max_width: text_max_w,
-                                max_rows: 1,
-                                break_anywhere: true,
-                                overflow_character: Some('…'),
-                            };
-                            let galley = ui.painter().layout_job(job);
-                            let is_truncated = galley.elided;
-                            ui.painter().galley(
-                                pos2(rect.left() + 8.0, rect.center().y - galley.size().y * 0.5),
-                                galley,
-                                p.text,
-                            );
-                            if is_truncated {
-                                resp = resp.on_hover_text(name.clone());
-                            }
-
-                            if *embedding_restricted {
-                                let badge_galley = ui.painter().layout_no_wrap(
-                                    "restricted".to_owned(),
-                                    FontId::proportional(SIZE_SMALL),
-                                    p.text_secondary,
-                                );
-                                ui.painter().galley(
-                                    pos2(
-                                        rect.right() - badge_galley.size().x - 8.0,
-                                        rect.center().y - badge_galley.size().y * 0.5,
-                                    ),
-                                    badge_galley,
-                                    p.text_secondary,
-                                );
-                            }
-
-                            if resp.clicked() {
-                                remember_recent_font(recent_fonts, name);
-                                action = Some(match section {
-                                    FontSection::System => {
-                                        FontPickerAction::PickSystem(name.clone())
-                                    }
-                                    FontSection::Course | FontSection::Recent => {
-                                        if font_families
-                                            .iter()
-                                            .any(|f| f.eq_ignore_ascii_case(name))
-                                            || name.eq_ignore_ascii_case("Inter")
-                                        {
-                                            FontPickerAction::PickCourseOrRecent(name.clone())
-                                        } else {
-                                            FontPickerAction::PickSystem(name.clone())
-                                        }
-                                    }
-                                });
-                                ui.close();
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Pinned footer outside the scroll area.
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Add font…").clicked() {
-                    action = Some(FontPickerAction::AddFont);
-                    ui.close();
-                }
-                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new("↑↓ Enter  Esc")
-                            .size(SIZE_SMALL)
-                            .color(p.text_secondary),
-                    );
-                });
-            });
         });
 
     ui.ctx().data_mut(|d| d.insert_temp(state_id, state));
+    action
+}
+
+/// The picker's list (search, course, recent and installed fonts, Add font…)
+/// inside another control's popup, such as the ribbon's Font box. The popup
+/// closes on a pick.
+#[allow(clippy::too_many_arguments)]
+pub fn show_font_list(
+    ui: &mut Ui,
+    id_prefix: &str,
+    shown_font: &str,
+    font_families: &[String],
+    recent_fonts: &mut Vec<String>,
+    system_fonts: Option<&[crate::SystemFontChoice]>,
+    system_fonts_list_requested: &mut bool,
+    search_query: &mut String,
+    font_requests: &mut Vec<crate::EditorRequest>,
+) -> Option<FontPickerAction> {
+    let state_id = egui::Id::unique(("font_list_state", id_prefix));
+    let mut state: FontPickerState = ui.ctx().data(|d| d.get_temp(state_id)).unwrap_or_default();
+    let frame = ui.ctx().cumulative_frame_nr();
+    // Not drawn last frame: the popup has just opened.
+    let just_opened = state
+        .shown_frame
+        .is_none_or(|f| f.saturating_add(1) < frame);
+    state.shown_frame = Some(frame);
+    if just_opened {
+        search_query.clear();
+        state.highlighted = None;
+        state.last_query.clear();
+        state.pending_scroll_offset = None;
+        state.scroll_apply_frames = 0;
+    }
+    let action = font_list_body(
+        ui,
+        id_prefix,
+        &mut state,
+        just_opened,
+        shown_font,
+        font_families,
+        recent_fonts,
+        system_fonts,
+        system_fonts_list_requested,
+        search_query,
+        font_requests,
+    );
+    ui.ctx().data_mut(|d| d.insert_temp(state_id, state));
+    action
+}
+
+/// The inside of the font popup, shared by [`show_font_picker`] and [`show_font_list`].
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn font_list_body(
+    ui: &mut Ui,
+    id_prefix: &str,
+    state: &mut FontPickerState,
+    just_opened: bool,
+    shown_font: &str,
+    font_families: &[String],
+    recent_fonts: &mut Vec<String>,
+    system_fonts: Option<&[crate::SystemFontChoice]>,
+    system_fonts_list_requested: &mut bool,
+    search_query: &mut String,
+    font_requests: &mut Vec<crate::EditorRequest>,
+) -> Option<FontPickerAction> {
+    let mut action: Option<FontPickerAction> = None;
+    if system_fonts.is_none() && !*system_fonts_list_requested {
+        *system_fonts_list_requested = true;
+        font_requests.push(crate::EditorRequest::ListSystemFonts);
+    }
+
+    let screen = ui.ctx().content_rect();
+    let popup_w = FONT_PICKER_WIDTH.min((screen.width() - 16.0).max(220.0));
+    let popup_max_h = FONT_PICKER_MAX_HEIGHT.min((screen.height() - 16.0).max(200.0));
+    ui.set_min_width(popup_w);
+    ui.set_max_width(popup_w);
+    ui.set_max_height(popup_max_h);
+
+    // Sticky search field at the top.
+    let search_resp = ui.add(
+        TextEdit::singleline(search_query)
+            .hint_text("Search fonts")
+            .desired_width(f32::INFINITY)
+            .id_salt(("font_picker_search", id_prefix)),
+    );
+    if just_opened {
+        search_resp.request_focus();
+    }
+    ui.add_space(4.0);
+
+    let rows = build_rows(
+        shown_font,
+        font_families,
+        recent_fonts,
+        system_fonts,
+        search_query,
+    );
+    let row_height = 24.0;
+    let row_stride = row_height + ui.spacing().item_spacing.y;
+    // Reserve vertical space for sticky search (~28px), spacing (4px),
+    // bottom separator + "Add font…" button (~34px), and popup margins (~18px).
+    let scroll_max_h = (popup_max_h - 84.0).max(100.0);
+
+    if just_opened {
+        let current_idx = rows
+            .iter()
+            .position(|r| {
+                matches!(
+                    r,
+                    FontRow::Font {
+                        is_current: true,
+                        ..
+                    }
+                )
+            })
+            .or_else(|| rows.iter().position(is_font_row));
+        state.highlighted = current_idx;
+        state.last_query = search_query.clone();
+        if let Some(idx) = current_idx {
+            #[allow(clippy::cast_precision_loss)]
+            let center_y = idx as f32 * row_stride;
+            state.pending_scroll_offset =
+                Some((center_y - (scroll_max_h - row_stride) * 0.5).max(0.0));
+            // Apply for 2 frames so ScrollArea has content_size on frame 2.
+            state.scroll_apply_frames = 2;
+        }
+    } else if *search_query != state.last_query {
+        state.last_query = search_query.clone();
+        state.highlighted = rows.iter().position(is_font_row);
+        state.pending_scroll_offset = Some(0.0);
+        state.scroll_apply_frames = 1;
+    }
+
+    // Keyboard navigation: Esc closes, Up/Down move highlight, Enter picks.
+    let (esc, down, up, enter) = ui.input(|i| {
+        (
+            i.key_pressed(Key::Escape),
+            i.key_pressed(Key::ArrowDown),
+            i.key_pressed(Key::ArrowUp),
+            i.key_pressed(Key::Enter),
+        )
+    });
+
+    if esc {
+        ui.close();
+    } else {
+        if down {
+            let next = next_font_row(&rows, state.highlighted, 1);
+            if let Some(idx) = next {
+                state.highlighted = Some(idx);
+                if idx + 1 > state.visible_range.end {
+                    #[allow(clippy::cast_precision_loss)]
+                    let target = ((idx + 1) as f32 * row_stride - scroll_max_h).max(0.0);
+                    state.pending_scroll_offset = Some(target);
+                    state.scroll_apply_frames = 1;
+                }
+            }
+        } else if up {
+            let prev = next_font_row(&rows, state.highlighted, -1);
+            if let Some(idx) = prev {
+                state.highlighted = Some(idx);
+                if idx < state.visible_range.start {
+                    #[allow(clippy::cast_precision_loss)]
+                    let target = idx as f32 * row_stride;
+                    state.pending_scroll_offset = Some(target);
+                    state.scroll_apply_frames = 1;
+                }
+            }
+        }
+
+        if enter
+            && let Some(idx) = state.highlighted
+            && let Some(FontRow::Font { name, section, .. }) = rows.get(idx)
+        {
+            let chosen_name = name.clone();
+            remember_recent_font(recent_fonts, &chosen_name);
+            action = Some(match section {
+                FontSection::System => FontPickerAction::PickSystem(chosen_name),
+                FontSection::Course | FontSection::Recent => {
+                    if font_families
+                        .iter()
+                        .any(|f| f.eq_ignore_ascii_case(&chosen_name))
+                        || chosen_name.eq_ignore_ascii_case("Inter")
+                    {
+                        FontPickerAction::PickCourseOrRecent(chosen_name)
+                    } else {
+                        FontPickerAction::PickSystem(chosen_name)
+                    }
+                }
+            });
+            ui.close();
+        }
+    }
+
+    // One single virtualised vertical scroll area.
+    let mut scroll = egui::ScrollArea::vertical()
+        .id_salt(("font_picker_scroll", id_prefix))
+        .max_height(scroll_max_h)
+        .auto_shrink([false, true]);
+    if let Some(offset) = state.pending_scroll_offset {
+        scroll = scroll.vertical_scroll_offset(offset);
+        if state.scroll_apply_frames > 1 {
+            state.scroll_apply_frames -= 1;
+            ui.ctx().request_repaint();
+        } else {
+            state.pending_scroll_offset = None;
+            state.scroll_apply_frames = 0;
+        }
+    }
+
+    let mut loads_this_frame = 0usize;
+    let mut budget_exhausted = false;
+    let p = palette(ui.ctx());
+
+    scroll.show_rows(ui, row_height, rows.len(), |ui, row_range| {
+        state.visible_range = row_range.clone();
+        let row_w = ui.available_width();
+        for idx in row_range {
+            let row = &rows[idx];
+            match row {
+                FontRow::Header(title) => {
+                    let (rect, _) = ui.allocate_exact_size(vec2(row_w, row_height), Sense::hover());
+                    let galley = ui.painter().layout_no_wrap(
+                        (*title).to_owned(),
+                        FontId::proportional(SIZE_SMALL),
+                        p.text_secondary,
+                    );
+                    ui.painter().galley(
+                        pos2(rect.left() + 6.0, rect.center().y - galley.size().y * 0.5),
+                        galley,
+                        p.text_secondary,
+                    );
+                }
+                FontRow::Status(msg) => {
+                    let (rect, _) = ui.allocate_exact_size(vec2(row_w, row_height), Sense::hover());
+                    let galley = ui.painter().layout_no_wrap(
+                        (*msg).to_owned(),
+                        FontId::proportional(SIZE_SMALL),
+                        p.text_secondary,
+                    );
+                    ui.painter().galley(
+                        pos2(rect.left() + 8.0, rect.center().y - galley.size().y * 0.5),
+                        galley,
+                        p.text_secondary,
+                    );
+                }
+                FontRow::Font {
+                    name,
+                    section,
+                    embedding_restricted,
+                    is_current,
+                } => {
+                    let (rect, mut resp) =
+                        ui.allocate_exact_size(vec2(row_w, row_height), Sense::click());
+                    let is_highlighted = state.highlighted == Some(idx);
+                    if *is_current || is_highlighted {
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(RADIUS_SM as u8),
+                            p.accent_subtle,
+                        );
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(RADIUS_SM as u8),
+                            p.hover,
+                        );
+                    }
+
+                    let badge_reserve = if *embedding_restricted { 68.0 } else { 12.0 };
+                    let text_max_w = (rect.width() - badge_reserve - 8.0).max(20.0);
+                    let font = preview_font_for_row(
+                        ui.ctx(),
+                        name,
+                        *section,
+                        &mut loads_this_frame,
+                        &mut budget_exhausted,
+                    );
+                    let mut job = egui::text::LayoutJob::single_section(
+                        name.clone(),
+                        egui::TextFormat {
+                            font_id: font,
+                            color: p.text,
+                            ..Default::default()
+                        },
+                    );
+                    job.wrap = egui::text::TextWrapping {
+                        max_width: text_max_w,
+                        max_rows: 1,
+                        break_anywhere: true,
+                        overflow_character: Some('…'),
+                    };
+                    let galley = ui.painter().layout_job(job);
+                    let is_truncated = galley.elided;
+                    ui.painter().galley(
+                        pos2(rect.left() + 8.0, rect.center().y - galley.size().y * 0.5),
+                        galley,
+                        p.text,
+                    );
+                    if is_truncated {
+                        resp = resp.on_hover_text(name.clone());
+                    }
+
+                    if *embedding_restricted {
+                        let badge_galley = ui.painter().layout_no_wrap(
+                            "restricted".to_owned(),
+                            FontId::proportional(SIZE_SMALL),
+                            p.text_secondary,
+                        );
+                        ui.painter().galley(
+                            pos2(
+                                rect.right() - badge_galley.size().x - 8.0,
+                                rect.center().y - badge_galley.size().y * 0.5,
+                            ),
+                            badge_galley,
+                            p.text_secondary,
+                        );
+                    }
+
+                    if resp.clicked() {
+                        remember_recent_font(recent_fonts, name);
+                        action = Some(match section {
+                            FontSection::System => FontPickerAction::PickSystem(name.clone()),
+                            FontSection::Course | FontSection::Recent => {
+                                if font_families.iter().any(|f| f.eq_ignore_ascii_case(name))
+                                    || name.eq_ignore_ascii_case("Inter")
+                                {
+                                    FontPickerAction::PickCourseOrRecent(name.clone())
+                                } else {
+                                    FontPickerAction::PickSystem(name.clone())
+                                }
+                            }
+                        });
+                        ui.close();
+                    }
+                }
+            }
+        }
+    });
+
+    // Pinned footer outside the scroll area.
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Add font…").clicked() {
+            action = Some(FontPickerAction::AddFont);
+            ui.close();
+        }
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new("↑↓ Enter  Esc")
+                    .size(SIZE_SMALL)
+                    .color(p.text_secondary),
+            );
+        });
+    });
     action
 }

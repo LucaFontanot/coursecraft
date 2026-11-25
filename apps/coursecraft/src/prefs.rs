@@ -271,15 +271,26 @@ pub struct Prefs {
     /// Editor performance mode (`auto` / `standard` / `lite`).
     #[serde(default)]
     pub performance_mode: PerformanceModePref,
-    /// Check GitHub at most once a day on startup for a newer desktop version.
+    /// Check GitHub on startup for a newer desktop version (craft-update's check at start).
     #[serde(default = "default_true")]
     pub auto_check_updates: bool,
-    /// Unix timestamp (seconds) of the last completed or rate-limited update check.
+    /// Interface language: `"auto"` follows the system, else a language code.
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// The ribbon replaces the flat toolbar.
+    #[serde(default = "default_true")]
+    pub ribbon: bool,
+    /// The panels are docked, so they can be moved, tabbed, floated and closed.
+    #[serde(default = "default_true")]
+    pub docked_panels: bool,
+    /// The docked panel arrangement (`craft_ui::docking::Workspace`); the editor
+    /// checks it on load and falls back to the default arrangement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_update_check_unix: Option<u64>,
-    /// Semver version string the user chose to skip (e.g. `"0.4.4"`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skipped_update_version: Option<String>,
+    pub panel_layout: Option<serde_json::Value>,
+}
+
+fn default_language() -> String {
+    coursecraft_ui_egui::i18n::AUTO.to_owned()
 }
 
 /// Largest autosave interval, in minutes.
@@ -452,11 +463,32 @@ impl Default for Prefs {
             default_slide: DefaultSlideSize::default(),
             spell_check_as_you_type: true,
             spell_words: Vec::new(),
+            language: default_language(),
+            ribbon: true,
+            docked_panels: true,
+            panel_layout: None,
             performance_mode: PerformanceModePref::default(),
             auto_check_updates: true,
-            last_update_check_unix: None,
-            skipped_update_version: None,
         }
+    }
+}
+
+impl Prefs {
+    /// The ribbon, docking and panel settings for the editor.
+    #[must_use]
+    pub fn layout(&self) -> coursecraft_ui_egui::dock::LayoutPrefs {
+        coursecraft_ui_egui::dock::LayoutPrefs {
+            ribbon: self.ribbon,
+            docked: self.docked_panels,
+            workspace: self.panel_layout.clone(),
+        }
+    }
+
+    /// Store the editor's ribbon, docking and panel settings.
+    pub fn set_layout(&mut self, layout: coursecraft_ui_egui::dock::LayoutPrefs) {
+        self.ribbon = layout.ribbon;
+        self.docked_panels = layout.docked;
+        self.panel_layout = layout.workspace;
     }
 }
 
@@ -603,25 +635,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
 
-        // Legacy prefs.json lacking the 3 update fields must load with defaults.
+        // A prefs.json without the update field loads with the check on.
         std::fs::write(dir.join("prefs.json"), r#"{"recent": []}"#).expect("write legacy prefs");
         let legacy = load_prefs(&dir);
         assert!(legacy.auto_check_updates);
-        assert_eq!(legacy.last_update_check_unix, None);
-        assert_eq!(legacy.skipped_update_version, None);
 
-        // Saving and reloading with all 3 fields populated must preserve them exactly.
+        // Turning the check off survives a save and reload.
         let populated = Prefs {
             auto_check_updates: false,
-            last_update_check_unix: Some(1_700_000_000),
-            skipped_update_version: Some("0.4.4".to_owned()),
             ..Prefs::default()
         };
         save_prefs(&dir, &populated).expect("save prefs");
         let reloaded = load_prefs(&dir);
         assert!(!reloaded.auto_check_updates);
-        assert_eq!(reloaded.last_update_check_unix, Some(1_700_000_000));
-        assert_eq!(reloaded.skipped_update_version.as_deref(), Some("0.4.4"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

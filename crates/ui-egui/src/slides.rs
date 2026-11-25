@@ -836,7 +836,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
     }
 }
 
-fn start_master_rename(editor: &mut Editor, master_id: &str) {
+pub(crate) fn start_master_rename(editor: &mut Editor, master_id: &str) {
     let title = editor
         .session
         .course
@@ -988,7 +988,7 @@ fn slides_using_master(course: &Course, master_id: &str) -> usize {
         .count()
 }
 
-fn request_master_delete(editor: &mut Editor, master_id: &str) {
+pub(crate) fn request_master_delete(editor: &mut Editor, master_id: &str) {
     if slides_using_master(&editor.session.course, master_id) > 0 {
         editor.ui.pending_delete_master = Some(master_id.to_owned());
     } else {

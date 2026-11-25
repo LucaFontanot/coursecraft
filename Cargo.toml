@@ -42,6 +42,12 @@ thiserror = "2"
 ring = "0.17"
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
+# Craft suite UI (docs/ui/implementation.md § 0): controls, docking, icons and
+# interface translations. Same craft-libs commit as DeckCraft.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "63196e66f3033a6623eb629af95a104d26986725", version = "=0.1.0" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "63196e66f3033a6623eb629af95a104d26986725", version = "=0.1.0" }
+# The Craft suite's update check, prompt and self-update, as DeckCraft uses it.
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "63196e66f3033a6623eb629af95a104d26986725", version = "=0.1.0", features = ["egui"] }
 egui = "0.37"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "accesskit"] }
 log = "0.4"
@@ -63,6 +69,19 @@ peniko = "0.6"
 resvg = { version = "0.49", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 semver = "1"
+
+# The Craft suite's egui and winit fork, which craft-ui is built against (same
+# commits as DeckCraft). Add an entry here when the graph gains another egui crate.
+[patch.crates-io]
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

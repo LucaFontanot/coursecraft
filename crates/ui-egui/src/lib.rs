@@ -19,6 +19,7 @@
 pub use coursecraft_render::IndexFontProvider;
 pub use coursecraft_render::SystemFontProvider;
 
+// First, so `tl!` reads as defined before every other module.
 pub mod ai_settings;
 pub mod alt_text;
 pub mod audio_ai;
@@ -37,8 +38,17 @@ pub mod export_dialog;
 pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
+#[macro_use]
+pub mod i18n;
+pub mod doc_tabs;
+pub mod dock;
+pub mod file_page;
+pub mod grid_panel;
+pub mod panels;
+pub mod ribbon;
 #[cfg(test)]
 mod scroll_audit;
+pub mod size_panel;
 
 /// `(slide, object, selection_range, cursor_pos)` captured from an active inline text edit.
 pub type InlineEditSelection = (String, String, Option<(usize, usize)>, usize);
@@ -74,6 +84,7 @@ pub mod snapshot;
 pub mod spell_check;
 pub mod states;
 pub mod status;
+pub mod text_format;
 pub mod text_styles_ui;
 pub mod theme_dialog;
 pub mod timeline;
@@ -82,7 +93,6 @@ pub mod toolbar;
 pub mod translate_ai;
 pub mod translation;
 pub mod triggers;
-pub mod update_dialog;
 pub mod variables;
 pub mod version_history;
 pub mod web_insert;
@@ -151,6 +161,10 @@ mod daily_fixes_tests;
 #[cfg(test)]
 mod dialog_reopen_tests;
 #[cfg(test)]
+mod doc_tabs_tests;
+#[cfg(test)]
+mod dock_tests;
+#[cfg(test)]
 mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;
@@ -158,6 +172,8 @@ mod eyedropper_tests;
 mod f22_fill_outline_dash_tests;
 #[cfg(test)]
 mod f24_exit_animation_labels_tests;
+#[cfg(test)]
+mod file_page_tests;
 #[cfg(test)]
 mod fill_style_tests;
 #[cfg(test)]
@@ -174,6 +190,8 @@ mod guard_tests;
 mod h7_video_revisit_tests;
 #[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod i18n_tests;
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
@@ -211,6 +229,8 @@ mod m37_point_text_ui_tests;
 #[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
+mod panels_tests;
+#[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
 mod preview_close_tests;
@@ -244,6 +264,8 @@ mod templates_tests;
 pub(crate) mod test_harness;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_format_ribbon_tests;
 #[cfg(test)]
 mod text_format_tests;
 #[cfg(test)]
@@ -527,6 +549,11 @@ pub enum EditorRequest {
     /// Delete the saved crash note: it was reported or dismissed.
     DiscardCrashNote,
     SetTheme(coursecraft_render::ThemePref),
+    /// Preferences › Language: `"auto"` or a language code, to save.
+    SetLanguage(String),
+    /// The ribbon or docking setting or the panel arrangement changed: save it.
+    /// Sent once a gesture ends, never while a panel is being dragged.
+    SaveLayout(dock::LayoutPrefs),
     /// Save the autosave interval, the number of file versions to keep and the
     /// default slide size for new courses.
     SetPreferences {
@@ -652,16 +679,8 @@ pub enum EditorRequest {
         /// Command id and parameters to run after the font is added.
         apply: Option<(String, serde_json::Value)>,
     },
-    /// Ask the desktop host shell to check GitHub Releases for a newer version.
+    /// Ask the desktop host shell to check for a newer release and report the outcome.
     CheckForUpdates,
-    /// Ask the desktop host shell to download the matched installer for the available update.
-    DownloadUpdate,
-    /// Ask the desktop host shell to cancel an in-progress update download.
-    CancelUpdateDownload,
-    /// Persist that the user chose to skip automatic notifications for this version.
-    SkipUpdateVersion(String),
-    /// Reveal the verified downloaded installer in the OS file manager.
-    RevealDownloadedUpdate,
     /// Persist whether CourseCraft checks for updates automatically on desktop startup.
     SetAutoCheckUpdates(bool),
 }
@@ -1006,8 +1025,6 @@ pub struct UiState {
     pub versions: version_history::VersionHistoryState,
     /// Report a Problem window, crash prompt and recent status messages.
     pub report: report::ReportState,
-    /// Software update dialog and status-bar/menu hint state.
-    pub update: update_dialog::UpdateState,
     pub slide_size_dialog: slide_size_dialog::SlideSizeState,
     /// Rulers, grid and user guides (editor only).
     pub rulers: rulers::RulerState,
@@ -1048,6 +1065,17 @@ pub struct UiState {
     pub pending_remove_font: Option<(String, FontStyle)>,
     /// Course map replaces the slide editor in the centre.
     pub story_view: bool,
+    /// The ribbon (M37), drawn above the toolbar when visible.
+    pub ribbon: ribbon::RibbonState,
+    /// The panels in a docking workspace (M37), when enabled.
+    pub dock: dock::DockState,
+    /// The Course Map and opened-slide tabs under the ribbon.
+    pub doc_tabs: doc_tabs::DocTabs,
+    /// The settings panels: the section a launcher asked for, the panel the
+    /// work in hand needs, the floating ones when docking is off.
+    pub panels: panels::PanelsState,
+    /// The File page, opened from the ribbon's File tab.
+    pub file_page: file_page::FilePage,
     /// Transient Course map state.
     pub course_map: CourseMapState,
     /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1308,6 +1336,9 @@ pub struct Editor {
     pub ui: UiState,
     pub preview: Option<Preview>,
     pub recent_files: Vec<String>,
+    /// The first slide of each recent course, drawn as its thumbnail on the
+    /// start page (the desktop app reads them in the background).
+    pub recent_previews: Vec<(String, welcome::RecentPreview)>,
     pub library_templates: Vec<LibraryTemplateEntry>,
     pub library_templates_available: bool,
     pub file_ops_available: bool,
@@ -1331,6 +1362,11 @@ pub struct Editor {
     pub automation_enabled: bool,
     pub automation_port: Option<u16>,
     pub theme_pref: coursecraft_render::ThemePref,
+    /// Interface language setting: [`i18n::AUTO`] or a code (docs/ui/localization.md).
+    pub language: String,
+    /// The ribbon, docking and panel arrangement last saved (or loaded), so a
+    /// change is sent once as [`EditorRequest::SaveLayout`].
+    saved_layout: (bool, bool, craft_ui::docking::Workspace<dock::Panel>),
     /// User-selected editor performance mode (`Auto` / `Standard` / `Lite`).
     pub performance_mode: coursecraft_render::PerformanceMode,
     /// True when the host shell detected a constrained/low-memory device (e.g. `deviceMemory <= 4`).
@@ -1633,7 +1669,6 @@ impl Editor {
                 prefs: preferences::PrefsState::default(),
                 versions: version_history::VersionHistoryState::default(),
                 report: report::ReportState::default(),
-                update: update_dialog::UpdateState::default(),
                 slide_size_dialog: slide_size_dialog::SlideSizeState::default(),
                 rulers: rulers::RulerState::default(),
                 snap_guides: Vec::new(),
@@ -1655,6 +1690,11 @@ impl Editor {
                 font_facts: std::collections::HashMap::new(),
                 pending_remove_font: None,
                 story_view: false,
+                ribbon: ribbon::RibbonState::default(),
+                dock: dock::DockState::default(),
+                doc_tabs: doc_tabs::DocTabs::default(),
+                panels: panels::PanelsState::default(),
+                file_page: file_page::FilePage::default(),
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
                 media_refs_cache: MediaRefsCache::default(),
@@ -1668,6 +1708,7 @@ impl Editor {
             },
             preview: None,
             recent_files: Vec::new(),
+            recent_previews: Vec::new(),
             library_templates: Vec::new(),
             library_templates_available: false,
             file_ops_available: true,
@@ -1687,6 +1728,12 @@ impl Editor {
             automation_enabled: true,
             automation_port: None,
             theme_pref: coursecraft_render::ThemePref::Dark,
+            language: i18n::AUTO.to_owned(),
+            saved_layout: (
+                true,
+                true,
+                craft_ui::docking::Workspace::new(dock::default_layout()),
+            ),
             performance_mode: coursecraft_render::PerformanceMode::Auto,
             low_memory_device: false,
             timeline_playback: timeline_playback::TimelinePlayback::create_default(),
@@ -1773,9 +1820,70 @@ impl Editor {
         self.theme_pref = pref;
     }
 
+    /// Set the saved interface language: [`i18n::AUTO`] or a code. Applies from
+    /// the next frame; an unknown code shows English but is kept.
+    pub fn set_language(&mut self, setting: &str) {
+        self.language = i18n::normalize(setting);
+    }
+
+    /// Apply the saved ribbon, docking and panel settings (app start).
+    pub fn set_layout_prefs(&mut self, prefs: &dock::LayoutPrefs) {
+        self.ui.ribbon.visible = prefs.ribbon;
+        self.ui.dock.enabled = prefs.docked;
+        self.ui.dock.workspace = dock::load_workspace(prefs.workspace.as_ref());
+        self.saved_layout = (prefs.ribbon, prefs.docked, self.ui.dock.workspace.clone());
+    }
+
+    /// The ribbon, docking and panel settings to save.
+    #[must_use]
+    pub fn layout_prefs(&self) -> dock::LayoutPrefs {
+        dock::LayoutPrefs {
+            ribbon: self.ui.ribbon.visible,
+            docked: self.ui.dock.enabled,
+            workspace: serde_json::to_value(&self.ui.dock.workspace).ok(),
+        }
+    }
+
+    /// The settings to save when they differ from the last saved ones.
+    fn layout_changed(&mut self) -> Option<dock::LayoutPrefs> {
+        let now = (
+            self.ui.ribbon.visible,
+            self.ui.dock.enabled,
+            &self.ui.dock.workspace,
+        );
+        if (now.0, now.1, now.2)
+            == (
+                self.saved_layout.0,
+                self.saved_layout.1,
+                &self.saved_layout.2,
+            )
+        {
+            return None;
+        }
+        self.saved_layout = (now.0, now.1, now.2.clone());
+        Some(self.layout_prefs())
+    }
+
     /// Update recent files list shown in the File menu.
     pub fn set_recent(&mut self, recent: Vec<String>) {
+        self.recent_previews
+            .retain(|(path, _)| recent.iter().any(|r| r == path));
         self.recent_files = recent;
+    }
+
+    /// Remember the course at `path` (a recent file) for its thumbnail.
+    pub fn set_recent_preview(&mut self, path: String, course: &Course) {
+        let Some(preview) = welcome::RecentPreview::of(course) else {
+            return;
+        };
+        self.recent_previews.retain(|(p, _)| *p != path);
+        self.recent_previews.push((path, preview));
+    }
+
+    /// Whether the start page is on screen (its thumbnails are wanted).
+    #[must_use]
+    pub fn start_page_shown(&self) -> bool {
+        self.ui.show_welcome || self.ui.file_page.open
     }
 
     /// Update the list of templates shown under "My library".
@@ -2020,6 +2128,7 @@ impl Editor {
         self.ui.media_library = media_library::MediaLibraryState::default();
         self.ui.story_view = false;
         self.ui.course_map = CourseMapState::default();
+        self.ui.doc_tabs = doc_tabs::DocTabs::default();
         self.ui.thumbnail_cache.clear();
         self.ui.navigator_index.clear();
         self.ui.canvas_compose_cache.clear();
@@ -4501,12 +4610,82 @@ impl Editor {
         Self::paste_input_allowed(preview_has_focus, text_focus)
     }
 
+    /// The slides panel's contents (thumbnails, scenes).
+    pub(crate) fn slides_body(&mut self, ui: &mut Ui) {
+        let panel_rect = ui.available_rect_before_wrap();
+        slides::show_slides_panel(self, ui, panel_rect);
+    }
+
+    /// The Inspector's contents (Format, Animate, Slide, Course).
+    /// The inspector: `docked` names the one inspector a dock panel draws; `None`
+    /// draws the fixed panel, which switches between all four.
+    pub(crate) fn inspector_body(&mut self, ui: &mut Ui, docked: Option<InspectorTab>) {
+        // A child that doesn't report overflow: a wide row must not grow the
+        // panel, which would push the rest of the window off screen.
+        let rect = ui.available_rect_before_wrap();
+        let mut content = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        content.set_clip_rect(rect.intersect(ui.clip_rect()));
+        properties::show_properties_panel(self, &mut content, docked);
+        ui.allocate_rect(rect, egui::Sense::hover());
+    }
+
+    /// The canvas with its layers strip, or the Course Map.
+    pub(crate) fn canvas_body(&mut self, ui: &mut Ui) {
+        if self.ui.story_view {
+            course_map::handle_map_keys(self, ui);
+            course_map::show_course_map(self, ui);
+        } else {
+            canvas::show_canvas_and_layers(self, ui);
+        }
+    }
+
+    /// The timeline's contents; its edits run as commands.
+    pub(crate) fn timeline_body(&mut self, ui: &mut Ui) {
+        let mut actions = Vec::new();
+        // Docked, Slide Layers is a panel of its own beside the Timeline;
+        // the fixed Timeline panel keeps it on its right.
+        if self.ui.dock.enabled {
+            timeline::show_timeline_content(self, ui, &mut actions);
+        } else {
+            timeline::show_timeline_panel(self, ui, &mut actions);
+        }
+        for (cmd, params) in actions {
+            self.run(cmd, params);
+        }
+    }
+
+    /// The Slide Layers dock panel.
+    pub(crate) fn layers_body(&mut self, ui: &mut Ui) {
+        let mut actions = Vec::new();
+        layers::show_layers_panel(self, ui, &mut actions);
+        for (cmd, params) in actions {
+            self.run(cmd, params);
+        }
+    }
+
+    /// One bottom tab drawn as a dock panel of its own (States, Triggers,
+    /// Variables, Question).
+    pub(crate) fn bottom_tab_body(&mut self, ui: &mut Ui, tab: BottomTab) {
+        if let Some(reason) = timeline::bottom_tab_unavailable(self, tab) {
+            ui.add_space(8.0);
+            ui.label(reason);
+            return;
+        }
+        let mut actions = Vec::new();
+        timeline::show_bottom_tab(self, ui, tab, &mut actions);
+        for (cmd, params) in actions {
+            self.run(cmd, params);
+        }
+    }
+
     /// Display the editor UI inside `ui` and return any shell requests.
     #[allow(clippy::cognitive_complexity)]
     pub fn show(&mut self, ui: &mut Ui) -> Vec<EditorRequest> {
         #[cfg(test)]
         crate::guard_counters::begin_frame();
         self.ui.current_time = ui.input(|i| i.time);
+        // Strings are looked up on the drawing thread in the saved language.
+        i18n::set_current(i18n::resolve(&self.language));
         self.media_cache.begin_frame();
         self.sync_perf_profile(Some(ui.ctx()));
         self.check_memory_pressure();
@@ -4526,6 +4705,7 @@ impl Editor {
             &MemoryMediaSource::from_store(&self.media),
         );
         self.update_timeline_playback(ui);
+        dock::replay_forwarded(self, ui.ctx());
 
         // Editor shortcuts must not act on the editor's selection while the user is
         // interacting with the preview window. Crop mode owns the keyboard: only
@@ -4917,7 +5097,13 @@ impl Editor {
         // content never touches the window edge (matches the side panels).
         let edge_margin = egui::Margin::symmetric(coursecraft_render::PANEL_MARGIN as i8, 0);
 
-        if self.ui.show_welcome {
+        if self.ui.show_welcome && self.ui.ribbon.visible {
+            // The File page is the start page (docs/ui/ribbon.md › File).
+            dialog::set_top_inset(ui.ctx(), ui.max_rect().min.y);
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.app))
+                .show(ui, |ui| file_page::show(self, ui, &mut requests));
+        } else if self.ui.show_welcome {
             // Top menu bar
             let menu_bar = Panel::top("editor_menu_bar")
                 .exact_size(TOP_BAR_HEIGHT)
@@ -4935,10 +5121,10 @@ impl Editor {
                 .show(ui, |ui| {
                     welcome::show_welcome_screen(self, ui, &mut requests);
                 });
-
+        }
+        if self.ui.show_welcome {
             shortcuts::show_shortcuts_dialog(self, ui.ctx());
             report::show_report_windows(self, ui.ctx(), &mut requests);
-            update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
             translation::show_translation_windows(self, ui.ctx(), &mut requests);
             outline::show_outline_dialog(self, ui.ctx());
             document::show_document_dialog(self, ui.ctx(), &mut requests);
@@ -4951,33 +5137,82 @@ impl Editor {
             audio_ai::show_speech_window(self, ui.ctx(), &mut requests);
             translate_ai::show_translate_window(self, ui.ctx(), &mut requests);
             layers::show_layer_settings_window(self, ui.ctx());
+            preferences::show_preferences_window(self, ui.ctx(), &mut requests);
 
             eyedropper::paint_overlay(ui.ctx());
             requests.append(&mut self.pending_requests);
             return requests;
         }
 
-        // 1. Top menu bar (panel fill, hairline below)
+        // The File page covers the window until an action or Esc closes it.
+        if self.ui.ribbon.visible && self.ui.file_page.open {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.app))
+                .show(ui, |ui| file_page::show(self, ui, &mut requests));
+            requests.append(&mut self.pending_requests);
+            return requests;
+        }
+        if !self.ui.ribbon.visible {
+            self.ui.file_page.open = false;
+        }
+
+        // 1. Top menu bar (panel fill, hairline below); the ribbon replaces it.
+        let menu_h = if self.ui.ribbon.visible {
+            0.0
+        } else {
+            TOP_BAR_HEIGHT
+        };
         let menu_bar = Panel::top("editor_menu_bar")
-            .exact_size(TOP_BAR_HEIGHT)
+            .exact_size(menu_h)
             .resizable(false)
             .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
-            .show_separator_line(true)
+            .show_separator_line(menu_h > 0.0)
             .show(ui, |ui| {
-                menu::show_menu_bar(self, ui, &mut requests);
+                if menu_h > 0.0 {
+                    menu::show_menu_bar(self, ui, &mut requests);
+                }
             });
 
-        // 1b. Keynote-style toolbar (52 px, panel fill, hairline below)
-        let toolbar_panel = Panel::top("editor_toolbar")
-            .exact_size(toolbar::TOOLBAR_HEIGHT)
-            .resizable(false)
-            .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                toolbar::show_toolbar(self, ui, &mut requests);
-            });
-        // Dialogs open below the toolbar.
-        dialog::set_top_inset(ui.ctx(), toolbar_panel.response.rect.max.y);
+        // 1b. The ribbon (M37, the default), or the older flat toolbar when the
+        // ribbon is turned off in Preferences.
+        self.ui.ribbon.rect = egui::Rect::NOTHING;
+        let top_panel = if self.ui.ribbon.visible {
+            Panel::top("editor_ribbon")
+                .exact_size(ribbon::height(&self.ui.ribbon))
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                .show_separator_line(true)
+                .show(ui, |ui| {
+                    ribbon::show(self, ui, &mut requests);
+                })
+        } else {
+            Panel::top("editor_toolbar")
+                .exact_size(toolbar::TOOLBAR_HEIGHT)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                .show_separator_line(true)
+                .show(ui, |ui| {
+                    toolbar::show_toolbar(self, ui, &mut requests);
+                })
+        };
+        // 1c. Document tabs (Course Map, opened slides) under the ribbon.
+        let doc_tabs_h = if self.ui.ribbon.visible {
+            Panel::top("editor_doc_tabs")
+                .exact_size(doc_tabs::DOC_TABS_H)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                .show_separator_line(false)
+                .show(ui, |ui| doc_tabs::show(self, ui))
+                .response
+                .rect
+                .height()
+        } else {
+            0.0
+        };
+        let top_bottom = top_panel.response.rect.max.y + doc_tabs_h;
+        let top_h = top_panel.response.rect.height() + doc_tabs_h;
+        // Dialogs open below the toolbar or the ribbon.
+        dialog::set_top_inset(ui.ctx(), top_bottom);
 
         // 2. Bottom status bar (26 px, panel fill, hairline above)
         let status_bar = Panel::bottom("editor_status_bar")
@@ -4998,102 +5233,99 @@ impl Editor {
             );
         });
 
-        // 3. Bottom timeline panel. Keep at least 200 px of canvas above it.
-        // Hidden in Master View, which edits slide masters without a timeline.
-        if self.ui.master_view {
-            self.ui.timeline.panel_rect = None;
-            self.ui.timeline.tab_rects.clear();
-        } else {
-            let content_h = ui.ctx().content_rect().height();
-            let chrome_h = TOP_BAR_HEIGHT + toolbar::TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
-            let max_by_canvas =
-                (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
-            let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
-                .min(max_by_canvas)
-                .max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
-            let initial_panel_h = self
-                .ui
-                .timeline
-                .panel_height
-                .clamp(timeline::TIMELINE_PANEL_MIN_HEIGHT, max_panel_h);
-            // The canvas/side panels are laid out after this panel and sit on top of the outer half
-            // of the default 5px resize grab zone, leaving only ~4px inside the panel. Widen it and
-            // keep the first `RESIZE_GRAB_PX` of the panel free of content so it is easy to hit.
-            let old_grab = ui.style().interaction.resize_grab_radius_side;
-            ui.style_mut().interaction.resize_grab_radius_side = timeline::PANEL_RESIZE_GRAB_PX;
-            let timeline_panel = Panel::bottom("editor_timeline_panel")
-                .default_size(initial_panel_h)
-                .size_range(timeline::TIMELINE_PANEL_MIN_HEIGHT..=max_panel_h)
-                .resizable(true)
-                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
-                .show_separator_line(true)
-                .show(ui, |ui| {
-                    // A resizable panel otherwise shrinks to its content; always fill the
-                    // size the user picked (or the default).
-                    ui.set_min_height(ui.available_height());
-                    ui.add_space(timeline::PANEL_RESIZE_GRAB_PX - 2.0);
-                    let mut actions = Vec::new();
-                    timeline::show_timeline_panel(self, ui, &mut actions);
-                    for (cmd, params) in actions {
-                        self.run(cmd, params);
-                    }
-                });
-            ui.style_mut().interaction.resize_grab_radius_side = old_grab;
-            self.ui.timeline.panel_rect = Some(timeline_panel.response.rect);
-            self.ui.timeline.panel_height = timeline_panel.response.rect.height();
-            if ui.input(|i| i.pointer.primary_pressed())
-                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-            {
-                self.ui.timeline.focused = timeline_panel.response.rect.contains(pos);
-            }
+        if !self.ui.dock.enabled {
+            panels::show_floating(self, ui.ctx());
         }
-
-        // 4. Left slides panel
-        let slides_panel = Panel::left("editor_slides_panel")
-            .default_size(220.0)
-            .size_range(180.0..=320.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(p.panel))
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                let panel_rect = ui.available_rect_before_wrap();
-                slides::show_slides_panel(self, ui, panel_rect);
-            });
-
-        // 5. Right properties panel (Inspector: Format, Animate, Slide, Course)
-        let properties_panel = Panel::right("editor_properties_panel")
-            .default_size(PROPERTIES_PANEL_WIDTH)
-            .size_range(260.0..=400.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(p.panel))
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                // A child that doesn't report overflow: a wide row must not grow the
-                // panel, which would push the rest of the window off screen.
-                let rect = ui.available_rect_before_wrap();
-                let mut content = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                content.set_clip_rect(rect.intersect(ui.clip_rect()));
-                properties::show_properties_panel(self, &mut content);
-                ui.allocate_rect(rect, egui::Sense::hover());
-            });
-        coach::set_chrome_rects(
-            ui.ctx(),
-            toolbar_panel.response.rect,
-            slides_panel.response.rect,
-            properties_panel.response.rect,
-        );
-
-        // 6. Central canvas and layers strip, or the course map.
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(p.canvas))
-            .show(ui, |ui| {
-                if self.ui.story_view {
-                    course_map::handle_map_keys(self, ui);
-                    course_map::show_course_map(self, ui);
-                } else {
-                    canvas::show_canvas_and_layers(self, ui);
+        if self.ui.dock.enabled {
+            // 3–6 docked: slides, canvas, timeline and Inspector in one workspace.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.panel))
+                .show(ui, |ui| dock::show(self, ui));
+            coach::set_chrome_rects(
+                ui.ctx(),
+                top_panel.response.rect,
+                self.ui
+                    .dock
+                    .rect(dock::Panel::Slides)
+                    .unwrap_or(egui::Rect::NOTHING),
+                self.ui.dock.inspector_rect().unwrap_or(egui::Rect::NOTHING),
+            );
+        } else {
+            // 3. Bottom timeline panel. Keep at least 200 px of canvas above it.
+            // Hidden in Master View, which edits slide masters without a timeline.
+            if self.ui.master_view {
+                self.ui.timeline.panel_rect = None;
+                self.ui.timeline.tab_rects.clear();
+            } else {
+                let content_h = ui.ctx().content_rect().height();
+                let chrome_h = menu_h + top_h + STATUS_BAR_HEIGHT;
+                let max_by_canvas =
+                    (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
+                let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
+                    .min(max_by_canvas)
+                    .max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
+                let initial_panel_h = self
+                    .ui
+                    .timeline
+                    .panel_height
+                    .clamp(timeline::TIMELINE_PANEL_MIN_HEIGHT, max_panel_h);
+                // The canvas/side panels are laid out after this panel and sit on top of the outer half
+                // of the default 5px resize grab zone, leaving only ~4px inside the panel. Widen it and
+                // keep the first `RESIZE_GRAB_PX` of the panel free of content so it is easy to hit.
+                let old_grab = ui.style().interaction.resize_grab_radius_side;
+                ui.style_mut().interaction.resize_grab_radius_side = timeline::PANEL_RESIZE_GRAB_PX;
+                let timeline_panel = Panel::bottom("editor_timeline_panel")
+                    .default_size(initial_panel_h)
+                    .size_range(timeline::TIMELINE_PANEL_MIN_HEIGHT..=max_panel_h)
+                    .resizable(true)
+                    .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                    .show_separator_line(true)
+                    .show(ui, |ui| {
+                        // A resizable panel otherwise shrinks to its content; always fill the
+                        // size the user picked (or the default).
+                        ui.set_min_height(ui.available_height());
+                        ui.add_space(timeline::PANEL_RESIZE_GRAB_PX - 2.0);
+                        self.timeline_body(ui);
+                    });
+                ui.style_mut().interaction.resize_grab_radius_side = old_grab;
+                self.ui.timeline.panel_rect = Some(timeline_panel.response.rect);
+                self.ui.timeline.panel_height = timeline_panel.response.rect.height();
+                if ui.input(|i| i.pointer.primary_pressed())
+                    && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                {
+                    self.ui.timeline.focused = timeline_panel.response.rect.contains(pos);
                 }
-            });
+            }
+
+            // 4. Left slides panel
+            let slides_panel = Panel::left("editor_slides_panel")
+                .default_size(220.0)
+                .size_range(180.0..=320.0)
+                .resizable(true)
+                .frame(egui::Frame::NONE.fill(p.panel))
+                .show_separator_line(true)
+                .show(ui, |ui| self.slides_body(ui));
+
+            // 5. Right properties panel (Inspector: Format, Animate, Slide, Course)
+            let properties_panel = Panel::right("editor_properties_panel")
+                .default_size(PROPERTIES_PANEL_WIDTH)
+                .size_range(260.0..=400.0)
+                .resizable(true)
+                .frame(egui::Frame::NONE.fill(p.panel))
+                .show_separator_line(true)
+                .show(ui, |ui| self.inspector_body(ui, None));
+            coach::set_chrome_rects(
+                ui.ctx(),
+                top_panel.response.rect,
+                slides_panel.response.rect,
+                properties_panel.response.rect,
+            );
+
+            // 6. Central canvas and layers strip, or the course map.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.canvas))
+                .show(ui, |ui| self.canvas_body(ui));
+        }
 
         // Insert menu's shape gallery (search needs a real text field).
         shape_gallery::show_shape_gallery_window(self, ui.ctx());
@@ -5126,7 +5358,6 @@ impl Editor {
         preferences::show_preferences_window(self, ui.ctx(), &mut requests);
         version_history::show_version_history_window(self, ui.ctx(), &mut requests);
         report::show_report_windows(self, ui.ctx(), &mut requests);
-        update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
 
         // XLIFF export language dialog and import report
         translation::show_translation_windows(self, ui.ctx(), &mut requests);
@@ -5212,6 +5443,11 @@ impl Editor {
             );
         });
         widgets::end_press_guard(ui.ctx());
+        if !ui.input(|i| i.pointer.any_down())
+            && let Some(layout) = self.layout_changed()
+        {
+            requests.push(EditorRequest::SaveLayout(layout));
+        }
         requests.append(&mut self.pending_requests);
         requests
     }
