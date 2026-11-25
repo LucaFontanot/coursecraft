@@ -1681,3 +1681,42 @@ fn m31_19_web_unsaved_save_dont_save_cancel_and_pptx_import() {
     assert!(!state.is_dirty(2));
     assert_eq!(state.file_name_display(), "saved.ccraft");
 }
+
+#[test]
+fn parse_launch_args_handles_ccraft_path_and_spaces() {
+    assert_eq!(
+        crate::parse_launch_args(["coursecraft", "/tmp/project.ccraft"]),
+        (false, Some(PathBuf::from("/tmp/project.ccraft")))
+    );
+    assert_eq!(
+        crate::parse_launch_args(["coursecraft", "/tmp/My Courses/Lesson 1.ccraft"]),
+        (
+            false,
+            Some(PathBuf::from("/tmp/My Courses/Lesson 1.ccraft"))
+        )
+    );
+    assert_eq!(
+        crate::parse_launch_args(["coursecraft", "--blank"]),
+        (true, None)
+    );
+    assert_eq!(
+        crate::parse_launch_args(["coursecraft", "--blank", "C:\\My Courses\\Unit 1.ccraft"]),
+        (true, Some(PathBuf::from("C:\\My Courses\\Unit 1.ccraft")))
+    );
+}
+
+#[test]
+fn startup_opens_ccraft_project_with_spaces_in_path() {
+    let dir = scratch_dir("test open with spaces");
+    let cfg = dir.join("cfg");
+    let course = Course::from_json(HELLO_JSON).expect("valid course");
+    let expected_title = course.title.clone();
+    let path = dir.join("My Course 01.ccraft");
+    save_to(&path, &course, &[]).expect("save project");
+
+    let mut app = test_app(Some(cfg));
+    app.startup(Some(path.clone()), false);
+    assert_eq!(app.project.path.as_deref(), Some(path.as_path()));
+    assert!(!app.editor.ui.show_welcome);
+    assert_eq!(app.editor.session.course.title, expected_title);
+}

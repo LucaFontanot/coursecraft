@@ -463,3 +463,40 @@ fn a9_10_base_slide_view_cli_view_set_pack_unpack_validate_roundtrip() {
             .success()
     );
 }
+
+#[test]
+fn ccraft_file_association_configured_for_windows_and_linux() {
+    let root = repo_root();
+    let iss = std::fs::read_to_string(root.join("packaging/windows/coursecraft.iss"))
+        .expect("read coursecraft.iss");
+    for required in [
+        "ChangesAssociations=yes",
+        "[Registry]",
+        r"Software\Classes\.ccraft",
+        "CourseCraft project",
+        "DefaultIcon",
+        r"shell\open\command",
+        "uninsdeletekey",
+        r#""{app}\coursecraft.exe""#,
+        r#""%1""#,
+    ] {
+        assert!(
+            iss.contains(required),
+            "coursecraft.iss missing: {required}"
+        );
+    }
+
+    let mime_xml = std::fs::read_to_string(root.join("packaging/linux/coursecraft-mime.xml"))
+        .expect("read coursecraft-mime.xml");
+    assert!(mime_xml.contains("application/x-coursecraft-project"));
+    assert!(mime_xml.contains("*.ccraft"));
+
+    let desktop = std::fs::read_to_string(root.join("packaging/linux/coursecraft.desktop"))
+        .expect("read coursecraft.desktop");
+    assert!(desktop.contains("MimeType=application/x-coursecraft-project;"));
+
+    let yml =
+        std::fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release.yml");
+    assert!(yml.contains(r#"$root/share/mime/packages/coursecraft.xml"#));
+    assert!(yml.contains(r#"$appdir/usr/share/mime/packages/coursecraft.xml"#));
+}

@@ -6,4 +6,5 @@ Exec=coursecraft %F
 Icon=coursecraft
 Terminal=false
 Categories=Education;Office;
+MimeType=application/x-coursecraft-project;
 StartupWMClass=coursecraft

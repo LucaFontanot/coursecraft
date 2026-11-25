@@ -3730,12 +3730,31 @@ fn resolve_web_theme(ctx: &egui::Context) -> coursecraft_ui_egui::coursecraft_re
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn parse_launch_args<I, S>(args: I) -> (bool, Option<PathBuf>)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<std::ffi::OsString>,
+{
+    let mut blank = false;
+    let mut initial_path = None;
+    for arg in args.into_iter().skip(1) {
+        let os_arg: std::ffi::OsString = arg.into();
+        if os_arg.is_empty() {
+            continue;
+        }
+        let text = os_arg.to_string_lossy();
+        if text == "--blank" {
+            blank = true;
+        } else if !text.starts_with("--") && initial_path.is_none() {
+            initial_path = Some(PathBuf::from(os_arg));
+        }
+    }
+    (blank, initial_path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn run_editor_window() -> eframe::Result {
-    let blank = std::env::args().any(|a| a == "--blank");
-    let initial_path = std::env::args()
-        .skip(1)
-        .find(|a| !a.starts_with("--"))
-        .map(PathBuf::from);
+    let (blank, initial_path) = parse_launch_args(std::env::args_os());
 
     let config_dir = prefs::config_dir_from_env();
     crash::install_panic_hook(config_dir.clone());

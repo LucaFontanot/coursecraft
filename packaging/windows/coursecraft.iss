@@ -24,6 +24,7 @@ DefaultDirName={localappdata}\Programs\CourseCraft
 DefaultGroupName=CourseCraft
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+ChangesAssociations=yes
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputName}
 SetupIconFile={#RepoRoot}\apps\coursecraft\icons\coursecraft.ico
@@ -50,6 +51,13 @@ Source: "{#RepoRoot}\ATTRIBUTION.md"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{autoprograms}\CourseCraft"; Filename: "{app}\coursecraft.exe"; IconFilename: "{app}\coursecraft.exe"
 Name: "{autodesktop}\CourseCraft"; Filename: "{app}\coursecraft.exe"; IconFilename: "{app}\coursecraft.exe"; Tasks: desktopicon
+
+[Registry]
+Root: HKA; Subkey: "Software\Classes\.ccraft"; ValueType: string; ValueName: ""; ValueData: "CourseCraft.Project"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\.ccraft\OpenWithProgids"; ValueType: string; ValueName: "CourseCraft.Project"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\CourseCraft.Project"; ValueType: string; ValueName: ""; ValueData: "CourseCraft project"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\CourseCraft.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\coursecraft.exe,0"
+Root: HKA; Subkey: "Software\Classes\CourseCraft.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\coursecraft.exe"" ""%1"""
 
 [Run]
 Filename: "{app}\coursecraft.exe"; Description: "{cm:LaunchProgram,CourseCraft}"; Flags: nowait postinstall skipifsilent
