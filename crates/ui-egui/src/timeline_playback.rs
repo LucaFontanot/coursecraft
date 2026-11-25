@@ -734,11 +734,7 @@ impl TimelinePlayback {
                 );
                 let raw_offset = track_file_offset_ms(&track, playhead_ms);
                 let eff_end = effective_media_end_ms(media_dur, track.trim);
-                let offset = if playing {
-                    raw_offset
-                } else {
-                    eff_end.map_or(raw_offset, |end| raw_offset.min(end))
-                };
+                let offset = eff_end.map_or(raw_offset, |end| raw_offset.min(end));
                 let past_media_end = eff_end.is_some_and(|end| raw_offset >= end);
                 if let Some(track) = self.tracks.get_mut(index) {
                     track.ended = past_media_end;
@@ -1702,5 +1698,52 @@ pub(crate) mod tests {
         playback.advance_clock_for_test(500);
         let playhead = playback.tick(3500, 500, 10000);
         assert_eq!(playhead, 4000);
+    }
+
+    #[test]
+    fn seeking_while_playing_past_video_trim_end_clamps_last_frame_seek() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "id": "trimmed-video",
+            "title": "Trimmed video",
+            "slide_size": { "w": 1280, "h": 720 },
+            "scenes": [{
+                "id": "scene1",
+                "title": "Scene 1",
+                "slides": [{
+                    "id": "s1",
+                    "title": "One",
+                    "duration_ms": 10000,
+                    "objects": [{
+                        "id": "vid",
+                        "kind": {
+                            "type": "video",
+                            "src": "clip.mp4",
+                            "autoplay": false,
+                            "trim": { "start_ms": 1000, "end_ms": 4000 }
+                        },
+                        "frame": { "x": 0, "y": 0, "w": 320, "h": 180 },
+                        "timing": { "start_ms": 2000, "end_ms": 8000 }
+                    }]
+                }]
+            }]
+        });
+        let course = Course::from_json(&json.to_string()).expect("valid course");
+        let mut playback = TimelinePlayback::with_backend(Box::new(FakeTimelineMedia::new()));
+        playback.sync_slide(&course, "s1", 10000, &media(), 0);
+
+        let _ = playback.start_play(0, 0, 10000);
+        // Seek while playing into the bar at 6500 ms (file offset 1000 + 4500 = 5500 > trim.end_ms 4000).
+        playback.seek_to(6500, 10000, 100);
+        playback.flush_seeks(6500);
+        let calls = playback.backend_calls_for_test();
+        assert!(
+            calls.contains(&"seek:vid:4000".to_owned()),
+            "must hold the last trimmed frame at 4000 ms, not seek past trim.end_ms: {calls:?}"
+        );
+        assert!(
+            !calls.contains(&"seek:vid:5500".to_owned()),
+            "must not seek past trim.end_ms: {calls:?}"
+        );
     }
 }
