@@ -1,7 +1,6 @@
 # Ribbon: main tabs
 
-> Part of [the ribbon plan](README.md). Status marks are explained there. Reference layout:
-> [storyline-observed.md](storyline-observed.md) §2.
+> Part of [the ribbon plan](README.md). Status marks are explained there.
 >
 > **Kinds:** `L` large button · `LS` large split button (▾ menu) · `S` small button · `SS` small
 > split button · `C` combo box · `G` gallery · `N` number spinner · `K` checkbox · `T` toggle ·
@@ -24,13 +23,12 @@
 | 5 | **Transitions** | slide open |
 | 6 | **Animations** | slide open |
 | 7 | **View** | always |
-| 8 | **AI** | always; CourseCraft's own tab (Storyline keeps its AI Assistant on Home) |
+| 8 | **AI** | always; CourseCraft's own tab |
 | 9 | **Help** | always |
 | 10+ | contextual | see [contextual-tabs.md](contextual-tabs.md) |
 
 In the Course Map, Insert, Transitions and Animations stay in the strip but every control in them is
-disabled with the tooltip `Open a slide first`. (This keeps the strip from jumping; Storyline hides
-nothing either.)
+disabled with the tooltip `Open a slide first`. (This keeps the strip from jumping.)
 
 Every main tab but AI and Help ends with a **Publish** group (Preview at least). Its controls are the same
 everywhere and are specified once, under Home.
@@ -51,11 +49,10 @@ background, `apps/coursecraft/src/recent_previews.rs`; media isn't loaded, so pi
 placeholders). Still to do: news.
 
 Not a ribbon tab: a full-window **File page**, the same page CourseCraft shows on launch
-(today's welcome screen, `crates/ui-egui/src/welcome.rs`). Layout per storyline-observed.md ›
-FILE: an accent-coloured left column with the start actions, Recent and Browse for more…, and a
-right area with CourseCraft news (release notes from the app, no network call) and links. Esc or
-the Back entry returns to the editor. It replaces today's File menu (`menu.rs` `show_menu_bar`)
-and keeps all of it:
+(today's welcome screen, `crates/ui-egui/src/welcome.rs`). It has an accent-coloured left column
+with the start actions, Recent and Browse for more…, and a right area with CourseCraft news
+(release notes from the app, no network call) and links. Esc or the Back entry returns to the
+editor. It replaces today's File menu (`menu.rs` `show_menu_bar`) and keeps all of it:
 
 | Start action (left column, top) | Action | Status | Existing UI |
 |---|---|---|---|
@@ -118,7 +115,7 @@ Shown when the Course Map view tab is active.
 | | Copy | S | `ui:edit.copy` | ✅ | |
 | Scenes | New Scene | L | `scene.add` | ✅ | `toolbar::add_new_scene` |
 | | Starting Scene | T | `course.update` `{start_scene}` (new field) | ⛔ | the course model has no start-scene field yet; the course starts at the first slide. Needs the field, a flag in the map and a runtime rule in `triggers.md` |
-| | Index | LS | — | ⛔ | Storyline's scene index menu; behaviour to confirm |
+| | Index | LS | — | ⛔ | placeholder; behaviour to confirm |
 | | Question Banks | LS | `bank.create`, `ui:banks.manage` | ✅ | ▾ New Question Bank, Manage Banks…, Import Questions from CSV… |
 | Slide | New Slide | LS | `slide.add`, `slide.add_from_layout`, `template.add_slide` | 🟡 | ▾ menu below |
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
@@ -133,7 +130,7 @@ Shown when the Course Map view tab is active.
 
 | Item | Action | Status |
 |---|---|---|
-| Library… | — | 🚫 Not planned: content library |
+| Library… | — | 🚫 Not planned: stock asset library |
 | My Templates… | `template.add_slide` | ✅ (`slides::show_new_slide_popup`) |
 | Team Slides… | — | — not drawn |
 | Basic Layouts ▸ (gallery of the course's slide layouts, headed by the theme name) | `slide.add_from_layout` | ✅ |
@@ -151,7 +148,7 @@ Shown when the Course Map view tab is active.
 | | Cut | S | `ui:edit.cut` | ✅ | |
 | | Copy | SS | `ui:edit.copy` | ✅ | ▾ Copy, Duplicate (`object.duplicate`) |
 | | Format Painter | S | `ui:formatPainter` | ✅ | double-click keeps it on |
-| | Select All | S | `ui:edit.selectAll` | ✅ | CourseCraft extra, from Edit › Select All (Storyline: Ctrl+A only) |
+| | Select All | S | `ui:edit.selectAll` | ✅ | from Edit › Select All |
 | Slide | New Slide | LS | as Course Map | ✅ | |
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
 | | Focus Order | S | `ui:focusOrder` | 🟡 | focus order exists (`focus_order`); needs its own dialog |
@@ -197,7 +194,7 @@ Shown when the Course Map view tab is active.
 | | Zoom Region | L | — | ⛔ | camera zoom on part of the slide |
 | AI | Insert Text, Edit Text, Insert Image, Insert Audio, Quiz, Question, Summary | | on the AI tab | | |
 | Library | Characters | L | — | 🚫 | Not planned: characters |
-| | Photos | L | — | 🚫 | Not planned: content library |
+| | Photos | L | — | 🚫 | Not planned: stock asset library |
 | | Illustrations | L | — | 🚫 | |
 | | Icons | L | `ui:insert.icon` | ⛔ | CourseCraft ships no icon set yet; a bundled open icon set would make this ✅ |
 | | Videos | L | — | 🚫 | |
@@ -229,9 +226,6 @@ Shown when the Course Map view tab is active.
 
 ## Slides
 
-Not shown in the tutorial (see storyline-observed.md). The list below is the proposal; confirm the
-order against the app before building.
-
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
 | Slide | New Slide | LS | `slide.add` | ✅ (built in `spec.rs`, as is the rest of this tab) |
@@ -259,8 +253,6 @@ order against the app before building.
 | Publish | Preview | LS | | ✅ | |
 
 ## Transitions
-
-Not shown in the tutorial; standard layout.
 
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
@@ -290,8 +282,6 @@ Not shown in the tutorial; standard layout.
 
 ## View
 
-Not shown except Slide Master; proposal.
-
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
 | Views | Course Map | L | `ui:view.map` | ✅ (built in `spec.rs`, as is the rest of this tab) |
@@ -312,8 +302,7 @@ Not shown except Slide Master; proposal.
 
 ## AI
 
-CourseCraft's own tab: every AI control in one place, so Home keeps only editing. Storyline puts
-its AI Assistant group on Home; the controls and their status are the same.
+CourseCraft's own tab: every AI control in one place, so Home keeps only editing.
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
@@ -360,8 +349,8 @@ With the ribbon on, the menu bar is not drawn. File is the File page; the rest:
 | View | View tab; Ribbon and Docked Panels in Preferences › Interface |
 | Help | Help tab; agent and automation controls on the AI tab |
 
-CourseCraft's **Project** menu (Course settings, Variables, Glossary, Resources, Audit,
-Accessibility check, Suggest Alt Text…) has no Storyline twin on a tab. Course settings and Player go
-under Home › Publish › Player; Variables, Glossary and Resources move into Player Properties and
-the Triggers panel (as in Storyline); Audit and Accessibility go under Review controls in View until
-a Review tab is decided.
+CourseCraft's old **Project** menu items (Course settings, Variables, Glossary, Resources, Audit,
+Accessibility check, Suggest Alt Text…) are grouped by task: Course settings and Player go under
+Home › Publish › Player; Variables, Glossary and Resources sit in Player Properties and the
+Triggers panel; Audit and Accessibility go under Review controls in View until a Review tab is
+decided.

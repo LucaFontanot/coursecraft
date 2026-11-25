@@ -1,7 +1,6 @@
 # Shell, panels, context menus and dialogs
 
-> Part of [the ribbon plan](README.md). Reference: [storyline-observed.md](storyline-observed.md)
-> §1, §4, §5. Status marks as in README.
+> Part of [the ribbon plan](README.md). Status marks as in README.
 
 ## Window layout
 
@@ -17,20 +16,20 @@ Top to bottom:
    right panel (Triggers above, Slide Layers below).
 6. **Status bar**.
 
-| Element | Storyline | CourseCraft today | Status | Work |
-|---|---|---|---|---|
-| QAT: Save, Undo, Redo, Customize ▾ | yes | Save, Undo, Redo, Undo History left of the ribbon tab strip (`ribbon/mod.rs`) | 🟡 | Customize: right-click a ribbon button → Add to QAT (as DeckCraft); move into the title bar |
-| Title `name* - App` | yes | window title | 🟡 | add the `*` |
-| Menu bar | none | drawn only when Preferences › Interface › Ribbon is off; with the ribbon, File is the File page and every other item has a ribbon home (ribbon.md › Where the menu bar went) | — | delete the code with the flat toolbar (step 4) |
-| Flat toolbar | none | `toolbar.rs`, drawn only when Preferences › Interface › Ribbon is off | — | its buttons are on Home, Insert, Slides and View; Format, Animate, Slide and Course are dock panels (a tab row in the fixed Inspector when docking is off); delete the code with the menu bar (step 4) |
-| Collapse ribbon (Ctrl+F1, double-click a tab) | yes | click or double-click the open tab, Ctrl+F1 | ✅ | |
-| File page = start screen (left action column, Recent with thumbnails, news) | yes | `file_page.rs` from the File tab and on launch (accent column, Start with the welcome screen's content, Recent with first-slide thumbnails, Import, Export, Translation, Fonts) | 🟡 | news |
-| Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |
-| View tabs row with open slides | yes | `doc_tabs.rs`: Course Map tab, then each opened slide (× closes; closing the shown one shows its neighbour, the last one the map) | ✅ | breadcrumb tabs for sub-editors |
-| Device toggles in view row | yes | — | ⛔ | they set the preview device |
-| Panels undock / float / dock back | yes | docked by default (`dock.rs`); View › Panels closes and reopens; saved in prefs; Timeline, States, Triggers, Variables, Question and Notes are dock panels of their own, and Slide Layers sits beside them; a floating panel can be dragged out of the app window into its own OS window (desktop; off on Wayland, which reports no window positions), and keys typed there reach the editor's shortcuts. The layout is plain splits with craft-ui's side-edge zones (no dock columns): dropping a panel on the thin band along the window's bottom or top edge gives it a row across the whole width (the Timeline under Slides, canvas and Inspector), on the left or right edge a full-height column; layouts saved with dock columns are converted on load | ✅ | — |
-| Status bar: Slide n of m, size, theme | yes | `status.rs` | 🟡 | add size and theme name |
-| Status bar: view buttons, zoom %, slider, fit | yes | zoom in View | 🟡 | |
+| Element | CourseCraft today | Status | Work |
+|---|---|---|---|
+| QAT: Save, Undo, Redo, Customize ▾ | Save, Undo, Redo, Undo History left of the ribbon tab strip (`ribbon/mod.rs`) | 🟡 | Customize: right-click a ribbon button → Add to QAT (as DeckCraft); move into the title bar |
+| Title `name* - App` | window title | 🟡 | add the `*` |
+| Menu bar | drawn only when Preferences › Interface › Ribbon is off; with the ribbon, File is the File page and every other item has a ribbon home (ribbon.md › Where the menu bar went) | — | delete the code with the flat toolbar (step 4) |
+| Flat toolbar | `toolbar.rs`, drawn only when Preferences › Interface › Ribbon is off | — | its buttons are on Home, Insert, Slides and View; Format, Animate, Slide and Course are dock panels (a tab row in the fixed Inspector when docking is off); delete the code with the menu bar (step 4) |
+| Collapse ribbon (Ctrl+F1, double-click a tab) | click or double-click the open tab, Ctrl+F1 | ✅ | |
+| File page = start screen (left action column, Recent with thumbnails, news) | `file_page.rs` from the File tab and on launch (accent column, Start with the welcome screen's content, Recent with first-slide thumbnails, Import, Export, Translation, Fonts) | 🟡 | news |
+| Tooltips: name, shortcut, one sentence | partial | 🟡 | every ribbon control, from the registry |
+| View tabs row with open slides | `doc_tabs.rs`: Course Map tab, then each opened slide (× closes; closing the shown one shows its neighbour, the last one the map) | ✅ | breadcrumb tabs for sub-editors |
+| Device toggles in view row | — | ⛔ | they set the preview device |
+| Panels undock / float / dock back | docked by default (`dock.rs`); View › Panels closes and reopens; saved in prefs; Timeline, States, Triggers, Variables, Question and Notes are dock panels of their own, and Slide Layers sits beside them; a floating panel can be dragged out of the app window into its own OS window (desktop; off on Wayland, which reports no window positions), and keys typed there reach the editor's shortcuts. The layout is plain splits with craft-ui's side-edge zones (no dock columns): dropping a panel on the thin band along the window's bottom or top edge gives it a row across the whole width (the Timeline under Slides, canvas and Inspector), on the left or right edge a full-height column; layouts saved with dock columns are converted on load | ✅ | — |
+| Status bar: Slide n of m, size, theme | `status.rs` | 🟡 | add size and theme name |
+| Status bar: view buttons, zoom %, slider, fit | zoom in View | 🟡 | |
 
 ## Panels
 
@@ -44,7 +43,7 @@ Top to bottom:
 | Right-click: New Slide ▸ layouts, Apply Layout ▸, Duplicate, Delete, Rename, Preview | 🟡 | |
 | Undock | ⛔ | |
 
-### Course Map (Story view)
+### Course Map
 
 ✅ exists (`course_map.rs`). Parity items: scene cards with a header menu ▾ ⛔, start-scene flag ⛔,
 Ctrl+wheel zoom 🟡, double-click to rename scene and slide titles 🟡, double-click a slide opens a
@@ -148,4 +147,4 @@ New Slide ▸, New Scene, Apply Layout ▸, Duplicate, Delete, Rename, Move to S
 Keep the existing shortcuts (`shortcuts.rs`). Add: Ctrl+F1 collapse ribbon ⛔, Alt key tips on
 Windows ⛔, **C** add cue point while the timeline plays (verify), F12 preview slide ✅,
 Ctrl+F12 preview course (verify), Ctrl+wheel zoom in Course Map and canvas, Shift+wheel zoom
-canvas (Storyline) ⛔.
+canvas ⛔.

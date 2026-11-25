@@ -3,11 +3,9 @@
 > Part of [the ribbon plan](README.md). **Status:** step 1 built, steps 2 (Text) and 4 (bottom tabs) partly built.
 > **Written:** 2026-11-23. Status marks as in README. Long-term plan: it starts in M38 and grows with every milestone after it.
 
-In Storyline the ↘ in a group's caption opens a modal dialog (Font, Paragraph, Size and Position,
-Format Shape). CourseCraft opens a **dock panel** instead: the same settings, and more, in a panel
-the author can keep open, tab, split, float or close. A panel is where a category's advanced
-settings live. The ribbon keeps the common ones. The panel holds every setting of that category,
-including the ones Storyline hides in dialogs and the ones CourseCraft adds.
+The ↘ in a group's caption opens a **dock panel** rather than a modal dialog: the author can keep
+it open, tab, split, float or close it. A panel is where a category's advanced settings live. The
+ribbon keeps the common ones; the panel holds every setting of that category.
 
 Why a panel and not a dialog:
 

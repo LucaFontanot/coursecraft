@@ -153,15 +153,15 @@ Do each of these once per service:
 - [ ] While the service is uploading the file, press Save. Pass: it succeeds or, after about 2 seconds, shows the "sync service" message; the old file is never damaged.
 - [ ] Open the project from an iCloud or OneDrive file that is only online (not downloaded yet). Pass: it downloads and opens, or says why it cannot.
 
-## 9. Ribbon UI parity (M38 onward)
+## 9. Ribbon UI (M38 onward)
 
-Time: about 1.5 hours, then 20 minutes for each later milestone (M39 to M43). Needs: the desktop app, a Storyline-experienced author if possible, `docs/ui/ribbon.md`, `docs/ui/contextual-tabs.md` and `docs/ui/feature-parity.md` open beside it, the showcase course.
+Time: about 1.5 hours, then 20 minutes for each later milestone (M39 to M43). Needs: the desktop app, `docs/ui/ribbon.md`, `docs/ui/contextual-tabs.md` and `docs/ui/feature-parity.md` open beside it, the showcase course.
 
 Tab strip and ribbon
 
 - [ ] The tab strip reads File, Home, Insert, Slides, Design, Transitions, Animations, View, Help, in that order. Pass: same order as `ribbon.md` › Tab strip; no menu bar and no old flat toolbar.
 - [ ] Walk every main tab and compare each group and button with `ribbon.md`. Pass: nothing missing, nothing extra, same order; differences noted in the doc.
-- [ ] Hover every disabled button. Pass: each says "Not available yet: …" or "Not planned: …"; clicking does nothing and changes nothing (undo history unchanged).
+- [ ] Hover every disabled button. Pass: each says "Not available yet: …"; no `NotPlanned` control is drawn; clicking does nothing and changes nothing (undo history unchanged).
 - [ ] Hover enabled buttons on each tab. Pass: name, shortcut (if any) and one sentence of help.
 - [ ] Open the Course Map, then a slide. Pass: Home changes between the map variant and the slide variant; Insert, Transitions and Animations are disabled in the map with "Open a slide first".
 - [ ] Narrow the window step by step down to the minimum. Pass: groups shrink to small buttons, then to one group button; nothing clips, nothing wraps to a second row.
@@ -184,7 +184,7 @@ File page, quick access toolbar, shell
 Feature parity
 
 - [ ] For each milestone released (M39 to M43), take the rows it moved in `docs/ui/feature-parity.md` and try each one in the app and in a published course. Pass: the row's status is true; the summary counts match the tables.
-- [ ] A Storyline-experienced author builds the two tutorial courses' first slides (a title slide on a master, a narrated slide with cue points, a marker slide, a layer with a Start button, a multiple-choice question) without help. Note every place they looked for a command and did not find it.
+- [ ] Build a short multi-slide CourseCraft sample course from scratch without consulting the docs (a title slide on a master, a narrated slide with cue points, a marker slide, a layer with a Start button, and a multiple-choice question). Note any command that was hard to find on the ribbon.
 
 Localization (craft-i18n)
 

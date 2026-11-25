@@ -23,13 +23,14 @@
 The editor's layout is specified in `docs/ui/` (start at `docs/ui/README.md`).
 
 1. Find the control in `docs/ui/ribbon.md` or `docs/ui/contextual-tabs.md`. If it is not there,
-   add it first, in the place the tutorials show (`docs/ui/storyline-observed.md`).
+   add it first in the matching task group.
 2. If it edits the course, add the engine command first (above). UIs only dispatch.
-3. In the ribbon spec, change its action from `NotYet(..)` to the command or UI action. A control
-   whose feature is missing stays in place, drawn disabled with its reason.
+3. In the ribbon spec, change its action from `NotYet(..)` to the command or UI action. A planned
+   control whose feature is missing stays in place, drawn disabled with its reason (`NotPlanned`
+   controls stay in the spec but are hidden from the UI).
 4. Update its status in the doc table and the feature's row and summary in
    `docs/ui/feature-parity.md`.
-5. Labels follow the naming table in `docs/ui/README.md` › Clean-room.
+5. Labels follow the naming conventions in `docs/ui/README.md` › Clean-room.
 6. Every user-facing string is English in the code and goes through `tl!` (or `tid`, `trn`,
    `fmt`); never concatenate sentences. Translations go to the craft-i18n data repository, not
    here (`docs/ui/localization.md`).

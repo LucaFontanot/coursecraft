@@ -137,7 +137,7 @@ Choose Help > Report a Problem to tell us what went wrong, or Help > Suggest a F
 | `coursecraft-cli`, `coursecraft-mcp` | Headless tool and MCP server; agents start at [docs/cli.md](docs/cli.md) |
 
 See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md). The editor's
-layout (a tabbed ribbon a Storyline 360 author will know, with every planned button already in
+layout (a tabbed ribbon grouping commands by task, with every planned button already in
 place) is specified in [docs/ui/](docs/ui/README.md); what CourseCraft can and cannot do yet,
 feature by feature, is in [docs/ui/feature-parity.md](docs/ui/feature-parity.md).
 

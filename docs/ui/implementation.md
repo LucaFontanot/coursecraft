@@ -132,7 +132,7 @@ label, the shortcut and one sentence of help.
 
 ## 4. Narrow windows
 
-Storyline-style ribbons shrink groups from the right: large buttons become small, then a group
+The ribbon shrinks groups from the right: large buttons become small, then a group
 collapses into one button with its caption that opens the group as a popup. Implement in that order
 with a measured width per group; never wrap to a second row and never clip. Minimum supported
 window width stays as today (`toolbar.rs` thresholds 1100/1220 px show labels).
@@ -177,7 +177,7 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
    are the same `Editor::*_body` functions the fixed panels call, so both paths stay in step.
    DeckCraft uses only `craft_ui::ComboBox`; CourseCraft is the first Craft app on
    `craft_ui::docking`. It was chosen over `craft_ui::panes` (the suite's pick for Office-style
-   apps) because Storyline stacks panels (Triggers over Slide Layers) and tabs them (Timeline,
+   apps) because CourseCraft stacks panels (Triggers over Slide Layers) and tabs them (Timeline,
    States, Notes), which panes cannot. **Saved and default:** the workspace is serialized with
    craft-ui's `serde` feature into `prefs.json` (`panel_layout`), sent by the editor as
    `EditorRequest::SaveLayout` once a gesture ends, and fitted with `Workspace::reconcile` on

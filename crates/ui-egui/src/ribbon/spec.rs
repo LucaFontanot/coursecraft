@@ -617,7 +617,7 @@ const HOME_SLIDE: &[Group] = &[
                 LargeSplit,
                 Text(TextOp::TextStyles),
             ),
-            // Three rows of five, in Storyline's reading order.
+            // Three rows of five.
             item(
                 "font.family",
                 "Font",
@@ -1159,14 +1159,14 @@ const INSERT: &[Group] = &[
                 "Photos",
                 Icon::Image,
                 Large,
-                NotPlanned("a content library"),
+                NotPlanned("a stock asset library"),
             ),
             item(
                 "insert.illustrations",
                 "Illustrations",
                 Icon::Palette,
                 Small,
-                NotPlanned("a content library"),
+                NotPlanned("a stock asset library"),
             ),
             item(
                 "insert.icons",
@@ -1180,7 +1180,7 @@ const INSERT: &[Group] = &[
                 "Videos",
                 Icon::FilmStrip,
                 Small,
-                NotPlanned("a content library"),
+                NotPlanned("a stock asset library"),
             ),
         ],
     },

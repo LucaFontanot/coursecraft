@@ -7,7 +7,7 @@
 //! [`crate::EditorRequest::SaveLayout`]; the fixed egui panels remain when docking
 //! is turned off.
 //!
-//! Docking rather than `craft_ui::panes`: Storyline stacks panels (Triggers over
+//! Docking rather than `craft_ui::panes`: CourseCraft stacks panels (Triggers over
 //! Slide Layers) and tabs them (Timeline, States, Notes), which panes don't do.
 
 use craft_ui::docking::{

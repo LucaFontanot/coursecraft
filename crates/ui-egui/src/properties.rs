@@ -10644,7 +10644,7 @@ fn show_slide_properties(
                 }
             });
         }
-        // With the Notes panel open the notes live there, as in Storyline.
+        // With the Notes panel open the notes live there instead of duplicating them here.
         if show_notes && let Some(act) = notes_editor(ui, props, slide, narrate_requested, 52.0) {
             action_to_run = Some(act);
         }

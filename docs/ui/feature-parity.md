@@ -1,9 +1,9 @@
-# Feature parity with Storyline 360
+# Authoring feature status
 
-> Part of [the ribbon plan](README.md). **Written:** 2026-11-23. One row per **feature** a
-> Storyline author reaches through the UI seen in the tutorials (README › Sources), whatever tab
-> or dialog it sits in. The control-by-control view is in [ribbon.md](ribbon.md) and
-> [contextual-tabs.md](contextual-tabs.md); this file is the summary that drives the roadmap.
+> Part of [the ribbon plan](README.md). **Written:** 2026-11-23. One row per authoring **feature**
+> in CourseCraft, whatever tab or dialog it sits in. The control-by-control view is in
+> [ribbon.md](ribbon.md) and [contextual-tabs.md](contextual-tabs.md); this file is the summary
+> that drives the roadmap.
 >
 > Status marks as in README (✅ built, 🟡 partly, ⛔ not yet, 🚫 not planned, — left out).
 > **Milestone** is where the work is planned in `docs/roadmap.md`. A row changes in the same commit
@@ -52,7 +52,7 @@ Counted from the tables below; recount when a row changes.
 |---|---|---|---|
 | Scenes; new scene; rename | `scene.*` | ✅ | — |
 | Starting scene (red flag) | — | ⛔ needs model field + runtime rule | M41 |
-| Story view (Course Map): cards, zoom, fit | `course_map.rs` | ✅ | — |
+| Course Map: cards, zoom, fit | `course_map.rs` | ✅ | — |
 | Course Map: collapse scene cards, branch lines between scenes | — | ⛔ | M42 |
 | New slide from layout, Basic Layouts gallery | `slide.add_from_layout` | ✅ | — |
 | My Templates | `template.*` | ✅ | — |
@@ -93,7 +93,7 @@ Counted from the tables below; recount when a row changes.
 | Change case | — | ⛔ | M39 |
 | Highlight colour | — | ⛔ needs model field | M39 |
 | Text direction (rotate, stacked) | — | ⛔ | M39 |
-| Font and Paragraph settings (Storyline's dialogs) | Text settings panel (`panels.rs`, from Font ↘ and Paragraph ↘): every text control, space before and after; caps, highlight, underline styles, tab stops and columns drawn disabled | 🟡 | M39 |
+| Font and Paragraph settings | Text settings panel (`panels.rs`, from Font ↘ and Paragraph ↘): every text control, space before and after; caps, highlight, underline styles, tab stops and columns drawn disabled | 🟡 | M39 |
 | Slide number field | — | ⛔ | M39 |
 | Symbol picker | — | ⛔ | M39 |
 | Insert variable reference | — | ⛔ variables exist | M39 |
@@ -211,7 +211,7 @@ Counted from the tables below; recount when a row changes.
 |---|---|---|---|
 | Graded question kinds (MC, MR, T/F, fill-in, word bank, matching, sequence, numeric, hotspot) | `question.*` | ✅ | — |
 | Survey questions | `question.insert` | ✅ | — |
-| Custom (freeform) questions | `question.set_kind` | ✅ | — |
+| Custom questions | `question.set_kind` | ✅ | — |
 | Feedback layers (correct, incorrect, try again) | `question.add_feedback_layers` | ✅ | — |
 | Shuffle, attempts | `question.set` | ✅ | — |
 | Points | `question.set` | ✅ | — |
@@ -251,7 +251,7 @@ Counted from the tables below; recount when a row changes.
 | Publish quality setting | — | ⛔ | M43 |
 | Report to external LRS alongside LMS | | ⛔ verify | M43 |
 | Share for review with comments | — | 🚫 | — |
-| Hosted delivery (Reach 360) | — | — | — |
+| Hosted cloud delivery | — | — | — |
 
 ## Editor shell and panels
 
@@ -303,8 +303,8 @@ Counted from the tables below; recount when a row changes.
 | Icon set | — | ⛔ an open-licence bundled set | M40 |
 | Characters | — | 🚫 | — |
 | Stock photos, illustrations, videos | — | 🚫 | — |
-| Content library slide templates | — | 🚫 | — |
+| Stock slide template library | — | 🚫 | — |
 | 360° images and editor | — | 🚫 | — |
 | Screen recording, software simulation | — | 🚫 patent watch list | — |
-| Review 360 / comments | — | 🚫 | — |
-| Team slides, Reach 360 | — | — | — |
+| Hosted review / comments | — | 🚫 | — |
+| Shared cloud slides / hosted delivery | — | — | — |

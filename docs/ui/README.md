@@ -1,25 +1,22 @@
-# UI parity: the ribbon editor
+# The ribbon editor
 
-> **Status:** planned (M38). **Written:** 2026-11-23. **Sources:** public beginner tutorials for
-> Storyline 360, watched frame by frame (see [Sources](#sources)). Observations are of layout and
-> behaviour only (see [Clean-room](#clean-room)).
+> **Status:** in progress (M38). **Written:** 2026-11-23. Layout and look follow `DESIGN.md`
+> (see [Clean-room](#clean-room)).
 
-CourseCraft's editor today is a menu bar (File, Edit, Insert, Arrange, Project, View, Help) over a
-flat toolbar (Add slide, Preview, Text, Shape, Image, Media, Button, Question, Trigger, Publish) and
-an inspector on the right. A Storyline author expects a **tabbed ribbon** instead. This folder is the
-plan for that ribbon: the same tabs, the same groups and the same buttons in the same order, so a
-Storyline author finds every command where they look for it.
+CourseCraft's editor organizes authoring commands in a **tabbed ribbon** grouped by task (File,
+Home, Insert, Slides, Design, Transitions, Animations, View, AI, Help, plus contextual tabs for
+the active selection) paired with a dockable panel workspace.
 
-**The rule: build every menu now, wire what exists, disable the rest.** A button whose feature is not
-built yet is still drawn, in its place, greyed out, with a tooltip that says why
-("Not available yet: zoom regions"). It never disappears and it never fakes a result. When the
-feature lands, the button is switched on; nothing moves.
+**The rule: build every planned menu now, wire what exists, disable the rest.** A planned button
+whose feature is not built yet is still drawn, in its place, greyed out, with a tooltip that says
+why ("Not available yet: camera zoom"). It never disappears and it never fakes a result. When the
+feature lands, the button is switched on; nothing moves. Controls marked **Not planned** (`🚫`)
+are kept in the spec for possible future use and hidden from the UI.
 
 ## Files
 
 | File | What it holds |
 |---|---|
-| [storyline-observed.md](storyline-observed.md) | What the tutorials show, tab by tab and panel by panel. The reference. |
 | [feature-parity.md](feature-parity.md) | One row per feature: CourseCraft status and the milestone (M38–M43) that closes it. The summary the roadmap follows. |
 | [ribbon.md](ribbon.md) | CourseCraft's main tabs: every group and control, its CourseCraft label, kind, command id and status. |
 | [contextual-tabs.md](contextual-tabs.md) | Tabs that appear for a selection or a mode: Drawing Tools, Picture Tools, Audio/Video Tools, Question Tools, Table Tools, Slide Master, Feedback Master, Preview, question form view. |
@@ -37,50 +34,23 @@ Used in every table in this folder.
 | ✅ | Built: dispatches an existing engine command or UI action | enabled (subject to the selection) |
 | 🟡 | Partly built: the button works, some options of its menu are disabled | enabled; missing menu items disabled |
 | ⛔ | Not built yet, but planned or plausible | **disabled**, tooltip `Not available yet: <feature>` |
-| 🚫 | Not planned (see `docs/roadmap.md` › Not planned for now) | **disabled**, tooltip `Not planned: <feature>` |
-| — | Storyline has it, CourseCraft deliberately leaves it out (cloud services, licensing) | not drawn; listed so nobody adds it by mistake |
+| 🚫 | Not planned (see `docs/roadmap.md` › Not planned for now) | hidden (kept in spec for possible future use, not drawn) |
+| — | Out of scope (hosted/cloud services) | not drawn |
 
 A status is a claim about the code on the date above. Whoever wires a control checks it against the
 code first and updates the table in the same commit.
 
 ## Clean-room
 
-Read `docs/contributing.md` › Clean-room rules first. For this work it means:
+Read `docs/contributing.md` › Clean-room rules first. For the editor UI it means:
 
-- **Same structure, our own look.** Tab names, group names, button order and what each button does
-  follow the tutorial. Icons, colours, spacing and fonts come from `DESIGN.md`. No icon, screenshot
-  or asset from Storyline goes into the repository, and no frame of the tutorial is committed.
-  `storyline-observed.md` names the public tutorials instead (README › Sources).
-- **Generic labels stay; coined names change.** Home, Insert, Design, Animations, Trigger, Layer,
-  State, Question Bank, Slide Master, Text Styles, Format Painter are generic and stay. Product names
-  and coined terms get CourseCraft names:
-
-| Storyline label | CourseCraft label | Why |
-|---|---|---|
-| Story View | **Course Map** | coined; CourseCraft already uses Course Map |
-| Convert to Freeform | **Convert to Custom Question** | coined; CourseCraft already uses Custom question |
-| Freeform (question type) | **Custom question** | as above |
-| Content Library 360 (group) | **Library** | product name |
-| Review 360 | **Share for Review** | product name |
-| Reach 360 | — (not drawn) | hosted service |
-| Trigger Wizard (dialog title) | **Trigger** | coined dialog name |
-| AI Assistant (group) | **AI** | product feature name; CourseCraft's AI runs through the user's own agent or key |
-| Articulate 360 / Storyline in titles and Help | **CourseCraft** | product name |
-
-  If the owner wants an exact label where this table differs, that is a decision for
-  `docs/contributing.md`, not for a single commit.
-
-## Sources
-
-Public YouTube tutorials, Windows, English UI. No frames or timestamps are kept: a claim in these
-docs is checked by watching the tutorial or, better, the app itself. When a new tutorial is
-analysed, add it here and merge what it shows into the files above (newer build wins; note
-differences).
-
-| Tutorial | Build | What it adds |
-|---|---|---|
-| Articulate Storyline 360 Tutorial 2026 Full Course for Beginners | 2026 (AI Assistant present) | every main tab except Slides, Transitions, View, Help; Drawing, Picture, Audio and Question tools; Slide Master, Preview, 360° editor, question form view; most dialogs |
-| Articulate Storyline 360 Beginner Tutorial 01 User Interface | about 2021 | start screen / File page, New Slide ▾ menu, Button Tools › Format, Story view zoom and scene branching, five built-in button states, Notes panel, panel collapse and undock |
+- **CourseCraft's own layout and look.** The ribbon groups commands by task; icons, colours,
+  spacing and fonts come from `DESIGN.md`. No icon, screenshot or asset from any closed-source or
+  commercial tool goes into the repository.
+- **Generic and CourseCraft labels.** Standard authoring terms (Home, Insert, Design, Animations,
+  Trigger, Layer, State, Question Bank, Slide Master, Text Styles, Format Painter) are used
+  alongside CourseCraft's own labels: **Course Map**, **Custom Question**, **Library**,
+  **Share for Review**, **Trigger**, **AI**, and **CourseCraft**.
 
 ## How to add or wire a button
 

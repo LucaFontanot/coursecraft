@@ -374,13 +374,12 @@ Plan by Gemini 4 Neon: `docs/testing/m37-plan.md`; report: `docs/testing/m37-rep
 - Interactive groups: a group can act as one button with one shared state, one click trigger, one Tab stop, one focus ring and one screen-reader button.
 - Released as 0.4.6.
 
-## M38 Ribbon UI parity (planned)
+## M38 Ribbon UI (in progress)
 
-A Storyline 360 author should find every command where they look for it. Plan and full inventory:
-`docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Feature-level
-status: `docs/ui/feature-parity.md` (2026-11-24: 110 built, 38 partly, 60 not yet, 12 not
-planned). Clean-room: same tabs, groups and order; our own look and coined names. Hand checks:
-`docs/release-checklist.md` § 9.
+CourseCraft's tabbed ribbon and dockable panel workspace. Plan and full inventory:
+`docs/ui/` (start at `docs/ui/README.md`). Feature-level status: `docs/ui/feature-parity.md`
+(2026-11-24: 110 built, 38 partly, 60 not yet, 12 not planned). Layout and look follow
+`DESIGN.md`. Hand checks: `docs/release-checklist.md` § 9.
 
 0. **Foundation** (owner decision 2026-11-23): the new UI is built on `craft-ui` and localized
    with `craft-i18n`, both from `storytold/craft-libs`, pinned to one rev, with DeckCraft's egui
@@ -426,7 +425,7 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
 6. Dialog front-ends over existing commands: Trigger, Insert Slide / Insert Question, Player
    Properties, Publish.
 7. Settings panels (`docs/ui/panels.md`): every ↘ launcher opens a closable dock panel with all
-   the settings of its category, in place of Storyline's dialogs. M38 builds the registry, the
+   the settings of its category, in place of modal dialogs. M38 builds the registry, the
    launcher wiring and Grid and Guides; the category panels follow in M39–M43, then
    customization (sections, pinning, workspaces). **Built (2026-11-23):** the registry, every
    launcher opening a panel, saved layouts that survive new panels, and the Text panel (Font ↘,

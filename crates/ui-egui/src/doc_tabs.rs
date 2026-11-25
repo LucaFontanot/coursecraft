@@ -1,10 +1,8 @@
 //! Document tabs under the ribbon: the Course Map, then one tab per opened slide.
 //!
-//! Storyline keeps its story view and each slide it has opened as tabs above the
-//! work area. Here the first tab is the Course Map (CourseCraft's name for the
-//! story view); a slide gets a tab when it is opened in the editor and keeps it
-//! until its × is clicked or the slide is deleted. Clicking a tab switches the
-//! centre between the map and that slide.
+//! The first tab is always the Course Map; a slide gets a tab when it is opened
+//! in the editor and keeps it until its × is clicked or the slide is deleted.
+//! Clicking a tab switches the centre between the map and that slide.
 
 use coursecraft_render::Icon;
 use egui::{RichText, Ui};
