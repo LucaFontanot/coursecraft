@@ -1,0 +1,132 @@
+# PR #6 ("UI parity") Update Report — Merge `main` (0.4.6 / M37)
+
+**Branch:** `pr6-update` (based on PR #6 head `cedcea3`)  
+**Merged:** `main` (`ebfa16e`, v0.4.6 — M37 point text from issue #7 and interactive button groups from issue #8 part B)  
+**Merge strategy:** `git merge main` (non-rebase; all contributor commits preserved verbatim)
+
+---
+
+## 1. Merge Conflicts and Resolution
+
+`git merge main` produced three content conflicts and one semantic compile mismatch:
+
+1. **`crates/engine/src/tests.rs`**
+   - **Registry command count & golden lock (`m32_sentence_case_command_labels`, `r5_01_registry_golden_lock`):** PR #6 added `slide.set_transition_all` (186 → 187 commands) while `main` added `group.set_interactive` and `group.update` (186 → 188 commands). Resolved to **189 commands**, keeping both sides' `EXPECTED` entries (auto-merged cleanly) and updating the golden table length (`24_336` bytes) and FNV-1a hash (`0xdc61_5cf1_56dd_4f3d`).
+   - **Appended test functions:** PR #6 added `grid_spacing_is_a_view_setting_that_undoes_and_rejects_nonsense` and `transition_apply_to_all_sets_every_slide_in_one_undo_step` at the end of the file where `main` appended `pt_03_headless_point_text_add_and_refit` through `gb_15_*`. Resolved by keeping **both** sides' tests intact with clean function boundaries.
+2. **`crates/ui-egui/src/uiux_sweep_tests.rs`**
+   - PR #6 intentionally deleted `ui07_update_status_bar_hint_handles_narrow_width` in commit `9a99068` when replacing the hand-written `editor.ui.update` dialog / status-bar hint with `craft-update`. `main` appended `m37_sweep_course` and `gb_14_m37_point_text_and_interactive_group_uiux_sweep` right below that deleted test.
+   - Resolved by omitting the removed `ui07_update_status_bar_hint_handles_narrow_width` (which referenced removed `editor.ui.update` fields) and keeping all of `main`'s M37 UI/UX sweep code and tests (`m37_sweep_course` + `gb_14_m37_point_text_and_interactive_group_uiux_sweep`).
+3. **`docs/roadmap.md`**
+   - Both branches added an `## M37 ...` section after `## M36 Refactor A ✅`. Resolved in the merge commit by keeping `main`'s `## M37 Point text and grouped buttons ✅` followed by PR #6's ribbon roadmap sections, then renumbered PR #6's sections to `M38`–`M43` in a dedicated commit (Section 3 below).
+4. **Post-merge compile & clippy fixes:**
+   - `show_text_controls` in `crates/ui-egui/src/properties.rs` gained a `point_text: bool` parameter in `main`; updated `show_text_panel`'s `TextTarget` and call site to thread `point_text` through.
+   - Merging PR #6's `ribbon.rect` check with `main`'s live point-text measurement pushed `draw_inline_edit` in `crates/ui-egui/src/canvas.rs` over clippy's cognitive-complexity limit (`28/25`). Extracted `update_point_text_live_bounds` and `dispatch_inline_edit_format_shortcuts` helpers to bring it back under 25.
+
+---
+
+## 2. Where M37 Features Live in the New Ribbon & Dock-Panel UI
+
+### Interactive button groups (`group.set_interactive`, `group.update`)
+- **Contextual ribbon (`Drawing Tools › Format`, `Button Tools › Format`, `Picture Tools › Format` › `Arrange and Align`):** Added a direct small control (`ctx.group_button` in `crates/ui-egui/src/ribbon/spec.rs`) wired to `Action::Command("group.set_interactive")` via `menu::adapter` / `menu::adapter_reason`.
+  - Shows `"Make button from group"` when a regular group is selected, flips to `"Remove button behaviour"` (with active/selected styling) when an interactive group is selected, and draws disabled with tooltip `"Select a group first"` (or master/state-edit lock reason) otherwise.
+- **`Home › Drawing › Arrange ▾` & contextual `Arrange ▾`:** Dispatches through `UiMenu::Arrange` → `menu::arrange_menu_items` → `render_arrange_extras`, which displays `"Make button from group"` / `"Remove button behaviour"` for a selected group and runs `group.set_interactive`.
+- **Canvas & timeline group-row context menus:** Preserved in `menu::render_group_ungroup_items` (called by both canvas and timeline object/group-row menus), localized with `tl!`.
+- **Docked `Format` inspector (`Panel::Format`):** Continues to draw the full M37 Group section via `properties::show_multi_selection`: `"Act as one button"` checkbox + tooltip, `Name`, `Initial state`, `Accessible description`, `Focus order` + `Clear`, and `Add trigger…` (which opens the modal trigger form pre-targeted at the group). All M37 group inspector strings now go through `tl!`.
+- **Docked `Timeline` panel (`Panel::Timeline`):** Continues to render the `"Button"` pill on interactive group folder rows (`timeline.rs`), now localized through `tl!("Button")`.
+
+### Point text (issue #7) & `"Wrap text"`
+- **Text Box tool (`Insert › Text › Text Box`, `Drawing Tools › Format › Insert Shapes › Text Box`):** Arms `PlacementTool::TextBox`; clicking the canvas places fitted point text (`point_text: true`, `style.wrap: false`) and enters inline edit (which auto-opens `Panel::Text`), while dragging places fixed-width area text (`point_text: false`, `style.wrap: true`). Updated the ribbon tooltip to describe both click and drag placement.
+- **Ribbon `Home › Paragraph › Wrap Text`:** Added `TextOp::WrapText` / `text_format::Change::Wrap` (`paragraph.wrap_text` in `ribbon/spec.rs`), dispatching `text.set_paragraph` `{ wrap }` (the exact same engine command path that converts point text to area text) and committing any uncommitted inline-edited buffer first in the same single undo step.
+- **`Text` settings dock panel (`Panel::Text` — Font / Paragraph / Text Box sections):** Extracted shared `show_autofit_row` / `show_text_box_rows` / `show_text_box_controls` helpers in `crates/ui-egui/src/properties.rs` (zero duplicated controls; Format inspector layout preserved verbatim). `Panel::Text › Text Box` now displays `Autofit`, `VAlign`, `Wrap text` (with the point-text hover tooltip), `Direction`, `Insets`, and `Columns` (disabled). Toggling `"Wrap text"` from `Panel::Text` runs `text.set_paragraph` `{ wrap }`, commits uncommitted inline-edited text in the same undo step when editing on canvas, and converts point text to area text with 1-step undo.
+- **Localization (`tl!`):** All new and M37 user-facing labels/tooltips touched in `ribbon/spec.rs`, `ribbon/mod.rs`, `menu.rs`, `properties.rs`, and `timeline.rs` go through `tl!` and are verified in `Lang::PSEUDO` tests.
+
+### New UI Tests Added
+- `ribbon::contextual_tests::ribbon_group_button_toggles_interactive_group_and_uses_tl` (tests contextual ribbon toggle, label flip, docked `Panel::Format` `"Act as one button"`, docked `Panel::Timeline` `"Button"` pill, and `Lang::PSEUDO` localization).
+- `ribbon::contextual_tests::home_arrange_menu_toggles_interactive_group` (tests `Home › Drawing › Arrange ▾` dispatching `group.set_interactive`).
+- `panels_tests::point_text_wrap_from_text_panel_and_ribbon_converts_to_area_text` (tests `Panel::Text › Text Box` `"Wrap text"`, `Home › Paragraph › Wrap Text`, 1-step undo back to point text, and `Lang::PSEUDO` localization).
+
+---
+
+## 3. Milestone Renaming (Docs Only)
+
+Commit history was left untouched. Across all documentation, PR #6's milestones were shifted by +1 so `main`'s `M32`–`M37` entries remain intact and collision-free:
+
+| Old PR #6 Label | New Label | Scope |
+|---|---|---|
+| M37 | **M38** | Ribbon UI parity |
+| M38 | **M39** | Text and formatting gaps |
+| M39 | **M40** | Pictures, buttons and media polish |
+| M40 | **M41** | Structure, masters and questions |
+| M41 | **M42** | Animation and timeline depth |
+| M42 | **M43** | Preview and AI ribbon |
+
+Updated files: `docs/roadmap.md`, `docs/release-checklist.md`, `docs/ui/README.md`, `docs/ui/ribbon.md`, `docs/ui/contextual-tabs.md`, `docs/ui/panels.md`, `docs/ui/feature-parity.md`, `docs/ui/implementation.md`, and `docs/ui/localization.md`.
+
+---
+
+## 4. Update Checks & Release Packaging Audit (`craft-update` vs. Issue #5)
+
+Audited `.github/workflows/release.yml`, `scripts/package-macos.sh`, `apps/coursecraft/src/updates.rs`, `apps/coursecraft/src/main.rs`, `README.md`, and the pinned `craft-update` crate (`storytold/craft-libs` rev `63196e66`):
+
+1. **`SHA256SUMS.txt` published on release — YES (guarded by test):**
+   - `.github/workflows/release.yml` lines 114–116 run `sha256sum coursecraft-* > SHA256SUMS.txt` in `dist/` and upload `dist/*` to the draft GitHub release.
+   - Added an explicit assertion for `"sha256sum coursecraft-* > SHA256SUMS.txt"` inside `updates::tests::the_release_file_names_are_the_ones_the_update_picks`.
+2. **SHA-256 verification before installing — YES (fail-closed):**
+   - `craft_update::install::download` (`crates/update/src/install.rs:416-449`) requires a 64-hex-char SHA-256 digest (from GitHub API `asset.digest` or fetched from the release's `SHA256SUMS.txt`). If no checksum is published or `SHA256SUMS.txt` cannot be fetched, it refuses to download/install. `Http::download` verifies the downloaded bytes against the checksum before proceeding (retrying once on mismatch, then aborting).
+3. **No silent install or silent restart (issue #5 promise) — YES for checks, with important behavioural differences from M35 to note for review:**
+   - Startup checks (`check_at_start`) and manual checks (`check_now`) **never** download, install, or restart on their own; they only open `craft-update`'s prompt dialog. Added an assertion in `an_offered_release_opens_the_prompt` confirming status stays `Status::Idle` when offered.
+   - Fixed a stale contradiction in `README.md` line 118 (which still claimed `"Help > Check for Updates only opens the releases page. CourseCraft makes no network calls to look for updates."` while line 40 described automatic update checks).
+   - **Behavioural shift from M35 to be aware of before merging:**
+     - **Self-update vs. download-and-reveal:** M35 downloaded installers into `~/Downloads` and only offered **Show in folder** (never replacing the binary or restarting). `craft-update` instead offers **Update and Restart** on self-updatable copies (macOS `.app`, Linux `.tar.gz` folder, Windows portable folder) and opens the GitHub Releases page in the browser when manual download is chosen or self-update is unsupported.
+     - **Explicit confirmation + dirty-state guard:** Installation only starts when the user clicks **Update and Restart** and `!self.project.is_dirty(...)` (`clean == true`). If there is unsaved work, `craft-update` refuses to start and tells the user to save or close work first.
+     - **Edge case in `craft-update` (`Later` during download):** Once the user clicks **Update and Restart**, dismissing the prompt with **Later** while the download is still in flight does not cancel the background install; when it completes, if `clean` is still `true`, `Updater::show_if` returns `Action::Close` (which sends `ViewportCommand::Close`) and `on_exit` invokes `start_pending_update()`. On macOS/Linux `prepare_update` also swaps the app bundle/binary on disk before exit.
+     - **Unsigned Windows builds:** `craft_update::self_update::windows_precheck` verifies Authenticode signatures (`verifysign::verify_file`). Because CourseCraft's Windows releases are currently unsigned, Windows portable self-update will refuse in-place replacement and direct users to download manually (non-fatal, safe fallback, but worth noting alongside `README.md`'s description of portable self-update).
+
+---
+
+## 5. Gate Results
+
+Both required gates passed cleanly on the final tree:
+
+- **`cargo xtask ci`: PASS**
+  - `cargo fmt --all --check`: PASS
+  - `cargo clippy --workspace --all-targets -- -D warnings`: PASS (0 warnings)
+  - `cargo test --workspace`: **4,095 passed; 0 failed; 17 ignored**
+  - `cargo xtask layers`: `layers: ok`
+  - `cargo check --target wasm32-unknown-unknown` (all 17 WASM crates: L0–L6, `coursecraft-player`, `coursecraft`): PASS
+- **`cargo xtask build-player`: PASS**
+  - `trunk build --release` (`wasm-release` profile) succeeded in `1m 16s`; output written to `target/player-dist`.
+
+---
+
+## 6. What Could Not Be Done / Left for Hand Verification
+
+- **Interactive desktop & browser hand checks:** No GUI window or live browser session was launched; all UI, dock-panel, ribbon, and pseudo-locale checks were verified via headless `TestHarness` tests.
+- **Live end-to-end `craft-update` self-update test:** Testing a real GitHub release download + `SHA256SUMS.txt` fetch + binary replacement on macOS/Windows/Linux requires a tagged release with the new asset naming scheme (`coursecraft-<ver>-<os>-<arch>.*`).
+- **Pre-existing non-M37 doc counts:** `docs/ui/feature-parity.md`'s summary table totals were left aligned with PR #6's existing counts (M37's point text and interactive button groups were folded into existing ✅ rows rather than adding new rows).
+
+---
+
+## 7. Clean-Room Concerns Flagged in PR #6 (Reported Only, Not Changed)
+
+Per the task instructions, the items below are **flagged for review without modification**:
+
+1. **Direct structural & positional mirroring of Storyline 360's UI ("frame by frame"):**
+   - `docs/ui/README.md` (lines 3–11, 50–51) states the ribbon plan was written from Storyline 360 beginner tutorials *"watched frame by frame"* and sets the goal as *"the same tabs, the same groups and the same buttons in the same order"*.
+   - `docs/ui/storyline-observed.md` (lines 11–369) is a full screen-by-screen transcription of Storyline 360's window chrome, tab strip, group order, control order, right-click menus, and modal dialogs — including exact product strings (`Articulate Storyline x64`, `Name.story*`, `Content Library 360`, `Review 360`, `Reach 360`, `Trigger Wizard`, `Freeform`, `Moderate Frame`, `Bevel Matte`, `Clean`, exact tooltip wording on lines 44–46, and exact dialog field layouts on lines 348–359).
+   - `crates/ui-egui/src/ribbon/spec.rs:620` contains the comment `// Three rows of five, in Storyline's reading order.`
+   - Note that `docs/contributing.md` › Clean-room rules states: *"Study other authoring tools for **behaviour only**: what happens when you click, the order triggers fire in. Design our own look and layout from `DESIGN.md`."* Replicating exact tab/group/button ordering and shipping disabled placeholders for features CourseCraft explicitly marks **Not planned** (`Record Screen`, `Characters`, `Photos`, `Illustrations`, `Videos`, `360° Image` — `spec.rs:972, 1152-1208`) solely to match Storyline's ribbon layout goes beyond behaviour-only parity and warrants an explicit owner call on whether to keep or trim those disabled slots and `storyline-observed.md`.
+2. **Storyline-specific / distinctive control labels still present in `crates/ui-egui/src/ribbon/spec.rs` and `docs/ui/`:**
+   - Even after PR #6's clean-room renaming table (`docs/ui/README.md:58-68`), several labels in `ribbon/spec.rs` and `docs/ui/` read as Storyline-specific rather than generic eLearning terminology:
+     - **`When Clicked Action`** (`spec.rs:2522`, `contextual-tabs.md:72`) — Storyline's specific Button Tools phrasing (generic equivalent: *On click* / *Add click trigger*).
+     - **`Feedback Master`** (`spec.rs:1538, 1584, 3061`, `ribbon.md`, `contextual-tabs.md`) — Storyline's coined companion to Slide Master (generic equivalent: *Feedback layouts*).
+     - **`Zoom Region`** (`spec.rs:1138`, `ribbon.md:197`) — Storyline's feature name for camera zoom (generic equivalent: *Camera zoom* / *Zoom area*).
+     - **`Focus Order`** (`spec.rs:591`, `ribbon.md:157`) — Storyline's label for tab/reading order (generic equivalent: *Tab order* / *Reading order*).
+     - **`Starting Scene`** & **`Index`** (`spec.rs:919, 926`, `ribbon.md:120-121`) — including `Index` whose behaviour is explicitly marked *"Storyline's scene index menu; behaviour to confirm"* (drawn as a placeholder copied from the tutorial without a defined generic need).
+     - **`Button Set`** (`docs/ui/shell-panels-dialogs.md:103`, `feature-parity.md:131`) — Storyline's name for mutually exclusive selectable objects (generic equivalent: *Selection group* / *Exclusive group*).
+     - **`Scrolling Panel`** (`spec.rs:1381`, `ribbon.md:224`) — already used in CourseCraft M12, though closely matches Storyline's label.
+     - **`Preserve`** (`spec.rs:3180`, Slide Master tab) — PowerPoint/Storyline master-retention label.
+     - **Disabled `NotPlanned` buttons on the live ribbon (`spec.rs:972, 1152-1208`):** `Record Screen` (on the patent watch list in `docs/contributing.md`), `Characters`, `Photos`, `Illustrations`, `Videos`, and `360° Image` are rendered as disabled buttons in CourseCraft's UI even though CourseCraft does not plan to build them — their presence is explained only by matching Storyline's ribbon geometry.
+3. **Competitor-referencing prose in docs & release checklist:**
+   - `docs/release-checklist.md:187` references *"the two tutorial courses' first slides"* (referring to the two Storyline 360 YouTube tutorials cited in `docs/ui/README.md`).
+   - `docs/contributing.md:26` was edited by PR #6 to say *"in the place the tutorials show (`docs/ui/storyline-observed.md`)"*, which sits in tension with the clean-room rule on line 41 of the same file (*"Design our own look and layout from `DESIGN.md`"*).
