@@ -1003,6 +1003,12 @@ impl CourseHeaderPatch {
         if let Some(Some(start)) = &self.start_slide {
             total = total.saturating_add(start.capacity());
         }
+        if let Some(tracking) = &self.tracking
+            && let Some(quiz) = &tracking.quiz
+            && let Some(slide) = &quiz.slide
+        {
+            total = total.saturating_add(slide.capacity());
+        }
         if let Some(player) = &self.player
             && let Some(logo) = &player.logo
         {

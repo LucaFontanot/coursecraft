@@ -7815,9 +7815,16 @@ fn tr_01_existing_courses_round_trip_byte_identically_and_tracking_serde() {
 fn tr_02_tracking_validation_reports_result_and_diff() {
     let base = Course::from_json(HELLO).expect("parse hello");
 
-    // 1. AtLeast { count: 0 } -> Error at /tracking/slides_viewed/count.
+    // 1. AtLeast { count: 0 } -> Error at /tracking/slides_viewed/count (blocks first_error).
     let mut zero_count = base.clone();
     zero_count.tracking.slides_viewed = Some(crate::SlidesViewedTracking::AtLeast { count: 0 });
+    assert!(
+        zero_count
+            .first_error()
+            .is_some_and(|i| i.path == "/tracking/slides_viewed/count"),
+        "{:#?}",
+        zero_count.first_error()
+    );
     assert!(
         zero_count
             .validate()
@@ -7829,20 +7836,51 @@ fn tr_02_tracking_validation_reports_result_and_diff() {
         zero_count.validate()
     );
 
-    // 2. count > play_slide_count() (including bank-draw counts) -> Warning.
+    // 2. count > play_slide_count() (including bank-draw counts) -> Warning, never blocks first_error.
     let mut bank_course = course_with_bank();
-    let total = bank_course.play_slide_count();
-    assert!(total > 2, "expected bank draw to expand play_slide_count");
-    bank_course.tracking.slides_viewed = Some(crate::SlidesViewedTracking::AtLeast {
-        count: (total as u32) + 2,
+    let raw_slide_count = bank_course.slides().count();
+    let draw_slide = bank_course
+        .scenes
+        .iter_mut()
+        .flat_map(|s| s.slides.iter_mut())
+        .find(|s| s.id == "s-intro")
+        .expect("s-intro");
+    draw_slide.question = None;
+    draw_slide.draw = Some(crate::BankDraw {
+        bank: "bank1".into(),
+        count: 2,
     });
+    let total = bank_course.play_slide_count();
+    assert_eq!(
+        total,
+        raw_slide_count - 1 + 2,
+        "bank draw of 2 must replace 1 placeholder with 2 play-order slides"
+    );
+    // Exact expanded count does not warn.
+    bank_course.tracking.slides_viewed = Some(crate::SlidesViewedTracking::AtLeast {
+        count: total as u32,
+    });
+    assert!(
+        !bank_course
+            .validate()
+            .iter()
+            .any(|i| i.path == "/tracking/slides_viewed/count"),
+        "{:#?}",
+        bank_course.validate()
+    );
+    // Exceeding expanded count warns, and does not produce a hard error.
+    bank_course.tracking.slides_viewed = Some(crate::SlidesViewedTracking::AtLeast {
+        count: (total as u32) + 1,
+    });
+    assert_eq!(bank_course.first_error(), None);
     assert!(
         bank_course
             .validate()
             .iter()
             .any(|i| i.severity == Severity::Warning
                 && i.path == "/tracking/slides_viewed/count"
-                && i.message.contains("exceeds the course slide count")),
+                && i.message
+                    .contains(&format!("exceeds the course slide count ({total})"))),
         "{:#?}",
         bank_course.validate()
     );
@@ -7965,4 +8003,84 @@ fn tr_02_tracking_validation_reports_result_and_diff() {
         changes.iter().any(|c| c.path.contains("tracking")),
         "{changes:#?}"
     );
+}
+
+#[test]
+fn tr_02_reports_result_quiz_tracking_and_helpers() {
+    let base = Course::from_json(HELLO).expect("parse hello");
+    let mut plain = base.clone();
+    for scene in &mut plain.scenes {
+        for slide in &mut scene.slides {
+            slide.triggers.clear();
+            for layer in &mut slide.layers {
+                layer.triggers.clear();
+            }
+        }
+    }
+
+    // Quiz tracking with a valid play-order slide satisfies reports_result().
+    let mut quiz_slide = plain.clone();
+    let first_slide_id = quiz_slide.scenes[0].slides[0].id.clone();
+    quiz_slide.tracking.quiz = Some(crate::QuizTracking {
+        slide: Some(first_slide_id),
+    });
+    assert!(quiz_slide.reports_result());
+    assert!(
+        !quiz_slide
+            .validate()
+            .iter()
+            .any(|i| i.message.contains("never reports a result"))
+    );
+    // Missing quiz.slide does not satisfy reports_result().
+    quiz_slide.tracking.quiz = Some(crate::QuizTracking {
+        slide: Some("missing-slide".into()),
+    });
+    assert!(!quiz_slide.reports_result());
+
+    // Quiz tracking with slide: None satisfies reports_result() iff graded questions exist
+    // (on a scene slide or in a drawn question bank).
+    let mut quiz_course = plain.clone();
+    quiz_course.tracking.quiz = Some(crate::QuizTracking { slide: None });
+    assert!(quiz_course.has_graded_questions());
+    assert!(quiz_course.reports_result());
+    assert!(
+        !quiz_course
+            .validate()
+            .iter()
+            .any(|i| i.message.contains("never reports a result"))
+    );
+    for scene in &mut quiz_course.scenes {
+        for slide in &mut scene.slides {
+            slide.question = None;
+        }
+    }
+    assert!(!quiz_course.has_graded_questions());
+    assert!(!quiz_course.reports_result());
+    // Undrawn bank does not count as graded questions in play order; drawn bank does.
+    quiz_course.banks.push(crate::QuestionBank {
+        id: "bank1".into(),
+        title: "Bank One".into(),
+        slides: vec![bank_question_slide("bq1")],
+    });
+    assert!(!quiz_course.has_graded_questions());
+    quiz_course.scenes[0].slides[0].draw = Some(crate::BankDraw {
+        bank: "bank1".into(),
+        count: 1,
+    });
+    assert!(quiz_course.has_graded_questions());
+    assert!(quiz_course.reports_result());
+
+    // Disabled SubmitResults triggers are ignored by has_submit_results_trigger / results_slides.
+    let mut disabled_res = base;
+    assert!(disabled_res.results_slides().next().is_some());
+    for scene in &mut disabled_res.scenes {
+        for slide in &mut scene.slides {
+            for t in &mut slide.triggers {
+                if matches!(t.action, crate::Action::SubmitResults) {
+                    t.disabled = true;
+                }
+            }
+        }
+    }
+    assert!(disabled_res.results_slides().next().is_none());
 }
