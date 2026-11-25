@@ -374,7 +374,9 @@ Plan by Gemini 4 Neon: `docs/testing/m37-plan.md`; report: `docs/testing/m37-rep
 - Interactive groups: a group can act as one button with one shared state, one click trigger, one Tab stop, one focus ring and one screen-reader button.
 - Released as 0.4.6.
 
-## M38 Ribbon UI (in progress)
+## M38 Ribbon UI (first release in 0.5.0)
+
+PR #6 by LucaFontanot, updated and cleaned up for clean-room by Gemini 4 Neon (`docs/testing/pr6-update-report.md`). Released as 0.5.0; the work below continues.
 
 CourseCraft's tabbed ribbon and dockable panel workspace. Plan and full inventory:
 `docs/ui/` (start at `docs/ui/README.md`). Feature-level status: `docs/ui/feature-parity.md`

@@ -2,18 +2,28 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## 0.5.0 (unreleased)
+## 0.5.0
 
-**Ribbon editor, dockable panels and localization:**
-- Built on shared open-source UI, localization and update libraries (`craft-ui`, `craft-i18n`, `craft-update`, and the Craft `egui`/`winit` fork) and ribbon widget patterns from **DeckCraft** and the **ArtCraft Crafting Apps** (`MIT OR Apache-2.0` / `Apache-2.0`).
+A new editor: a tabbed ribbon and panels you can arrange the way you like. Thanks to LucaFontanot, who built it.
 
-**In-app updates:**
-- Updates can now be installed directly with **Update and Restart** on macOS (`.app`) and Linux (`.AppImage` and unpacked `.tar.gz`), only when you click it and never while you have unsaved work. Dismissing or closing the update prompt while a download is in flight cancels the update.
-- **Windows:** users download the Windows installer (`-setup.exe`) from the update prompt and run it.
+**Ribbon and panels:**
+- Commands are grouped in ribbon tabs: File, Home, Insert, Slides, Design, Transitions, Animations, View, AI and Help, plus tabs that appear for what you select (drawing, button, picture, video, audio and more). The Slide Master has its own tab.
+- A button whose feature isn't built yet is greyed out, and its tooltip says why.
+- Slides, Canvas, Timeline, the inspectors, States, Triggers, Variables, Question, Slide Layers and Notes are now panels. Move, tab, split, float or close them; a floating panel can leave the window as its own window. View › Panels reopens a closed panel where it was, and your layout is saved.
+- The small ↘ buttons on ribbon groups open the matching settings panel (Text, Size and Position, Shape Style, Grid and Guides) instead of a dialog.
+- The welcome screen is now the File tab's Start page, with a thumbnail of each recent course's first slide.
+- Theme, transition and animation galleries are in the ribbon.
+- Every interface label is ready for translation, with a Language setting in Preferences.
 
-**Release packaging:**
-- **Windows:** releases now ship the Inno Setup installer (`-setup.exe`) only; portable Windows `.zip` builds are no longer published. Existing portable copies are offered the `-setup.exe` installer on update checks with a short notice.
-- **Linux:** releases now include an x86-64 `.AppImage` alongside the `.tar.gz` archive (both covered by `SHA256SUMS.txt`). In-app updates pick `.AppImage` when running from an AppImage and `.tar.gz` otherwise.
+**Updates:**
+- On Mac and Linux, **Update and Restart** now installs an update for you. It only happens when you click it, never while you have unsaved work, and closing the prompt during the download cancels it. Downloads are still checked against the published checksums first.
+- On Windows, the update prompt gives you the installer to run.
+
+**Downloads:**
+- Windows: the installer (`-setup.exe`) only. Portable builds are no longer published; a portable copy is offered the installer when it checks for updates.
+- Linux: a new `.AppImage` you can run straight away, alongside the `.tar.gz`.
+
+Built on open-source libraries from the ArtCraft Crafting Apps (DeckCraft): `craft-ui`, `craft-i18n`, `craft-update` and the Craft egui/winit fork (MIT OR Apache-2.0).
 
 ## 0.4.6
 
