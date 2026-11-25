@@ -5021,6 +5021,11 @@ fn show_course_tab(
             ui.label(format!("{}%", q.passing_percent));
         });
     }
+    inspector_row(ui, tl!("Tracking"), |ui| {
+        ui.add(
+            egui::Label::new(crate::tracking_ui::tracking_summary(&editor.session.course)).wrap(),
+        );
+    });
 
     inspector_separator(ui);
     ui.horizontal(|ui| {

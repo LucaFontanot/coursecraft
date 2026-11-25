@@ -2205,3 +2205,211 @@ fn u10_cli_validate_skips_font_scan_for_inter_and_warns_for_unknown_system_font(
         "warning count must include the font warning, got: {custom_stdout}"
     );
 }
+
+#[test]
+fn tr_14_cli_tracking_run_validate_simulate_and_diff() {
+    let dir = scratch_dir("test-cli-tr-14-tracking");
+    let orig_path = dir.join("orig.json");
+    std::fs::write(&orig_path, HELLO_JSON).expect("write orig");
+
+    // 1. Run script with course.set_tracking (slides_viewed + missing quiz slide).
+    let warn_script = dir.join("warn.script.json");
+    std::fs::write(
+        &warn_script,
+        r#"[{"command":"course.set_tracking","params":{"slides_viewed":{"mode":"at_least","count":2},"quiz":{"slide":"missing_results"}}}]"#,
+    )
+    .expect("write warn script");
+    let warn_out_course = dir.join("warn.json");
+    let code = run(Cli {
+        cmd: Cmd::Run {
+            course: orig_path.clone(),
+            script: warn_script,
+            out: warn_out_course.clone(),
+        },
+    })
+    .expect("run course.set_tracking script");
+    assert_eq!(code, ExitCode::SUCCESS);
+
+    // 2. Validate checks warnings for the missing quiz slide.
+    let mut val_out = Vec::new();
+    let val_code = run_validate(&warn_out_course, &mut val_out).expect("validate updated course");
+    assert_eq!(val_code, ExitCode::SUCCESS);
+    let val_stdout = String::from_utf8(val_out).expect("utf8 validate output");
+    assert!(
+        val_stdout.contains("missing_results"),
+        "expected missing_results warning in validate output: {val_stdout}"
+    );
+
+    // 3. Diff reports the tracking change.
+    let (diff_text, differs) =
+        crate::diff_output(&orig_path, &warn_out_course, false).expect("diff");
+    assert!(differs);
+    assert!(
+        diff_text.contains("tracking"),
+        "expected tracking in diff output: {diff_text}"
+    );
+
+    // 4. Simulate verifies slides-viewed completion on a 2-slide course.
+    let two_slide = serde_json::json!({
+        "schema_version": 1,
+        "id": "tr14-slides",
+        "title": "TR14 Slides",
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [
+                { "id": "s1", "title": "Slide 1" },
+                { "id": "s2", "title": "Slide 2" }
+            ]
+        }]
+    });
+    let two_path = dir.join("two.json");
+    std::fs::write(&two_path, two_slide.to_string()).expect("write two-slide course");
+    let slides_script = dir.join("slides.script.json");
+    std::fs::write(
+        &slides_script,
+        r#"[{"command":"course.set_tracking","params":{"slides_viewed":{"mode":"all"}}}]"#,
+    )
+    .expect("write slides script");
+    let slides_out = dir.join("slides_out.json");
+    let code = run(Cli {
+        cmd: Cmd::Run {
+            course: two_path,
+            script: slides_script,
+            out: slides_out.clone(),
+        },
+    })
+    .expect("run slides tracking script");
+    assert_eq!(code, ExitCode::SUCCESS);
+
+    let inputs_path = dir.join("inputs.json");
+    std::fs::write(&inputs_path, r#"[{"input":"start"},{"input":"next"}]"#).expect("write inputs");
+    let mut sim_out = Vec::new();
+    let mut sim_err = Vec::new();
+    let sim_code = run_simulate(
+        &slides_out,
+        &inputs_path,
+        0,
+        false,
+        &mut sim_out,
+        &mut sim_err,
+    )
+    .expect("simulate slides tracking");
+    assert_eq!(sim_code, ExitCode::SUCCESS);
+    let sim_stdout = String::from_utf8(sim_out).expect("utf8 simulate output");
+    assert!(
+        sim_stdout.contains("\"completion\"") && sim_stdout.contains("\"completed\""),
+        "expected Completion/Completed in simulate output: {sim_stdout}"
+    );
+
+    // 5. Simulate verifies quiz-result tracking completion effects (no submit_results trigger).
+    let quiz_course = serde_json::json!({
+        "schema_version": 1,
+        "id": "tr14-quiz",
+        "title": "TR14 Quiz",
+        "quiz": { "passing_percent": 80 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "q1",
+                "title": "Question 1",
+                "objects": [
+                    {
+                        "id": "btn-submit",
+                        "kind": { "type": "button", "label": "Submit" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 40.0 }
+                    }
+                ],
+                "question": {
+                    "kind": "multiple_choice",
+                    "prompt": "Pick right",
+                    "choices": [
+                        { "id": "a", "text": "Wrong" },
+                        { "id": "b", "text": "Right", "correct": true }
+                    ],
+                    "points": 10,
+                    "attempts": 1
+                },
+                "triggers": [
+                    {
+                        "action": { "action": "submit_question" },
+                        "when": { "event": "click", "object": "btn-submit" }
+                    }
+                ]
+            }]
+        }]
+    });
+    let quiz_path = dir.join("quiz.json");
+    std::fs::write(&quiz_path, quiz_course.to_string()).expect("write quiz course");
+    let quiz_script = dir.join("quiz.script.json");
+    std::fs::write(
+        &quiz_script,
+        r#"[{"command":"course.set_tracking","params":{"quiz":{}}}]"#,
+    )
+    .expect("write quiz script");
+    let quiz_out = dir.join("quiz_out.json");
+    let code = run(Cli {
+        cmd: Cmd::Run {
+            course: quiz_path,
+            script: quiz_script,
+            out: quiz_out.clone(),
+        },
+    })
+    .expect("run quiz tracking script");
+    assert_eq!(code, ExitCode::SUCCESS);
+
+    let pass_inputs = dir.join("quiz_pass.inputs.json");
+    std::fs::write(
+        &pass_inputs,
+        r#"[{"input":"start"},{"input":"select_choice","choice":"b"},{"input":"click","object":"btn-submit"}]"#,
+    )
+    .expect("write quiz pass inputs");
+    let mut quiz_sim_out = Vec::new();
+    let mut quiz_sim_err = Vec::new();
+    let quiz_sim_code = run_simulate(
+        &quiz_out,
+        &pass_inputs,
+        0,
+        false,
+        &mut quiz_sim_out,
+        &mut quiz_sim_err,
+    )
+    .expect("simulate quiz tracking pass");
+    assert_eq!(quiz_sim_code, ExitCode::SUCCESS);
+    let quiz_sim_stdout = String::from_utf8(quiz_sim_out).expect("utf8 quiz simulate output");
+    assert!(
+        quiz_sim_stdout.contains("\"score\"")
+            && quiz_sim_stdout.contains("\"percent\":100")
+            && quiz_sim_stdout.contains("\"completion\"")
+            && quiz_sim_stdout.contains("\"passed\""),
+        "expected Score(100) + Completion(Passed) in quiz simulate output: {quiz_sim_stdout}"
+    );
+
+    let fail_inputs = dir.join("quiz_fail.inputs.json");
+    std::fs::write(
+        &fail_inputs,
+        r#"[{"input":"start"},{"input":"select_choice","choice":"a"},{"input":"click","object":"btn-submit"}]"#,
+    )
+    .expect("write quiz fail inputs");
+    let mut quiz_fail_out = Vec::new();
+    let mut quiz_fail_err = Vec::new();
+    let quiz_fail_code = run_simulate(
+        &quiz_out,
+        &fail_inputs,
+        0,
+        false,
+        &mut quiz_fail_out,
+        &mut quiz_fail_err,
+    )
+    .expect("simulate quiz tracking fail");
+    assert_eq!(quiz_fail_code, ExitCode::SUCCESS);
+    let quiz_fail_stdout = String::from_utf8(quiz_fail_out).expect("utf8 quiz fail output");
+    assert!(
+        quiz_fail_stdout.contains("\"score\"")
+            && quiz_fail_stdout.contains("\"percent\":0")
+            && quiz_fail_stdout.contains("\"completion\"")
+            && quiz_fail_stdout.contains("\"failed\""),
+        "expected Score(0) + Completion(Failed) in quiz fail simulate output: {quiz_fail_stdout}"
+    );
+}

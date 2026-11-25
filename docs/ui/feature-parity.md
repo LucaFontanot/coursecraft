@@ -235,7 +235,7 @@ Counted from the tables below; recount when a row changes.
 | Preview slide, scene, selected slides, course | preview popup | ✅ | — |
 | Publish web | `publish.rs` | ✅ | — |
 | Publish LMS: SCORM 1.2, SCORM 2004, cmi5, xAPI, LTI | `publish.rs` | ✅ | — |
-| Tracking by slides viewed / quiz | `course.set_publish_settings` | ✅ | — |
+| Tracking by slides viewed / quiz | `course.set_tracking` (Course settings & Publish dialog); SCORM 1.2 Report status as offers Automatic (quiz result wins) and Automatic (completion stays) | ✅ | — |
 | Publish video (MP4), Word, PDF | Export | ✅ | — |
 | Notes as learner transcript | player | ✅ | — |
 | Text labels (edit the player's own strings) | — | ⛔ verify | M43 |

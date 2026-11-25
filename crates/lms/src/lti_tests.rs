@@ -178,3 +178,132 @@ fn a_sent_pass_cannot_be_overwritten_by_a_later_fail_or_lower_score() {
         })
     );
 }
+
+#[test]
+fn tr_11_lti_reporter_monotonic_and_batch_combination() {
+    // 1. Slides-viewed alone -> {percent: None, status: "completed"}.
+    let mut r = LtiReporter::new();
+    r.record(&[completion(CompletionStatus::Completed)]);
+    assert_eq!(
+        r.take_pending(),
+        Some(ScoreReport {
+            percent: None,
+            status: "completed",
+        })
+    );
+    r.mark_sent();
+
+    // View-all-slides-then-fail: never downgrades "completed" to "failed".
+    r.record(&[
+        score(40, CompletionStatus::Failed),
+        completion(CompletionStatus::Failed),
+    ]);
+    assert_eq!(r.take_pending(), None);
+
+    // View-all-slides-then-pass: upgrades to {Some(90), "passed"}.
+    r.record(&[
+        score(90, CompletionStatus::Passed),
+        completion(CompletionStatus::Passed),
+    ]);
+    assert_eq!(
+        r.take_pending(),
+        Some(ScoreReport {
+            percent: Some(90),
+            status: "passed",
+        })
+    );
+    r.mark_sent();
+
+    // Pass -> fail: never downgrades.
+    r.record(&[score(20, CompletionStatus::Failed)]);
+    assert_eq!(r.take_pending(), None);
+
+    // 2. Fail-then-view-all-slides across batches: upgrades to {Some(40), "completed"}.
+    let mut r2 = LtiReporter::new();
+    r2.record(&[
+        score(40, CompletionStatus::Failed),
+        completion(CompletionStatus::Failed),
+    ]);
+    assert_eq!(
+        r2.take_pending(),
+        Some(ScoreReport {
+            percent: Some(40),
+            status: "failed",
+        })
+    );
+    r2.mark_sent();
+
+    r2.record(&[completion(CompletionStatus::Completed)]);
+    assert_eq!(
+        r2.take_pending(),
+        Some(ScoreReport {
+            percent: Some(40),
+            status: "completed",
+        })
+    );
+
+    // 3. Same-batch [Score(40, Failed), Completion(Completed)] -> {Some(40), "completed"}.
+    let mut r3 = LtiReporter::new();
+    r3.record(&[
+        score(40, CompletionStatus::Failed),
+        completion(CompletionStatus::Failed),
+        completion(CompletionStatus::Completed),
+    ]);
+    assert_eq!(
+        r3.take_pending(),
+        Some(ScoreReport {
+            percent: Some(40),
+            status: "completed",
+        })
+    );
+
+    // 4. Failed cannot downgrade to Incomplete, bare Failed cannot wipe a score,
+    //    and bare Failed can still upgrade to bare Completed.
+    let mut r4 = LtiReporter::new();
+    r4.record(&[score(40, CompletionStatus::Failed)]);
+    assert_eq!(
+        r4.take_pending(),
+        Some(ScoreReport {
+            percent: Some(40),
+            status: "failed",
+        })
+    );
+    r4.mark_sent();
+    r4.record(&[completion(CompletionStatus::Incomplete)]);
+    assert_eq!(r4.take_pending(), None);
+    r4.record(&[completion(CompletionStatus::Failed)]);
+    assert_eq!(r4.take_pending(), None);
+
+    let mut r5 = LtiReporter::new();
+    r5.record(&[completion(CompletionStatus::Failed)]);
+    assert_eq!(
+        r5.take_pending(),
+        Some(ScoreReport {
+            percent: None,
+            status: "failed",
+        })
+    );
+    r5.mark_sent();
+    r5.record(&[completion(CompletionStatus::Completed)]);
+    assert_eq!(
+        r5.take_pending(),
+        Some(ScoreReport {
+            percent: None,
+            status: "completed",
+        })
+    );
+
+    // 5. Same-batch duplicate Passed scores keep the higher percentage.
+    let mut r6 = LtiReporter::new();
+    r6.record(&[
+        score(90, CompletionStatus::Passed),
+        score(70, CompletionStatus::Passed),
+    ]);
+    assert_eq!(
+        r6.take_pending(),
+        Some(ScoreReport {
+            percent: Some(90),
+            status: "passed",
+        })
+    );
+}

@@ -567,6 +567,18 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 ui.add_space(8.0);
                 ui.separator();
 
+                // Tracking
+                ui.heading(crate::tl!("Tracking"));
+                crate::tracking_ui::show_tracking_controls(
+                    editor,
+                    ui,
+                    true,
+                    "course_settings_tracking",
+                );
+
+                ui.add_space(8.0);
+                ui.separator();
+
                 // Background Audio
                 ui.heading("Background audio");
                 if let Some(src) = editor.ui.course_settings.background_audio_src.clone() {

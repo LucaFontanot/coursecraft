@@ -12143,6 +12143,7 @@ fn gb_03_course() -> Course {
         banks: Vec::new(),
         start_slide: None,
         quiz: None,
+        tracking: Default::default(),
         player: coursecraft_course::PlayerSettings::default(),
         theme: coursecraft_course::Theme::default(),
         language: None,
@@ -12565,6 +12566,7 @@ fn gb_04_interactive_group_keyboard_objects_and_focus() {
         banks: Vec::new(),
         start_slide: None,
         quiz: None,
+        tracking: Default::default(),
         player: coursecraft_course::PlayerSettings::default(),
         theme: coursecraft_course::Theme::default(),
         language: None,
@@ -12842,6 +12844,7 @@ fn gb_05_suspend_data_interactive_groups_and_golden_compat() {
         banks: Vec::new(),
         start_slide: None,
         quiz: None,
+        tracking: Default::default(),
         player: coursecraft_course::PlayerSettings::default(),
         theme: coursecraft_course::Theme::default(),
         language: None,
@@ -12893,4 +12896,907 @@ fn gb_05_suspend_data_interactive_groups_and_golden_compat() {
     assert_eq!(resumed2.object_state("g-sel"), Some("custom_gold"));
     assert_eq!(resumed2.object_state("a1"), Some("custom_gold"));
     assert_eq!(resumed2.object_state("a2"), Some("custom_gold"));
+}
+
+#[test]
+fn tr_03_suspend_data_goldens_decode_and_reencode_byte_identically() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking, TrackingSettings};
+
+    // 1. Pre-M44 golden for examples/hello-course/course.json (at s-quiz after answering).
+    const HELLO_GOLDEN: &str = "cc1:AAIDAAECAQEEAAMBAwIDAwABAAEAAAAAAAAIQAECAQEK";
+    let hello_default = course();
+    let mut hello_tracked = course();
+    hello_tracked.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 3 }),
+        quiz: Some(QuizTracking {
+            slide: Some("s-results".into()),
+        }),
+    };
+
+    for c in [&hello_default, &hello_tracked] {
+        let decoded = decode_suspend(c, HELLO_GOLDEN).expect("decode hello golden");
+        assert_eq!(encode_suspend(c, &decoded), HELLO_GOLDEN);
+    }
+
+    // 2. Pre-M44 golden for a plain multi-slide course (3 slides, at slide 2, visited s1 & s2).
+    const PLAIN_GOLDEN: &str = "cc1:AQIAAQAAAA";
+    let plain_json = r#"{
+        "schema_version": 1,
+        "id": "plain-multi",
+        "title": "Plain Multi",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [
+                { "id": "s1", "title": "S1", "duration_ms": 5000 },
+                { "id": "s2", "title": "S2", "duration_ms": 5000 },
+                { "id": "s3", "title": "S3", "duration_ms": 5000 }
+            ]
+        }]
+    }"#;
+    let plain_default = Course::from_json(plain_json).expect("plain course");
+    let mut plain_tracked = plain_default.clone();
+    plain_tracked.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::All),
+        quiz: Some(QuizTracking { slide: None }),
+    };
+
+    for c in [&plain_default, &plain_tracked] {
+        let decoded = decode_suspend(c, PLAIN_GOLDEN).expect("decode plain golden");
+        assert_eq!(decoded.slide, 1);
+        assert_eq!(decoded.visited.len(), 2);
+        assert_eq!(encode_suspend(c, &decoded), PLAIN_GOLDEN);
+    }
+}
+
+fn tr_plain_course(slide_count: usize) -> Course {
+    let slides_json: Vec<String> = (1..=slide_count)
+        .map(|i| format!(r#"{{ "id": "s{i}", "title": "Slide {i}", "duration_ms": 5000 }}"#))
+        .collect();
+    let json = format!(
+        r#"{{
+            "schema_version": 1,
+            "id": "tr-plain",
+            "title": "TR Plain",
+            "slide_size": {{ "w": 1280, "h": 720 }},
+            "scenes": [{{
+                "id": "sc1",
+                "title": "Scene 1",
+                "slides": [{}]
+            }}]
+        }}"#,
+        slides_json.join(",")
+    );
+    Course::from_json(&json).expect("tr_plain_course")
+}
+
+fn tr_quiz_course(passing_percent: u8, attempts: u32, with_results_trigger: bool) -> Course {
+    let results_triggers = if with_results_trigger {
+        r#"[{ "when": { "event": "timeline_starts" }, "action": { "action": "submit_results" } }]"#
+    } else {
+        "[]"
+    };
+    let make_q = |id: &str| {
+        format!(
+            r#"{{
+                "id": "{id}",
+                "title": "{id}",
+                "duration_ms": 5000,
+                "question": {{
+                    "kind": "multiple_choice",
+                    "prompt": "Pick a",
+                    "choices": [
+                        {{ "id": "a", "text": "A", "correct": true }},
+                        {{ "id": "b", "text": "B" }}
+                    ],
+                    "points": 10,
+                    "attempts": {attempts}
+                }},
+                "objects": [{{
+                    "id": "submit-{id}",
+                    "kind": {{ "type": "button", "label": "Submit" }},
+                    "frame": {{ "x": 100, "y": 100, "w": 120, "h": 40 }}
+                }}],
+                "triggers": [{{
+                    "when": {{ "event": "click", "object": "submit-{id}" }},
+                    "action": {{ "action": "submit_question" }}
+                }}]
+            }}"#
+        )
+    };
+    let json = format!(
+        r#"{{
+            "schema_version": 1,
+            "id": "tr-quiz",
+            "title": "TR Quiz",
+            "slide_size": {{ "w": 1280, "h": 720 }},
+            "quiz": {{ "passing_percent": {passing_percent} }},
+            "scenes": [{{
+                "id": "sc1",
+                "title": "Scene 1",
+                "slides": [
+                    {},
+                    {},
+                    {{
+                        "id": "results",
+                        "title": "Results",
+                        "duration_ms": 5000,
+                        "triggers": {results_triggers}
+                    }}
+                ]
+            }}]
+        }}"#,
+        make_q("q1"),
+        make_q("q2"),
+    );
+    Course::from_json(&json).expect("tr_quiz_course")
+}
+
+fn tr_button(id: &str, label: &str) -> Object {
+    let json = format!(
+        r#"{{
+            "id": "{id}",
+            "kind": {{ "type": "button", "label": "{label}" }},
+            "frame": {{ "x": 10, "y": 10, "w": 100, "h": 40 }}
+        }}"#
+    );
+    serde_json::from_str(&json).expect("tr_button")
+}
+
+#[test]
+fn tr_04_default_tracking_preserves_triggers_and_example_traces() {
+    use coursecraft_course::{SlidesViewedTracking, TrackingSettings};
+
+    const SHOWCASE_JSON: &str = include_str!("../../../examples/showcase/course.json");
+    const SHOWCASE_PASS: &str = include_str!("../../../examples/showcase/pass.inputs.json");
+
+    // 1. Default tracking on hello-course and showcase produces expected trigger-only completions.
+    let hello = course();
+    assert!(hello.tracking.is_default());
+    let hello_inputs: Vec<Input> = serde_json::from_str(PASS_INPUTS).expect("hello pass inputs");
+    let mut p_hello = Player::new(&hello).expect("hello player");
+    let mut hello_fx = Vec::new();
+    for inp in &hello_inputs {
+        hello_fx.extend(p_hello.handle(inp));
+    }
+    let hello_completions: Vec<_> = hello_fx
+        .iter()
+        .filter(|e| matches!(e, Effect::Completion { .. }))
+        .collect();
+    assert_eq!(
+        hello_completions,
+        vec![&Effect::Completion {
+            status: CompletionStatus::Passed
+        }]
+    );
+
+    let showcase = Course::from_json(SHOWCASE_JSON).expect("showcase course");
+    assert!(showcase.tracking.is_default());
+    let showcase_inputs: Vec<Input> =
+        serde_json::from_str(SHOWCASE_PASS).expect("showcase pass inputs");
+    let mut p_show = Player::new(&showcase).expect("showcase player");
+    let mut show_fx = Vec::new();
+    for inp in &showcase_inputs {
+        show_fx.extend(p_show.handle(inp));
+    }
+    assert!(show_fx.iter().any(|e| matches!(
+        e,
+        Effect::Completion {
+            status: CompletionStatus::Passed
+        }
+    )));
+
+    // 2. Explicit complete_course trigger works alongside slides_viewed.
+    let mut c = tr_plain_course(3);
+    c.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::All),
+        quiz: None,
+    };
+    c.scenes[0].slides[0]
+        .objects
+        .push(tr_button("btn-done", "Done"));
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        when: Event::Click {
+            object: "btn-done".into(),
+        },
+        action: Action::CompleteCourse {
+            status: CompletionStatus::Completed,
+        },
+        condition: None,
+        disabled: false,
+    });
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    let fx = p.handle(&click("btn-done"));
+    assert_eq!(
+        fx,
+        vec![Effect::Completion {
+            status: CompletionStatus::Completed
+        }]
+    );
+}
+
+#[test]
+fn tr_05_slides_viewed_runtime_rules() {
+    use coursecraft_course::{SlidesViewedTracking, TrackingSettings};
+
+    // (a) All on 3-slide course completes once on entering slide 3 (no duplicate on revisit).
+    let mut c = tr_plain_course(3);
+    c.tracking.slides_viewed = Some(SlidesViewedTracking::All);
+    let mut p = Player::new(&c).expect("player");
+    assert!(
+        !p.handle(&Input::Start)
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+    assert!(
+        !p.handle(&Input::Next)
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+    let fx3 = p.handle(&Input::Next);
+    assert!(has(
+        &fx3,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+    assert!(!has(&fx3, &Effect::Exit));
+    assert!(p.state().slides_tracking_reported);
+    // Revisit s2 and s3: no duplicate Completion.
+    assert!(
+        !p.handle(&Input::Previous)
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+    assert!(
+        !p.handle(&Input::Next)
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+
+    // (b) AtLeast { count: 2 } on 4-slide course with unreachable scene completes on slide 2.
+    let mut c4 = Course::from_json(
+        r#"{
+            "schema_version": 1,
+            "id": "tr-c4",
+            "title": "TR C4",
+            "slide_size": { "w": 1280, "h": 720 },
+            "scenes": [
+                {
+                    "id": "sc1",
+                    "title": "Scene 1",
+                    "slides": [
+                        { "id": "s1", "title": "S1", "duration_ms": 5000 },
+                        { "id": "s2", "title": "S2", "duration_ms": 5000 }
+                    ]
+                },
+                {
+                    "id": "sc-unreachable",
+                    "title": "Unreachable",
+                    "slides": [
+                        { "id": "u1", "title": "U1", "duration_ms": 5000 },
+                        { "id": "u2", "title": "U2", "duration_ms": 5000 }
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .expect("c4");
+    c4.tracking.slides_viewed = Some(SlidesViewedTracking::AtLeast { count: 2 });
+    let mut p4 = Player::new(&c4).expect("player");
+    assert!(
+        !p4.handle(&Input::Start)
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+    let fx_u = p4.handle(&Input::Next);
+    assert!(has(
+        &fx_u,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (c) AtLeast { count: 10 } on 3-slide course clamps to 3 and completes when all 3 viewed.
+    let mut c_clamp = tr_plain_course(3);
+    c_clamp.tracking.slides_viewed = Some(SlidesViewedTracking::AtLeast { count: 10 });
+    let mut p_clamp = Player::new_unvalidated(&c_clamp);
+    p_clamp.handle(&Input::Start);
+    p_clamp.handle(&Input::Next);
+    let fx_clamp = p_clamp.handle(&Input::Next);
+    assert!(has(
+        &fx_clamp,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (d) 1-slide course with All completes on Input::Start.
+    let mut c1 = tr_plain_course(1);
+    c1.tracking.slides_viewed = Some(SlidesViewedTracking::All);
+    let mut p1 = Player::new(&c1).expect("player");
+    let fx1 = p1.handle(&Input::Start);
+    assert!(has(
+        &fx1,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (e) Lightboxed scene slide counts as visited.
+    let mut c_lb = tr_plain_course(2);
+    c_lb.tracking.slides_viewed = Some(SlidesViewedTracking::All);
+    c_lb.scenes[0].slides[0]
+        .objects
+        .push(tr_button("btn-lb", "LB"));
+    c_lb.scenes[0].slides[0].triggers.push(Trigger {
+        when: Event::Click {
+            object: "btn-lb".into(),
+        },
+        action: Action::LightboxSlide { slide: "s2".into() },
+        condition: None,
+        disabled: false,
+    });
+    let mut p_lb = Player::new(&c_lb).expect("player");
+    p_lb.handle(&Input::Start);
+    let fx_lb = p_lb.handle(&click("btn-lb"));
+    assert!(has(
+        &fx_lb,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (f) Bank-draw course counts expanded self.slides.len(), never masters/templates/undrawn bank slides.
+    let mut c_bank = Course::from_json(
+        r#"{
+            "schema_version": 1,
+            "id": "bank-tr",
+            "title": "Bank TR",
+            "slide_size": { "w": 1280, "h": 720 },
+            "masters": [{ "id": "m1", "title": "Master", "duration_ms": 5000 }],
+            "templates": [{ "id": "t1", "title": "Template", "duration_ms": 5000 }],
+            "banks": [{
+                "id": "b1",
+                "title": "Bank",
+                "slides": [
+                    { "id": "bs1", "title": "BS1", "duration_ms": 5000, "question": { "kind": "multiple_choice", "prompt": "Q1", "choices": [{ "id": "a", "text": "A", "correct": true }, { "id": "b", "text": "B" }] } },
+                    { "id": "bs2", "title": "BS2", "duration_ms": 5000, "question": { "kind": "multiple_choice", "prompt": "Q2", "choices": [{ "id": "a", "text": "A", "correct": true }, { "id": "b", "text": "B" }] } },
+                    { "id": "bs3", "title": "BS3", "duration_ms": 5000, "question": { "kind": "multiple_choice", "prompt": "Q3", "choices": [{ "id": "a", "text": "A", "correct": true }, { "id": "b", "text": "B" }] } }
+                ]
+            }],
+            "scenes": [{
+                "id": "sc1",
+                "title": "Scene 1",
+                "slides": [
+                    { "id": "intro", "title": "Intro", "duration_ms": 5000 },
+                    { "id": "draw", "title": "Draw", "duration_ms": 5000, "draw": { "bank": "b1", "count": 1 } }
+                ]
+            }]
+        }"#,
+    )
+    .expect("bank course");
+    c_bank.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::All),
+        quiz: None,
+    };
+    let mut p_bank = Player::new(&c_bank).expect("bank player");
+    assert_eq!(p_bank.play_order().len(), 2);
+    assert!(
+        !p_bank
+            .handle(&Input::Start)
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+    let fx_bank = p_bank.handle(&Input::Next);
+    assert!(has(
+        &fx_bank,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (g) Partial preview_subset does not falsely complete on slide 1.
+    let mut p_sub = Player::with_preview_subset(&c, 0, &["s1".to_owned()]).expect("subset");
+    let fx_sub = p_sub.handle(&Input::Start);
+    assert!(
+        !fx_sub
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+    assert!(!p_sub.state().slides_tracking_reported);
+}
+
+#[test]
+fn tr_06_quiz_result_runtime_rules() {
+    use coursecraft_course::{QuizTracking, TrackingSettings};
+
+    // (a) QuizTracking { slide: Some("results") } with SubmitResults trigger emits Score + Completion once.
+    let mut c_trig = tr_quiz_course(80, 1, true);
+    c_trig.tracking.quiz = Some(QuizTracking {
+        slide: Some("results".into()),
+    });
+    let mut p_a = Player::new(&c_trig).expect("player");
+    p_a.handle(&Input::Start);
+    p_a.handle(&Input::SelectChoice { choice: "a".into() });
+    p_a.handle(&click("submit-q1"));
+    p_a.handle(&Input::Next);
+    p_a.handle(&Input::SelectChoice { choice: "a".into() });
+    p_a.handle(&click("submit-q2"));
+    let fx_a = p_a.handle(&Input::Next);
+    let score_count = fx_a
+        .iter()
+        .filter(|e| matches!(e, Effect::Score { .. }))
+        .count();
+    let comp_count = fx_a
+        .iter()
+        .filter(|e| matches!(e, Effect::Completion { .. }))
+        .count();
+    assert_eq!(score_count, 1);
+    assert_eq!(comp_count, 1);
+    assert_eq!(p_a.state().quiz_attempts, 1);
+
+    // (b) Custom results slide without submit_results trigger reports on entry.
+    let mut c_custom = tr_quiz_course(80, 1, false);
+    c_custom.tracking.quiz = Some(QuizTracking {
+        slide: Some("results".into()),
+    });
+    let mut p_b = Player::new(&c_custom).expect("player");
+    p_b.handle(&Input::Start);
+    p_b.handle(&Input::SelectChoice { choice: "a".into() });
+    p_b.handle(&click("submit-q1"));
+    p_b.handle(&Input::Next);
+    p_b.handle(&Input::SelectChoice { choice: "b".into() }); // wrong -> 50% < 80%
+    p_b.handle(&click("submit-q2"));
+    let fx_b = p_b.handle(&Input::Next);
+    assert!(has(
+        &fx_b,
+        &Effect::Score {
+            raw: 10,
+            max: 20,
+            percent: 50,
+            status: CompletionStatus::Failed,
+        }
+    ));
+    assert!(has(
+        &fx_b,
+        &Effect::Completion {
+            status: CompletionStatus::Failed
+        }
+    ));
+    assert_eq!(p_b.state().quiz_attempts, 1);
+
+    // (c) QuizTracking { slide: None } waits until all graded questions lock (including multi-attempt).
+    let mut c_auto = tr_quiz_course(80, 2, false);
+    c_auto.tracking.quiz = Some(QuizTracking { slide: None });
+    let mut p_c = Player::new(&c_auto).expect("player");
+    p_c.handle(&Input::Start);
+    // q1: wrong on attempt 1 (still unlocked, attempts_left = 1) -> no Score yet.
+    p_c.handle(&Input::SelectChoice { choice: "b".into() });
+    let fx_q1_try1 = p_c.handle(&click("submit-q1"));
+    assert!(!fx_q1_try1.iter().any(|e| matches!(e, Effect::Score { .. })));
+    // q1: right on attempt 2 (locked), q2 still unlocked -> no Score yet.
+    p_c.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_q1_try2 = p_c.handle(&click("submit-q1"));
+    assert!(!fx_q1_try2.iter().any(|e| matches!(e, Effect::Score { .. })));
+    // q2: wrong on attempt 1 (unlocked) -> no Score yet.
+    p_c.handle(&Input::Next);
+    p_c.handle(&Input::SelectChoice { choice: "b".into() });
+    let fx_q2_try1 = p_c.handle(&click("submit-q2"));
+    assert!(!fx_q2_try1.iter().any(|e| matches!(e, Effect::Score { .. })));
+    // q2: right on attempt 2 (all graded questions now locked!) -> Score(100, Passed).
+    p_c.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_q2_try2 = p_c.handle(&click("submit-q2"));
+    assert!(has(
+        &fx_q2_try2,
+        &Effect::Score {
+            raw: 20,
+            max: 20,
+            percent: 100,
+            status: CompletionStatus::Passed,
+        }
+    ));
+    assert!(has(
+        &fx_q2_try2,
+        &Effect::Completion {
+            status: CompletionStatus::Passed
+        }
+    ));
+
+    // (d) retry_quiz unlocks questions and re-evaluates on next submit.
+    c_auto.scenes[0].slides[2]
+        .objects
+        .push(tr_button("btn-retry", "Retry"));
+    c_auto.scenes[0].slides[2].triggers.push(Trigger {
+        when: Event::Click {
+            object: "btn-retry".into(),
+        },
+        action: Action::RetryQuiz,
+        condition: None,
+        disabled: false,
+    });
+    let mut p_d = Player::new(&c_auto).expect("player");
+    p_d.handle(&Input::Start);
+    p_d.handle(&Input::SelectChoice { choice: "b".into() });
+    p_d.handle(&click("submit-q1"));
+    p_d.handle(&Input::SelectChoice { choice: "b".into() });
+    p_d.handle(&click("submit-q1")); // q1 locked wrong
+    p_d.handle(&Input::Next);
+    p_d.handle(&Input::SelectChoice { choice: "b".into() });
+    p_d.handle(&click("submit-q2"));
+    p_d.handle(&Input::SelectChoice { choice: "b".into() });
+    let fx_fail = p_d.handle(&click("submit-q2"));
+    assert!(has(
+        &fx_fail,
+        &Effect::Completion {
+            status: CompletionStatus::Failed
+        }
+    ));
+    p_d.handle(&Input::Next); // to results
+    p_d.handle(&click("btn-retry")); // jumps back to q1 with answers cleared
+    p_d.handle(&Input::SelectChoice { choice: "a".into() });
+    p_d.handle(&click("submit-q1"));
+    p_d.handle(&Input::Next);
+    p_d.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_pass = p_d.handle(&click("submit-q2"));
+    assert!(has(
+        &fx_pass,
+        &Effect::Completion {
+            status: CompletionStatus::Passed
+        }
+    ));
+    assert_eq!(p_d.state().quiz_attempts, 2);
+
+    // (e) Survey-only / course.quiz: None degrades safely without panic.
+    let mut c_survey = tr_plain_course(2);
+    c_survey.tracking = TrackingSettings {
+        slides_viewed: None,
+        quiz: Some(QuizTracking {
+            slide: Some("s2".into()),
+        }),
+    };
+    let mut p_e = Player::new_unvalidated(&c_survey);
+    p_e.handle(&Input::Start);
+    let fx_e = p_e.handle(&Input::Next);
+    assert!(has(
+        &fx_e,
+        &Effect::Score {
+            raw: 0,
+            max: 0,
+            percent: 100,
+            status: CompletionStatus::Completed,
+        }
+    ));
+    assert!(has(
+        &fx_e,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (f) Ungraded survey question submitted after all graded questions lock does NOT re-emit Score.
+    let mut c_mixed = Course::from_json(
+        r#"{
+            "schema_version": 1,
+            "id": "tr-mixed",
+            "title": "TR Mixed",
+            "slide_size": { "w": 1280, "h": 720 },
+            "quiz": { "passing_percent": 80 },
+            "scenes": [{
+                "id": "sc1",
+                "title": "Scene 1",
+                "slides": [
+                    {
+                        "id": "q1",
+                        "title": "Graded",
+                        "duration_ms": 5000,
+                        "question": {
+                            "kind": "multiple_choice",
+                            "prompt": "Pick a",
+                            "choices": [
+                                { "id": "a", "text": "A", "correct": true },
+                                { "id": "b", "text": "B" }
+                            ],
+                            "points": 10,
+                            "attempts": 1
+                        },
+                        "objects": [{
+                            "id": "submit-q1",
+                            "kind": { "type": "button", "label": "Submit" },
+                            "frame": { "x": 100, "y": 100, "w": 120, "h": 40 }
+                        }],
+                        "triggers": [{
+                            "when": { "event": "click", "object": "submit-q1" },
+                            "action": { "action": "submit_question" }
+                        }]
+                    },
+                    {
+                        "id": "survey",
+                        "title": "Survey",
+                        "duration_ms": 5000,
+                        "question": {
+                            "kind": "likert",
+                            "prompt": "Rate",
+                            "choices": [
+                                { "id": "s1", "text": "Good" },
+                                { "id": "s2", "text": "Great" }
+                            ],
+                            "points": 0,
+                            "attempts": 1
+                        },
+                        "objects": [{
+                            "id": "submit-survey",
+                            "kind": { "type": "button", "label": "Submit" },
+                            "frame": { "x": 100, "y": 100, "w": 120, "h": 40 }
+                        }],
+                        "triggers": [{
+                            "when": { "event": "click", "object": "submit-survey" },
+                            "action": { "action": "submit_question" }
+                        }]
+                    }
+                ]
+            }]
+        }"#,
+    )
+    .expect("mixed course");
+    c_mixed.tracking.quiz = Some(QuizTracking { slide: None });
+    let mut p_f = Player::new(&c_mixed).expect("player");
+    p_f.handle(&Input::Start);
+    p_f.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_f_graded = p_f.handle(&click("submit-q1"));
+    assert!(
+        fx_f_graded
+            .iter()
+            .any(|e| matches!(e, Effect::Score { .. }))
+    );
+    assert_eq!(p_f.state().quiz_attempts, 1);
+    p_f.handle(&Input::Next);
+    p_f.handle(&Input::SelectChoice {
+        choice: "s1".into(),
+    });
+    let fx_f_survey = p_f.handle(&click("submit-survey"));
+    assert!(
+        !fx_f_survey
+            .iter()
+            .any(|e| matches!(e, Effect::Score { .. })),
+        "answering an ungraded survey question must not re-report quiz results"
+    );
+    assert_eq!(p_f.state().quiz_attempts, 1);
+
+    // (g) QuizTracking targeting a question slide without SubmitResults reports when locked;
+    //     saturated quiz_attempts == u32::MAX still prevents duplicate SubmitResults in same input.
+    let mut c_qslide = tr_quiz_course(80, 1, false);
+    c_qslide.tracking.quiz = Some(QuizTracking {
+        slide: Some("q2".into()),
+    });
+    let mut p_g = Player::new(&c_qslide).expect("player");
+    p_g.handle(&Input::Start);
+    p_g.handle(&Input::SelectChoice { choice: "a".into() });
+    assert!(
+        !p_g.handle(&click("submit-q1"))
+            .iter()
+            .any(|e| matches!(e, Effect::Score { .. }))
+    );
+    p_g.handle(&Input::Next);
+    p_g.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_g = p_g.handle(&click("submit-q2"));
+    assert!(has(
+        &fx_g,
+        &Effect::Score {
+            raw: 20,
+            max: 20,
+            percent: 100,
+            status: CompletionStatus::Passed,
+        }
+    ));
+
+    let mut c_sat = tr_quiz_course(80, 1, false);
+    c_sat.tracking.quiz = Some(QuizTracking { slide: None });
+    c_sat.scenes[0].slides[1].triggers.push(Trigger {
+        when: Event::Click {
+            object: "submit-q2".into(),
+        },
+        action: Action::SubmitResults,
+        condition: None,
+        disabled: false,
+    });
+    let mut st_sat = Player::new(&c_sat).expect("player").into_state();
+    st_sat.quiz_attempts = u32::MAX;
+    let mut p_sat = Player::resume(&c_sat, st_sat).expect("resume saturated");
+    p_sat.handle(&Input::Start);
+    p_sat.handle(&Input::SelectChoice { choice: "a".into() });
+    p_sat.handle(&click("submit-q1"));
+    p_sat.handle(&Input::Next);
+    p_sat.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_sat = p_sat.handle(&click("submit-q2"));
+    assert_eq!(
+        fx_sat
+            .iter()
+            .filter(|e| matches!(e, Effect::Score { .. }))
+            .count(),
+        1,
+        "SubmitResults with saturated quiz_attempts must not duplicate Score"
+    );
+}
+
+#[test]
+fn tr_07_combined_options_and_resume() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking, TrackingSettings};
+
+    // (a) Pass quiz early -> Score(Passed) + Completion(Passed), then view remaining slides -> Completion(Completed) once.
+    let mut c = tr_quiz_course(80, 1, false);
+    c.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::All),
+        quiz: Some(QuizTracking { slide: None }),
+    };
+    let mut p_a = Player::new(&c).expect("player");
+    p_a.handle(&Input::Start);
+    p_a.handle(&Input::SelectChoice { choice: "a".into() });
+    p_a.handle(&click("submit-q1"));
+    p_a.handle(&Input::Next);
+    p_a.handle(&Input::SelectChoice { choice: "a".into() });
+    let fx_q2 = p_a.handle(&click("submit-q2"));
+    assert!(has(
+        &fx_q2,
+        &Effect::Score {
+            raw: 20,
+            max: 20,
+            percent: 100,
+            status: CompletionStatus::Passed,
+        }
+    ));
+    assert!(has(
+        &fx_q2,
+        &Effect::Completion {
+            status: CompletionStatus::Passed
+        }
+    ));
+    let fx_last = p_a.handle(&Input::Next);
+    assert_eq!(
+        fx_last
+            .iter()
+            .filter(|e| matches!(e, Effect::Completion { .. }))
+            .collect::<Vec<_>>(),
+        vec![&Effect::Completion {
+            status: CompletionStatus::Completed
+        }]
+    );
+    // Revisiting does not re-emit Completion(Completed).
+    assert!(
+        !p_a.handle(&Input::Previous)
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+
+    // (b) Fail quiz first, then view last slide -> Score(Failed) + Completion(Failed), then Completion(Completed).
+    let mut p_b = Player::new(&c).expect("player");
+    p_b.handle(&Input::Start);
+    p_b.handle(&Input::SelectChoice { choice: "b".into() });
+    p_b.handle(&click("submit-q1"));
+    p_b.handle(&Input::Next);
+    p_b.handle(&Input::SelectChoice { choice: "b".into() });
+    let fx_b_fail = p_b.handle(&click("submit-q2"));
+    assert!(has(
+        &fx_b_fail,
+        &Effect::Completion {
+            status: CompletionStatus::Failed
+        }
+    ));
+    let fx_b_last = p_b.handle(&Input::Next);
+    assert!(has(
+        &fx_b_last,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (c) View all slides first, then fail quiz.
+    let mut p_c = Player::new(&c).expect("player");
+    p_c.handle(&Input::Start); // q1
+    p_c.handle(&Input::Next); // q2
+    let fx_c_last = p_c.handle(&Input::Next); // results -> all 3 viewed!
+    assert!(has(
+        &fx_c_last,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+    p_c.handle(&Input::Previous); // q2
+    p_c.handle(&Input::SelectChoice { choice: "b".into() });
+    p_c.handle(&click("submit-q2"));
+    p_c.handle(&Input::Previous); // q1
+    p_c.handle(&Input::SelectChoice { choice: "b".into() });
+    let fx_c_fail = p_c.handle(&click("submit-q1"));
+    assert!(has(
+        &fx_c_fail,
+        &Effect::Score {
+            raw: 0,
+            max: 20,
+            percent: 0,
+            status: CompletionStatus::Failed,
+        }
+    ));
+    assert!(has(
+        &fx_c_fail,
+        &Effect::Completion {
+            status: CompletionStatus::Failed
+        }
+    ));
+
+    // (d) Enter last slide which is also a failed results slide -> Score(Failed), Completion(Failed), Completion(Completed).
+    let mut c_d = tr_quiz_course(80, 1, true);
+    c_d.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::All),
+        quiz: Some(QuizTracking {
+            slide: Some("results".into()),
+        }),
+    };
+    let mut p_d = Player::new(&c_d).expect("player");
+    p_d.handle(&Input::Start);
+    p_d.handle(&Input::SelectChoice { choice: "b".into() });
+    p_d.handle(&click("submit-q1"));
+    p_d.handle(&Input::Next);
+    p_d.handle(&Input::SelectChoice { choice: "b".into() });
+    p_d.handle(&click("submit-q2"));
+    let fx_d = p_d.handle(&Input::Next);
+    let verdicts: Vec<_> = fx_d
+        .iter()
+        .filter(|e| matches!(e, Effect::Score { .. } | Effect::Completion { .. }))
+        .collect();
+    assert_eq!(
+        verdicts,
+        vec![
+            &Effect::Score {
+                raw: 0,
+                max: 20,
+                percent: 0,
+                status: CompletionStatus::Failed,
+            },
+            &Effect::Completion {
+                status: CompletionStatus::Failed
+            },
+            &Effect::Completion {
+                status: CompletionStatus::Completed
+            },
+        ]
+    );
+
+    // (e) Suspend at 2/3 slides -> resume -> no premature completion on Start, completes on slide 3.
+    let mut c_res = tr_plain_course(3);
+    c_res.tracking.slides_viewed = Some(SlidesViewedTracking::All);
+    let mut p_e = Player::new(&c_res).expect("player");
+    p_e.handle(&Input::Start);
+    p_e.handle(&Input::Next);
+    let sus_e = encode_suspend(&c_res, p_e.state());
+    let dec_e = decode_suspend(&c_res, &sus_e).expect("decode e");
+    let mut res_e = Player::resume(&c_res, dec_e).expect("resume e");
+    assert!(!res_e.state().slides_tracking_reported);
+    let fx_e_start = res_e.handle(&Input::Start);
+    assert!(
+        !fx_e_start
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
+    let fx_e_s3 = res_e.handle(&Input::Next);
+    assert!(has(
+        &fx_e_s3,
+        &Effect::Completion {
+            status: CompletionStatus::Completed
+        }
+    ));
+
+    // (f) Suspend at 3/3 slides -> resume -> slides_tracking_reported == true, no duplicate completion on Start.
+    let sus_f = encode_suspend(&c_res, res_e.state());
+    let dec_f = decode_suspend(&c_res, &sus_f).expect("decode f");
+    let mut res_f = Player::resume(&c_res, dec_f).expect("resume f");
+    assert!(res_f.state().slides_tracking_reported);
+    let fx_f_start = res_f.handle(&Input::Start);
+    assert!(
+        !fx_f_start
+            .iter()
+            .any(|e| matches!(e, Effect::Completion { .. }))
+    );
 }

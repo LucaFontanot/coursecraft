@@ -7,8 +7,9 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use crate::{
-    Action, Condition, Course, Event, Group, Layer, Object, ObjectKind, QuestionKind,
-    SCHEMA_VERSION, Scoring, Slide, SlideTarget, StateExtraKind, ValueKind, ValueSource, VarOp,
+    Action, Condition, Course, Event, Group, Layer, Object, ObjectKind, QuestionKind, QuizTracking,
+    SCHEMA_VERSION, Scoring, Slide, SlideTarget, SlidesViewedTracking, StateExtraKind, ValueKind,
+    ValueSource, VarOp,
 };
 
 /// Conditions nested deeper than this are rejected (and the player refuses them).
@@ -361,6 +362,10 @@ impl Course {
             if cx.should_stop() {
                 return;
             }
+        }
+        check_tracking(self, cx);
+        if cx.should_stop() {
+            return;
         }
         if !cx.skip_warnings {
             check_course_results(self, cx);
@@ -1002,6 +1007,68 @@ fn check_draw_totals(course: &Course, cx: &mut Ctx<'_>, totals: &BTreeMap<&str, 
             if cx.should_stop() {
                 return;
             }
+        }
+    }
+}
+
+fn check_tracking(course: &Course, cx: &mut Ctx<'_>) {
+    if let Some(sv) = course.tracking.slides_viewed {
+        match sv {
+            SlidesViewedTracking::AtLeast { count: 0 } => {
+                cx.err_at(
+                    "tracking/slides_viewed/count",
+                    "slides_viewed count must be at least 1",
+                );
+            }
+            SlidesViewedTracking::AtLeast { count } => {
+                let total = course.play_slide_count();
+                if total > 0 && (count as usize) > total {
+                    cx.warn_at(
+                        "tracking/slides_viewed/count",
+                        format!(
+                            "slides_viewed count ({count}) exceeds the course slide count ({total}); completion will trigger after viewing all {total} slides"
+                        ),
+                    );
+                }
+            }
+            SlidesViewedTracking::All => {}
+        }
+    }
+
+    if let Some(qt) = &course.tracking.quiz {
+        match qt {
+            QuizTracking { slide: Some(id) } => {
+                if course.slide_index(id).is_none() {
+                    cx.warn_at(
+                        "tracking/quiz/slide",
+                        format!("quiz tracking slide {id:?} does not exist in play order"),
+                    );
+                } else if let Some(slide) = course.play_slide(id)
+                    && !slide.has_submit_results_trigger()
+                    && slide.question.is_none()
+                {
+                    cx.warn_at(
+                        "tracking/quiz/slide",
+                        format!(
+                            "quiz tracking slide {id:?} has no Submit results trigger or question; quiz score will be reported on slide entry"
+                        ),
+                    );
+                }
+            }
+            QuizTracking { slide: None } => {
+                if !course.has_graded_questions() && course.results_slides().next().is_none() {
+                    cx.warn_at(
+                        "tracking/quiz",
+                        "quiz result tracking is enabled, but the course has no graded questions or results slide",
+                    );
+                }
+            }
+        }
+        if course.quiz.is_none() {
+            cx.warn_at(
+                "tracking/quiz",
+                "quiz result tracking is enabled, but no passing score is set in Quiz settings",
+            );
         }
     }
 }

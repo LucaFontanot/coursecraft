@@ -1230,6 +1230,7 @@ fn shape_gallery_course_is_written_for_review() {
         banks: Vec::new(),
         start_slide: None,
         quiz: None,
+        tracking: Default::default(),
         player: coursecraft_course::PlayerSettings::default(),
         theme,
         language: None,

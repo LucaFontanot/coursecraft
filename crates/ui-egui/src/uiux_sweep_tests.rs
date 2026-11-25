@@ -1170,3 +1170,261 @@ fn gb_14_m37_point_text_and_interactive_group_uiux_sweep() {
             .join("\n")
     );
 }
+
+fn scroll_dialog_to_tracking(h: &mut TestHarness, anchor: &str) {
+    let scroll_pos = h
+        .find_text_last(anchor)
+        .unwrap_or_else(|| h.screen_rect.center());
+    for _ in 0..24 {
+        if h.find_text_last("Completion triggers are always active")
+            .is_some()
+        {
+            break;
+        }
+        h.scroll_over(scroll_pos, -80.0);
+    }
+}
+
+fn audit_tr_18_surface_frame(
+    course: &Course,
+    case: &SurfaceCase,
+    size: (f32, f32),
+    mode: ThemeMode,
+    scale: f32,
+    violations: &mut Vec<String>,
+    unopened: &mut Vec<String>,
+) {
+    let mut h = TestHarness::new_with_config(course.clone(), size, mode, scale, true);
+    case.select.apply(&mut h.editor);
+    if case.label == "inspector-course" {
+        h.editor.selection.clear_objects();
+        h.editor.ui.inspector_tab = InspectorTab::Course;
+    }
+    if let Some(setup) = case.extra_setup {
+        setup(&mut h.editor);
+    }
+    let report = h.audit_surface_report(3, mode);
+    if scale <= 1.0
+        && let Some(needle) = case.shows
+        && !report.painted(needle)
+    {
+        unopened.push(format!(
+            "{} {}x{} {:?} scale={scale}: \"{needle}\" was not painted",
+            case.label, size.0, size.1, mode
+        ));
+    }
+    for f in report.findings {
+        let (rule, detail) = parse_rule_prefix(&f);
+        violations.push(format!(
+            "[{rule}] {} {}x{} {:?} scale={scale}: {detail}",
+            case.label, size.0, size.1, mode
+        ));
+    }
+
+    // Also scroll so the entire Tracking section (down to its last control)
+    // is visibly painted inside clip_rect and audited in every viewport.
+    if case.label == "inspector-course" {
+        let right = h.right_panel_rect();
+        let pos = h
+            .find_text_in("Slides", right)
+            .unwrap_or_else(|| right.center());
+        for _ in 0..24 {
+            if h.find_text_last("Tracking").is_some() {
+                break;
+            }
+            h.scroll_over(pos, -80.0);
+        }
+    } else {
+        let anchor = if case.label == "window-course-settings" {
+            "Course title"
+        } else {
+            "SCORM 1.2"
+        };
+        scroll_dialog_to_tracking(&mut h, anchor);
+    }
+    let scrolled_report = h.audit_surface_report(2, mode);
+    let required_needles: &[&str] = if case.label == "inspector-course" {
+        &["Tracking", "Slides viewed (2)"]
+    } else {
+        &[
+            "Slides viewed",
+            "At least",
+            "Quiz result",
+            "Results slide",
+            "Completion triggers are always active",
+        ]
+    };
+    for &needle in required_needles {
+        if !scrolled_report.painted(needle) {
+            unopened.push(format!(
+                "{} {}x{} {:?} scale={scale}: \"{needle}\" was not painted after scrolling",
+                case.label, size.0, size.1, mode
+            ));
+        }
+    }
+    for f in scrolled_report.findings {
+        let (rule, detail) = parse_rule_prefix(&f);
+        violations.push(format!(
+            "[{rule}] {} (scrolled) {}x{} {:?} scale={scale}: {detail}",
+            case.label, size.0, size.1, mode
+        ));
+    }
+}
+
+fn audit_tr_18_tooltips_and_popups(
+    course: &Course,
+    violations: &mut Vec<String>,
+    unopened: &mut Vec<String>,
+) {
+    for &(mode, _) in &MATRIX_THEMES {
+        // 1. Course Settings & Publish (idle): full tooltips + Results slide combo audit.
+        for (label, is_publish) in [
+            ("window-course-settings-tooltips", false),
+            ("window-publish-idle-tooltips", true),
+        ] {
+            let mut h =
+                TestHarness::new_with_config(course.clone(), (1280.0, 800.0), mode, 1.0, true);
+            if is_publish {
+                h.editor.open_publish_dialog();
+            } else {
+                h.editor.ui.show_course_settings_window = true;
+            }
+            let _ = h.audit_surface_report(3, mode);
+            let anchor = if is_publish {
+                "SCORM 1.2"
+            } else {
+                "Course title"
+            };
+            scroll_dialog_to_tracking(&mut h, anchor);
+            let report = h.audit_surface_report(2, mode);
+            for f in report.findings {
+                let (rule, detail) = parse_rule_prefix(&f);
+                violations.push(format!("[{rule}] {label} 1280x800 {mode:?}: {detail}"));
+            }
+            for f in h.check_tooltips_and_disabled() {
+                violations.push(format!("[UX-08/UX-10] {label} 1280x800 {mode:?}: {f}"));
+            }
+            for f in h.audit_combo("Course quiz (all graded questions)") {
+                violations.push(format!("[UX-03/UX-13] {label}-results-combo {mode:?}: {f}"));
+            }
+        }
+
+        // 2. Publish while Busy: every disabled Tracking control must explain why on hover.
+        let mut h = TestHarness::new_with_config(course.clone(), (1280.0, 800.0), mode, 1.0, true);
+        h.editor.open_publish_dialog();
+        h.editor.set_publish_busy();
+        let _ = h.audit_surface_report(3, mode);
+        scroll_dialog_to_tracking(&mut h, "SCORM 1.2");
+        let report = h.audit_surface_report(2, mode);
+        for &needle in &[
+            "Slides viewed",
+            "At least",
+            "Quiz result",
+            "Results slide",
+            "Completion triggers are always active",
+        ] {
+            if !report.painted(needle) {
+                unopened.push(format!(
+                    "window-publish-busy 1280x800 {mode:?}: \"{needle}\" was not painted after scrolling"
+                ));
+            }
+        }
+        for f in report.findings {
+            let (rule, detail) = parse_rule_prefix(&f);
+            // Disabled-state egui dimming inside `add_enabled_ui(false)` intentionally reduces
+            // static label contrast; keep checking layout, hit targets, and nested scrolls.
+            if rule == "UX-06" {
+                continue;
+            }
+            violations.push(format!(
+                "[{rule}] window-publish-busy 1280x800 {mode:?}: {detail}"
+            ));
+        }
+        for f in h.check_tooltips_and_disabled() {
+            violations.push(format!(
+                "[UX-08/UX-10] window-publish-busy 1280x800 {mode:?}: {f}"
+            ));
+        }
+        let slides_pos = h
+            .find_text_last("Slides viewed")
+            .expect("disabled Slides viewed visible");
+        let tip = h.probe_tooltip(slides_pos);
+        assert!(
+            tip.as_deref()
+                .is_some_and(|t| t.contains("Wait for publishing to finish")),
+            "window-publish-busy {mode:?}: hovering disabled Tracking must show busy tooltip, got {tip:?}"
+        );
+    }
+}
+
+/// TR-18: M28 UI/UX sweep with non-default Tracking enabled across `course-settings`,
+/// `publish`, and `inspector-course` at all matrix sizes, themes, and scales (`0 MUST violations`).
+#[test]
+fn tr_18_tracking_surfaces_zero_must_violations() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking, TrackingSettings};
+
+    let mut course = showcase();
+    course.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+        quiz: Some(QuizTracking { slide: None }),
+    };
+
+    let target_labels = [
+        "window-course-settings",
+        "window-publish",
+        "inspector-course",
+    ];
+    let surfaces: Vec<SurfaceCase> = all_surfaces()
+        .into_iter()
+        .filter(|c| target_labels.contains(&c.label.as_str()))
+        .collect();
+    assert_eq!(surfaces.len(), target_labels.len());
+
+    let mut violations = Vec::new();
+    let mut unopened = Vec::new();
+    let mut total_frames = 0usize;
+
+    for case in &surfaces {
+        for &size in &MATRIX_SIZES {
+            for &(mode, _) in &MATRIX_THEMES {
+                for &scale in &MATRIX_SCALES {
+                    let effective_size = if scale > 1.0 && size == (1024.0, 600.0) {
+                        (1536.0, 900.0)
+                    } else {
+                        size
+                    };
+                    total_frames += 1;
+                    audit_tr_18_surface_frame(
+                        &course,
+                        case,
+                        effective_size,
+                        mode,
+                        scale,
+                        &mut violations,
+                        &mut unopened,
+                    );
+                }
+            }
+        }
+    }
+
+    audit_tr_18_tooltips_and_popups(&course, &mut violations, &mut unopened);
+
+    assert!(
+        unopened.is_empty(),
+        "TR-18 unopened/missing Tracking controls ({}):\n{}",
+        unopened.len(),
+        unopened.join("\n")
+    );
+    assert!(
+        violations.is_empty(),
+        "TR-18 UI/UX sweep found {} MUST violations across {total_frames} audited frames:\n{}",
+        violations.len(),
+        violations
+            .iter()
+            .take(50)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}

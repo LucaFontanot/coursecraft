@@ -10732,7 +10732,7 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
     };
 
     let cmds = crate::registry();
-    assert_eq!(cmds.len(), 189, "unexpected registry command count");
+    assert_eq!(cmds.len(), 190, "unexpected registry command count");
 
     for cmd in cmds {
         check_phrase(cmd.label, &format!("label for {}", cmd.id));
@@ -12248,7 +12248,7 @@ fn r5_01_registry_golden_lock() {
     use crate::delta::UndoScope;
 
     let reg = registry();
-    assert_eq!(reg.len(), 189);
+    assert_eq!(reg.len(), 190);
 
     const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
         ("course.info", false, UndoScope::FullCourse, false),
@@ -12266,6 +12266,7 @@ fn r5_01_registry_golden_lock() {
             UndoScope::CourseHeader,
             false,
         ),
+        ("course.set_tracking", true, UndoScope::CourseHeader, false),
         (
             "course.set_background_audio",
             true,
@@ -12615,10 +12616,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 24_343, "registry golden table byte length");
+    assert_eq!(table.len(), 24_565, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        0x65da_d08d_988d_ef68,
+        17_905_909_594_708_050_050,
         "registry golden table FNV-1a hash"
     );
 }
@@ -15569,4 +15570,128 @@ fn autofit_grow_apply_style_set_autofit_and_hostile() {
         "fallback headless height should be ~1 line, got {}",
         fallback_frame.h
     );
+}
+
+#[test]
+fn tr_13_course_set_tracking_sets_clears_and_undoes() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking, TrackingSettings};
+
+    let mut s = Session::blank("Tracking Test");
+    assert_eq!(s.course.tracking, TrackingSettings::default());
+
+    let res = ok(
+        &mut s,
+        "course.set_tracking",
+        json!({ "slides_viewed": { "mode": "all" } }),
+    );
+    assert_eq!(
+        res,
+        json!({ "tracking": { "slides_viewed": { "mode": "all" } } })
+    );
+    assert_eq!(
+        s.course.tracking.slides_viewed,
+        Some(SlidesViewedTracking::All)
+    );
+    assert_eq!(s.course.tracking.quiz, None);
+
+    let prev = s.course.tracking.clone();
+    let undo_before = s.undo_len();
+    let res = ok(
+        &mut s,
+        "course.set_tracking",
+        json!({
+            "slides_viewed": { "mode": "at_least", "count": 2 },
+            "quiz": { "slide": "missing_results" }
+        }),
+    );
+    assert_eq!(s.undo_len(), undo_before + 1);
+    assert_eq!(
+        res,
+        json!({
+            "tracking": {
+                "slides_viewed": { "mode": "at_least", "count": 2 },
+                "quiz": { "slide": "missing_results" }
+            }
+        })
+    );
+    assert_eq!(
+        s.course.tracking,
+        TrackingSettings {
+            slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+            quiz: Some(QuizTracking {
+                slide: Some("missing_results".into())
+            }),
+        }
+    );
+
+    // 1-step undo/redo restores previous TrackingSettings cleanly.
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.course.tracking, prev);
+    ok(&mut s, "edit.redo", json!({}));
+    assert_eq!(
+        s.course.tracking,
+        TrackingSettings {
+            slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+            quiz: Some(QuizTracking {
+                slide: Some("missing_results".into())
+            }),
+        }
+    );
+
+    // Course quiz (`slide: None`) via `{}` and clearing both with `null`.
+    let res = ok(&mut s, "course.set_tracking", json!({ "quiz": {} }));
+    assert_eq!(
+        res,
+        json!({
+            "tracking": {
+                "slides_viewed": { "mode": "at_least", "count": 2 },
+                "quiz": {}
+            }
+        })
+    );
+    assert_eq!(s.course.tracking.quiz, Some(QuizTracking { slide: None }));
+
+    let res = ok(
+        &mut s,
+        "course.set_tracking",
+        json!({ "slides_viewed": null, "quiz": null }),
+    );
+    assert_eq!(res, json!({ "tracking": {} }));
+    assert_eq!(s.course.tracking, TrackingSettings::default());
+}
+
+#[test]
+fn tr_13_course_set_tracking_rejects_invalid_params() {
+    let mut s = Session::blank("Tracking Invalid Test");
+    let overlong_id = "a".repeat(65);
+    for bad_params in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!({ "extra": 1 }),
+        json!({ "slides_viewed": { "mode": "all", "extra": 1 } }),
+        json!({ "slides_viewed": { "mode": "all", "count": 3 } }),
+        json!({ "slides_viewed": { "mode": "at_least", "count": 2, "extra": 1 } }),
+        json!({ "slides_viewed": { "mode": "at_least", "count": 0 } }),
+        json!({ "slides_viewed": { "mode": "at_least", "count": -1 } }),
+        json!({ "quiz": { "slide": null, "extra": 1 } }),
+        json!({ "quiz": { "slide": "" } }),
+        json!({ "quiz": { "slide": "bad id" } }),
+        json!({ "quiz": { "slide": overlong_id } }),
+        json!({ "slides_viewed": { "mode": "all" }, "quiz": { "slide": "bad id" } }),
+    ] {
+        let err = s
+            .execute("course.set_tracking", &bad_params)
+            .expect_err("expected EngineError::BadParams");
+        assert!(
+            matches!(err, crate::EngineError::BadParams { .. }),
+            "expected BadParams for {bad_params}, got {err:?}"
+        );
+        assert_eq!(
+            s.course.tracking,
+            coursecraft_course::TrackingSettings::default(),
+            "failed command must not partially mutate tracking for {bad_params}"
+        );
+        assert_eq!(s.undo_len(), 0);
+    }
 }

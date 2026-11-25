@@ -190,9 +190,10 @@ impl CmiMapping {
     fn is_passed_for(&self, statuses: &[String], lms_status: LmsStatus) -> bool {
         match self.standard {
             Standard::Scorm12 => statuses.first().is_some_and(|s| match lms_status {
-                LmsStatus::Auto | LmsStatus::PassedIncomplete | LmsStatus::PassedFailed => {
-                    s == "passed"
-                }
+                LmsStatus::Auto
+                | LmsStatus::AutoKeepCompleted
+                | LmsStatus::PassedIncomplete
+                | LmsStatus::PassedFailed => s == "passed",
                 LmsStatus::CompletedIncomplete | LmsStatus::CompletedFailed => {
                     matches!(s.as_str(), "passed" | "completed")
                 }
@@ -435,6 +436,9 @@ pub struct LmsBridge {
     last_suspend: Option<String>,
     finished: bool,
     completed: bool,
+    ever_completed: bool,
+    /// SCORM 1.2: rank of the highest `cmi.core.lesson_status` reported (see `scorm12_rank`).
+    scorm12_rank: u8,
     passed: bool,
     best_passed_score: Option<f64>,
     /// Next `cmi.interactions.n` index, or `None` when reporting is unavailable.
@@ -532,6 +536,23 @@ impl LmsBridge {
         }
 
         let statuses = self.mapping.read_statuses(api);
+        self.scorm12_rank = match self.mapping.standard {
+            Standard::Scorm12 => statuses
+                .first()
+                .and_then(|s| parse_lesson_status(s))
+                .map_or(0, |ls| scorm12_rank(ls, self.lms_status)),
+            Standard::Scorm2004 => 0,
+        };
+        self.ever_completed = match self.mapping.standard {
+            Standard::Scorm12 => matches!(
+                statuses.first().map(String::as_str),
+                Some("completed" | "passed")
+            ),
+            Standard::Scorm2004 => {
+                statuses.first().is_some_and(|s| s == "completed")
+                    || statuses.get(1).is_some_and(|s| s == "passed")
+            }
+        };
         if self.mapping.is_finished(&statuses) {
             self.completed = true;
         } else if self.mapping.is_first_launch(&statuses) {
@@ -745,8 +766,33 @@ impl LmsBridge {
             return;
         }
         self.mapping.write_score(api, percent, warnings);
-        self.mapping
-            .write_status(api, status, last_status, warnings, self.lms_status);
+        let allow_status_write = match self.mapping.standard {
+            Standard::Scorm12 => {
+                scorm12_rank(map_status(status, self.lms_status), self.lms_status)
+                    >= self.scorm12_rank
+            }
+            Standard::Scorm2004 => !(self.ever_completed && status == CompletionStatus::Incomplete),
+        };
+        if allow_status_write {
+            self.mapping
+                .write_status(api, status, last_status, warnings, self.lms_status);
+            self.raise_scorm12_rank(status);
+            let now_ever_completed = match self.mapping.standard {
+                Standard::Scorm12 => matches!(
+                    map_status(status, self.lms_status),
+                    LessonStatus::Completed | LessonStatus::Passed
+                ),
+                Standard::Scorm2004 => matches!(
+                    status,
+                    CompletionStatus::Passed
+                        | CompletionStatus::Completed
+                        | CompletionStatus::Failed
+                ),
+            };
+            if now_ever_completed {
+                self.ever_completed = true;
+            }
+        }
         if status_allowed {
             self.passed = true;
             self.best_passed_score = Some(
@@ -766,6 +812,13 @@ impl LmsBridge {
         };
         if is_finished_status {
             self.completed = true;
+        }
+    }
+
+    fn raise_scorm12_rank(&mut self, status: CompletionStatus) {
+        if self.mapping.standard == Standard::Scorm12 {
+            let rank = scorm12_rank(map_status(status, self.lms_status), self.lms_status);
+            self.scorm12_rank = self.scorm12_rank.max(rank);
         }
     }
 
@@ -790,8 +843,32 @@ impl LmsBridge {
         if self.passed && protected_after_pass {
             return;
         }
+        let downgrade = match self.mapping.standard {
+            Standard::Scorm12 => {
+                scorm12_rank(map_status(status, self.lms_status), self.lms_status)
+                    < self.scorm12_rank
+            }
+            Standard::Scorm2004 => self.ever_completed && status == CompletionStatus::Incomplete,
+        };
+        if downgrade {
+            return;
+        }
         self.mapping
             .write_status(api, status, last_status, warnings, self.lms_status);
+        self.raise_scorm12_rank(status);
+        let now_ever_completed = match self.mapping.standard {
+            Standard::Scorm12 => matches!(
+                map_status(status, self.lms_status),
+                LessonStatus::Completed | LessonStatus::Passed
+            ),
+            Standard::Scorm2004 => matches!(
+                status,
+                CompletionStatus::Passed | CompletionStatus::Completed | CompletionStatus::Failed
+            ),
+        };
+        if now_ever_completed {
+            self.ever_completed = true;
+        }
         if status == CompletionStatus::Passed
             || (self.mapping.standard == Standard::Scorm12
                 && is_protected_status(map_status(status, self.lms_status), self.lms_status))
@@ -863,11 +940,37 @@ impl LmsBridge {
     }
 }
 
+/// SCORM 1.2 status order for `lms_status`: a write never lowers the rank already reported.
+/// `Auto` lets a quiz result outrank a plain completion (`incomplete < completed < failed <
+/// passed`); every other option keeps a completion (`incomplete < failed < completed < passed`).
+fn scorm12_rank(written: LessonStatus, lms_status: LmsStatus) -> u8 {
+    match (written, lms_status) {
+        (LessonStatus::Passed, _) => 3,
+        (LessonStatus::Failed, LmsStatus::Auto) => 2,
+        (LessonStatus::Completed, LmsStatus::Auto) | (LessonStatus::Failed, _) => 1,
+        (LessonStatus::Completed, _) => 2,
+        (LessonStatus::Incomplete | LessonStatus::Browsed | LessonStatus::NotAttempted, _) => 0,
+    }
+}
+
+fn parse_lesson_status(s: &str) -> Option<LessonStatus> {
+    match s {
+        "passed" => Some(LessonStatus::Passed),
+        "completed" => Some(LessonStatus::Completed),
+        "failed" => Some(LessonStatus::Failed),
+        "incomplete" => Some(LessonStatus::Incomplete),
+        "browsed" => Some(LessonStatus::Browsed),
+        "not attempted" => Some(LessonStatus::NotAttempted),
+        _ => None,
+    }
+}
+
 fn is_protected_status(written: LessonStatus, lms_status: LmsStatus) -> bool {
     match lms_status {
-        LmsStatus::Auto | LmsStatus::PassedIncomplete | LmsStatus::PassedFailed => {
-            written == LessonStatus::Passed
-        }
+        LmsStatus::Auto
+        | LmsStatus::AutoKeepCompleted
+        | LmsStatus::PassedIncomplete
+        | LmsStatus::PassedFailed => written == LessonStatus::Passed,
         LmsStatus::CompletedIncomplete | LmsStatus::CompletedFailed => {
             matches!(written, LessonStatus::Passed | LessonStatus::Completed)
         }
@@ -876,7 +979,7 @@ fn is_protected_status(written: LessonStatus, lms_status: LmsStatus) -> bool {
 
 fn map_status(status: CompletionStatus, lms_status: LmsStatus) -> LessonStatus {
     match lms_status {
-        LmsStatus::Auto => match status {
+        LmsStatus::Auto | LmsStatus::AutoKeepCompleted => match status {
             CompletionStatus::Passed => LessonStatus::Passed,
             CompletionStatus::Failed => LessonStatus::Failed,
             CompletionStatus::Completed => LessonStatus::Completed,

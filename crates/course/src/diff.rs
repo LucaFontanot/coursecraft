@@ -907,6 +907,7 @@ fn settings_json(course: &Course) -> Json {
     put("slide_size", to_json(&course.slide_size));
     put("start_slide", to_json(&course.start_slide));
     put("quiz", to_json(&course.quiz));
+    put("tracking", to_json(&course.tracking));
     put("player", to_json(&course.player));
     put("theme", to_json(&course.theme));
     put("language", to_json(&course.language));

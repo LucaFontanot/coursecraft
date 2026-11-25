@@ -762,6 +762,10 @@ pub struct PlayerState {
     /// `SlideTarget::LastVisited` falls back to `Previous`.
     #[serde(default, skip_serializing)]
     pub visit_history: Vec<String>,
+    /// Runtime-only: whether automatic `slides_viewed` tracking has already reported completion.
+    /// Never written to suspend data.
+    #[serde(default, skip_serializing)]
+    pub slides_tracking_reported: bool,
 }
 
 /// Read-only view of the current slide's player-clock state for the UI.
@@ -1088,8 +1092,34 @@ impl<'c> Player<'c> {
                     .collect();
             p.st.timeline_completed.extend(earlier);
         }
+        if let Some(threshold) = p.slides_viewed_threshold()
+            && p.visited_play_slides() >= threshold
+        {
+            p.st.slides_tracking_reported = true;
+        }
         p.refresh_slide_cache();
         Ok(p)
+    }
+
+    pub(crate) fn slides_viewed_threshold(&self) -> Option<usize> {
+        if self.preview_subset.is_some() || self.slides.is_empty() {
+            return None;
+        }
+        match self.course.tracking.slides_viewed? {
+            coursecraft_course::SlidesViewedTracking::All => Some(self.slides.len()),
+            coursecraft_course::SlidesViewedTracking::AtLeast { count } => Some(
+                usize::try_from(count)
+                    .unwrap_or(usize::MAX)
+                    .clamp(1, self.slides.len()),
+            ),
+        }
+    }
+
+    pub(crate) fn visited_play_slides(&self) -> usize {
+        self.slides
+            .iter()
+            .filter(|s| self.st.visited.contains(&s.id))
+            .count()
     }
 
     #[must_use]

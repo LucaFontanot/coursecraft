@@ -20,8 +20,14 @@ fn report_status_combo_appears_only_for_scorm12_and_has_tooltip() {
         "Report status as label must appear when SCORM 1.2 is selected"
     );
     assert!(
-        harness.find_text("Automatic").is_some(),
+        harness.find_text("Automatic (quiz result wins)").is_some(),
         "Automatic combo text must appear when SCORM 1.2 is selected"
+    );
+    assert!(
+        harness
+            .find_text("A failed quiz shows as failed, even after the course was completed.")
+            .is_some(),
+        "the default automatic choice explains itself"
     );
 
     let scorm2004_radio = harness
@@ -82,6 +88,42 @@ fn clicking_publish_preserves_chosen_lms_status() {
             .as_ref()
             .map(|p| p.lms_status),
         Some(LmsStatus::PassedFailed)
+    );
+}
+
+#[test]
+fn automatic_completion_stays_choice_shows_its_hint_and_survives_publish() {
+    let mut harness = TestHarness::new(hello());
+    harness.editor.set_publish_available(true);
+    harness.editor.run(
+        "course.set_publish_settings",
+        serde_json::json!({ "lms_status": "auto_keep_completed" }),
+    );
+    harness.editor.open_publish_dialog();
+    harness.idle_frame();
+
+    assert!(harness.find_text("Automatic (completion stays)").is_some());
+    assert!(
+        harness
+            .find_text(
+                "Once completed, the course stays completed; a failed quiz still records its score."
+            )
+            .is_some()
+    );
+
+    let publish_btn = harness.find_text_last("Publish").expect("Publish button");
+    harness.click_at(publish_btn);
+    harness.idle_frame();
+    assert_eq!(
+        harness
+            .editor
+            .session
+            .course
+            .editor
+            .last_publish
+            .as_ref()
+            .map(|p| p.lms_status),
+        Some(LmsStatus::AutoKeepCompleted)
     );
 }
 

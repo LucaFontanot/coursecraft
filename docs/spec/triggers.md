@@ -775,6 +775,27 @@ XLIFF 1.2 export uses the stable ids documented in `docs/spec/course-model.md`; 
 
 **Limits.** The bundled font covers Latin, Greek and Cyrillic only. CJK, Arabic, Hebrew, Indic and similar scripts are reported by validation and still applied; right-to-left layout and complex shaping are not supported. String variables are not exported because triggers may compare them.
 
+## Tracking
+
+Course-level LMS completion tracking (`course.tracking`) lets authors choose how `coursecraft-logic` reports completion in addition to explicit triggers. Completion is reported when **any** enabled option is met:
+
+1. **Slides viewed (`tracking.slides_viewed`):**
+   - `all`: completes once the learner has entered every slide in the expanded play order (`self.slides.len()`).
+   - `at_least { count }`: completes once the learner has entered at least `count.clamp(1, total)` distinct slides in play order.
+   - **Play-order counting:** scene slides and expanded question bank draws count toward both `total` and `visited`; masters, templates, and undrawn bank slides never count; unreachable scene slides still count toward `total`; lightboxed scene slides count once entered (`visited` records them).
+   - **End-of-input evaluation:** evaluated at the end of every input after event processing finishes (excluding review mode and partial-slide previews where `preview_subset.is_some()`). When the threshold is reached for the first time (`!slides_tracking_reported`), `slides_tracking_reported` is set to `true` and `Effect::Completion { status: Completed }` is emitted unless the same input already emitted `Effect::Completion { status: Passed | Completed }`. It never emits `Effect::Exit`.
+2. **Quiz result (`tracking.quiz`):**
+   - Evaluates **on submit** using `Player::results` (`score_points_and_max()`, `course.quiz.passing_percent`, incrementing `quiz_attempts`, emitting `Effect::Score` and `Effect::Completion`).
+   - If `Action::SubmitResults` already ran during the same input (`quiz_attempts` increased), it is never duplicated.
+   - When `quiz.slide` is `Some(id)`: if that slide already has an enabled `submit_results` trigger, that trigger owns submission; if it is a question slide without such a trigger, it submits when `Effect::QuestionAnswered` locks that question; otherwise (a custom summary slide) it submits when the slide is entered (`SlideEntered` or `LightboxOpened`).
+   - When `quiz.slide` is `None` (course quiz): submits when an `Effect::QuestionAnswered` for a graded question occurs in the input and every graded question (`max_points() > 0`) in play order is locked (`question_locked_on_slide`). If `course.quiz` is `None` (e.g., survey-only), `results` safely reports `Completed` without panicking.
+   - `retry_quiz` clears `answers` (unlocking questions), so a subsequent submit or results-slide entry re-evaluates and emits updated `Score` and `Completion` effects.
+3. **Completion triggers (always active):** explicit `complete_course` and `submit_results` triggers always work both alone and alongside `slides_viewed` / `quiz`.
+
+**Combined options:** if a single input both fails a quiz on a results slide and crosses the `slides_viewed` threshold (for example, entering the last slide when it is also a failed results slide), the runtime emits `Score(Failed)`, `Completion(Failed)`, and then `Completion(Completed)` so LMS bridges record the failed quiz score/status while still reporting course completion.
+
+**Suspend and resume:** `slides_tracking_reported` is runtime-only and is never written to `cc1:` `suspend_data`. On `Player::finish_resume`, if `slides_viewed` is active (`preview_subset.is_none()`) and the restored `visited` set already meets the threshold, `slides_tracking_reported` is initialized to `true` so relaunching does not emit a duplicate `Effect::Completion`.
+
 ## Effects
 
 The renderer and LMS bridge consume these: `slide_entered`, `layer_shown`, `layer_hidden`, `state_changed`, `variable_changed`, `media`, `media_seek`, `timeline_paused/resumed`, `choice_selected`, `text_entry_changed`, `sequence_changed`, `match_changed`, `hotspot_marked`, `item_dropped`, `object_moved`, `object_dropped`, `answer_required`, `question_answered`, `score`, `completion`, `open_url`, `run_javascript`, `lightbox_opened`, `lightbox_closed`, `review_changed`, `print`, `exit` and `warning`.
@@ -786,12 +807,24 @@ The LMS bridge maps `score` to `cmi.core.score.raw` (set to `percent`), `cmi.cor
 | `lms_status` | `Passed` | `Completed` | `Failed` | `Incomplete` |
 |---|---|---|---|---|
 | `auto` (default) | `passed` | `completed` | `failed` | `incomplete` |
+| `auto_keep_completed` | `passed` | `completed` | `failed` | `incomplete` |
 | `passed_incomplete` | `passed` | `passed` | `incomplete` | `incomplete` |
 | `passed_failed` | `passed` | `passed` | `failed` | `incomplete` |
 | `completed_incomplete` | `completed` | `completed` | `incomplete` | `incomplete` |
 | `completed_failed` | `completed` | `completed` | `failed` | `incomplete` |
 
-SCORM 2004, cmi5, xAPI, and LTI are unchanged (they report completion and success separately). Once a pass has been reported in an attempt, neither the SCORM bridge nor the LTI reporter overwrites it with a later fail or a lower score. In SCORM 1.2, where `cmi.core.lesson_status` is a single field, once `passed` has been reported (including via `Completed` under `passed_incomplete` or `passed_failed`), or `completed` has been reported under `completed_incomplete` or `completed_failed`, a later fail, incomplete, or lower score never downgrades it—either within the same session or after resume—while a passing score update (when no score was recorded yet, or with a higher score) still updates `cmi.core.score.raw`. Under `auto`, `passed` is protected in the same way (and a later `completed` does not overwrite `passed`), while `completed` may still upgrade to `passed`. Durable progress is stored in `cmi.suspend_data` using the compact `cc1:` encoding; writes exceeding the SCORM 1.2 limit of 4096 characters are skipped with a warning. Commits are batched at most once per input. On `start` the bridge calls `LMSInitialize`, turns `not attempted` into `incomplete`, and resumes from `cmi.suspend_data` when it decodes (otherwise it starts fresh with a warning). Finishing (on `exit`, or when the page closes) sets `cmi.core.exit` to `suspend` until a finished status (not `incomplete`) has been written and to an empty string after, sets `cmi.core.session_time` (`HHHH:MM:SS.SS`), commits and calls `LMSFinish`, once.
+Reported status never goes down. SCORM 2004, cmi5, xAPI and LTI 1.3 use the order `incomplete < failed < completed < passed`: once a learner achieves `completed` (or `passed`), neither a later failure, an `incomplete` status, a lower score, nor a relaunch/resume may downgrade it.
+
+In SCORM 1.2, where `cmi.core.lesson_status` is a single field, the bridge keeps the rank of the highest status it has reported (seeded on `start` from the LMS's `cmi.core.lesson_status`, so it survives a relaunch) and skips any status write of a lower rank. The order depends on `lms_status`:
+
+- `auto` (default): a quiz result outranks a plain completion, `incomplete < completed < failed < passed`. A fail after `completed` writes `failed`; a later `completed` (for example from Slides viewed) never hides a `failed`; a pass still upgrades to `passed`.
+- `auto_keep_completed` and the four fixed mappings: `incomplete < failed < completed < passed`, applied to the mapped value. Once `completed` (or `passed`) is reported, a later fail or incomplete never downgrades it, and a fail after `completed` still writes `cmi.core.score.raw`.
+
+Either way the result does not depend on the order of events: in one input `[Score(40, Failed), Completion(Failed), Completion(Completed)]` writes `score.raw = 40` and leaves `lesson_status` `"failed"` under `auto`, `"completed"` under `auto_keep_completed` / `completed_*`, and `"passed"` under `passed_*`. Once `passed` is reported (including via `Completed` under `passed_*`, or `completed` under `completed_*`), a later lower score is not written, while a passing score update (when no score was recorded yet, or with a higher score) still updates `cmi.core.score.raw`.
+
+In SCORM 2004, `ever_completed` is seeded on `start` when `cmi.completion_status` is `"completed"` or `cmi.success_status` is `"passed"`; `cmi.completion_status` never downgrades from `"completed"` to `"incomplete"`, and `cmi.success_status` never downgrades from `"passed"` to `"failed"`.
+
+In SCORM 1.2, durable progress is stored in `cmi.suspend_data` using the compact `cc1:` encoding; writes exceeding the SCORM 1.2 limit of 4096 characters are skipped with a warning. Commits are batched at most once per input. On `start` the bridge calls `LMSInitialize`, turns `not attempted` into `incomplete`, and resumes from `cmi.suspend_data` when it decodes (otherwise it starts fresh with a warning). Finishing (on `exit`, or when the page closes) sets `cmi.core.exit` to `suspend` until a finished status (not `incomplete`) has been written and to an empty string after, sets `cmi.core.session_time` (`HHHH:MM:SS.SS`), commits and calls `LMSFinish`, once.
 
 ## SCORM 2004
 
@@ -978,7 +1011,7 @@ On `Effect::Exit`, after the effects are forwarded, a `returnURL` from `LMS.Laun
 
 An LTI package states `{"standard":"lti"}` in `coursecraft-package.json`. It has the SCORM 1.2 file set without an `imsmanifest.xml` and no xAPI or SCORM manifest. The player still runs the same runtime and only reports results differently.
 
-The web player posts each report to `../lti/score`, resolved against `index.html` so a tool mounted under a URL prefix still reaches its own server. The launch cookie is sent with the request. A report is JSON `{"percent": 0..100 | null, "status": "passed" | "failed" | "completed" | "incomplete"}`. A `score` effect gives `Some(percent)`; a `completion` effect with no score in the same input gives `percent: null`, and the server then omits `scoreGiven` and sends only the progress fields. Only the latest unsent report is kept, and an identical report already sent is ignored.
+The web player posts each report to `../lti/score`, resolved against `index.html` so a tool mounted under a URL prefix still reaches its own server. The launch cookie is sent with the request. A report is JSON `{"percent": 0..100 | null, "status": "passed" | "failed" | "completed" | "incomplete"}`. Within a single input batch, the highest-rank status (`incomplete < failed < completed < passed`) wins while preserving any `score` effect's `percent` (so `[Score(40, Failed), Completion(Completed)]` emits `{"percent": 40, "status": "completed"}`). A `completion` effect with no score in the same input gives `percent: null` (unless upgrading a previously recorded `failed` score to `completed`, which keeps that score's `percent`), and the server then omits `scoreGiven` and sends only the progress fields. Across inputs, status is monotonic: `completed` never downgrades to `failed` or `incomplete`, `completed` upgrades to `passed` with a passing score, and `passed` only updates on a strictly higher passing score. Only the latest unsent report is kept, and an identical report already sent is ignored.
 
 A `204` means sent. Any other status, or a network error, is retried once; a second failure stops reporting for the session and shows the lost-reporting notice banner (the same `reportingLost` chrome as an xAPI launch). LTI 1.3 has no suspend data: nothing is written to `cmi` or an LRS, and a relaunch starts the course fresh.
 

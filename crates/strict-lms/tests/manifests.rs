@@ -5,7 +5,7 @@ use coursecraft_strict_lms::{
     PackageStandardKind, validate_cmi5_xml, validate_package, validate_scorm12_manifest,
     validate_scorm2004_manifest, validate_tincan_xml,
 };
-use coursecraft_xapi::{PackageSpec, cmi5_xml, tincan_xml};
+use coursecraft_xapi::{MoveOn, PackageSpec, cmi5_xml, tincan_xml};
 
 #[test]
 fn a5_1_scorm12_manifest_catches_self_listing_and_bad_ncname() {
@@ -87,6 +87,7 @@ fn a5_3_cmi5_and_tincan_xml_validate_cleanly() {
         course_id: "hello-course".to_owned(),
         title: "Hello Course".to_owned(),
         mastery_score: Some(80),
+        move_on: MoveOn::Auto,
     };
     let cmi5 = cmi5_xml(&spec);
     assert!(validate_cmi5_xml(&cmi5).is_empty());

@@ -90,6 +90,7 @@ pub mod theme_dialog;
 pub mod timeline;
 pub mod timeline_playback;
 pub mod toolbar;
+pub mod tracking_ui;
 pub mod translate_ai;
 pub mod translation;
 pub mod triggers;

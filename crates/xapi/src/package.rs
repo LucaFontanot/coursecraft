@@ -2,6 +2,17 @@
 
 use std::fmt::Write as _;
 
+/// cmi5 AU `moveOn` criterion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MoveOn {
+    /// `"Passed"` when `mastery_score` is set, otherwise `"Completed"`.
+    #[default]
+    Auto,
+    Completed,
+    Passed,
+    CompletedOrPassed,
+}
+
 /// What goes into a cmi5 or xAPI package manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageSpec {
@@ -11,6 +22,8 @@ pub struct PackageSpec {
     pub title: String,
     /// Passing percentage from 0 to 100.
     pub mastery_score: Option<u8>,
+    /// cmi5 `moveOn` criterion.
+    pub move_on: MoveOn,
 }
 
 /// The stable activity id a course reports when the launch gives none.
@@ -25,10 +38,17 @@ pub fn cmi5_xml(spec: &PackageSpec) -> String {
     let course_id = format!("urn:coursecraft:course:{}", sanitize_id(&spec.course_id));
     let au_id = format!("urn:coursecraft:au:{}", sanitize_id(&spec.course_id));
     let title = xml_escape(&spec.title);
-    let move_on = if spec.mastery_score.is_some() {
-        "Passed"
-    } else {
-        "Completed"
+    let move_on = match spec.move_on {
+        MoveOn::Auto => {
+            if spec.mastery_score.is_some() {
+                "Passed"
+            } else {
+                "Completed"
+            }
+        }
+        MoveOn::Completed => "Completed",
+        MoveOn::Passed => "Passed",
+        MoveOn::CompletedOrPassed => "CompletedOrPassed",
     };
 
     let mut x = String::new();

@@ -67,23 +67,23 @@ pub use model::{
     NextRequirement, NumberScheme, Object, ObjectKind, Orientation, Outline, PATH_MAX_POINTS,
     PATH_MIN_POINTS, PaletteColor, Paragraph, Path, PathPoint, PathStyle, PathSubpath,
     PictureFillMode, PlayerSettings, PlayerTheme, Point, PublishSettings, Question, QuestionBank,
-    QuestionKind, QuizSettings, RadioOption, Rect, Resource, ResourceTarget, RevisitMode,
-    SCHEMA_VERSION, Scene, Scoring, ScrollBar, SeekMode, SeekbarBehaviour, Shadow, ShapeKind,
-    ShapeText, Size, Slide, SlideCue, SlidePlayerOverrides, SlideTarget, StateDef, StateExtra,
-    StateExtraKind, TABLE_MAX_AXIS, TABLE_MAX_CELLS, TABLE_MIN_FRACTION, TableBorders, TableCell,
-    TableRow, TextDirection, TextInsets, TextRun, TextStyle, Theme, TimerFormat, Timing,
-    Transition, TransitionEffect, Trigger, Trim, VALID_TRIGGER_KEYS, VAlign, Value, ValueKind,
-    ValueSource, VarOp, VariableDef, WEB_DEFAULT_ENTRY, WEB_MAX_BYTES, WEB_MAX_FILES, WebSource,
-    builtin_variable_kind, clamp_letter_spacing, clamp_lottie_speed, clamp_opacity,
-    clamp_panel_offset, d500, d1000, default_accent_color, default_background_color,
-    default_bar_color, default_bar_text_color, default_theme_font, default_theme_text_color, fill,
-    format_timer_text, is_image_src, is_language_tag_valid, is_safe_media_path,
-    is_timer_remaining_variable_on, is_valid_link_url, is_valid_trigger_key, is_valid_web_entry,
-    is_valid_web_folder_path, is_valid_web_url, normalize_rotation, normalize_table_fractions,
-    path_frame_and_points, safe_clamp, safe_clamp_ord, script_unsupported, snap_to_step,
-    sort_and_repair_cues, table_cell_is_visible, table_cell_owners, table_fraction_offsets,
-    timer_id_for_remaining_variable, timer_remaining_seconds, timer_remaining_variable,
-    web_folder_within_caps,
+    QuestionKind, QuizSettings, QuizTracking, RadioOption, Rect, Resource, ResourceTarget,
+    RevisitMode, SCHEMA_VERSION, Scene, Scoring, ScrollBar, SeekMode, SeekbarBehaviour, Shadow,
+    ShapeKind, ShapeText, Size, Slide, SlideCue, SlidePlayerOverrides, SlideTarget,
+    SlidesViewedTracking, StateDef, StateExtra, StateExtraKind, TABLE_MAX_AXIS, TABLE_MAX_CELLS,
+    TABLE_MIN_FRACTION, TableBorders, TableCell, TableRow, TextDirection, TextInsets, TextRun,
+    TextStyle, Theme, TimerFormat, Timing, TrackingSettings, Transition, TransitionEffect, Trigger,
+    Trim, VALID_TRIGGER_KEYS, VAlign, Value, ValueKind, ValueSource, VarOp, VariableDef,
+    WEB_DEFAULT_ENTRY, WEB_MAX_BYTES, WEB_MAX_FILES, WebSource, builtin_variable_kind,
+    clamp_letter_spacing, clamp_lottie_speed, clamp_opacity, clamp_panel_offset, d500, d1000,
+    default_accent_color, default_background_color, default_bar_color, default_bar_text_color,
+    default_theme_font, default_theme_text_color, fill, format_timer_text, is_image_src,
+    is_language_tag_valid, is_safe_media_path, is_timer_remaining_variable_on, is_valid_link_url,
+    is_valid_trigger_key, is_valid_web_entry, is_valid_web_folder_path, is_valid_web_url,
+    normalize_rotation, normalize_table_fractions, path_frame_and_points, safe_clamp,
+    safe_clamp_ord, script_unsupported, snap_to_step, sort_and_repair_cues, table_cell_is_visible,
+    table_cell_owners, table_fraction_offsets, timer_id_for_remaining_variable,
+    timer_remaining_seconds, timer_remaining_variable, web_folder_within_caps,
 };
 pub use outline::{
     CourseOutline, MAX_BODY_LINES, MAX_CHOICES, MAX_LINE_BYTES, MAX_OUTLINE_SLIDES, OutlineChoice,
@@ -416,11 +416,46 @@ impl Course {
             .unwrap_or_default()
     }
 
-    /// True when the course has at least one trigger that reports a result to
-    /// the LMS: `submit_results` (score and completion) or `complete_course`.
+    /// Total number of slides in play order, expanding bank-draw placeholders.
+    #[must_use]
+    pub fn play_slide_count(&self) -> usize {
+        self.slides().fold(0usize, |acc, slide| {
+            let count = slide.draw.as_ref().map_or(1, |d| d.count as usize);
+            acc.saturating_add(count)
+        })
+    }
+
+    /// All play-order slides that carry an enabled `SubmitResults` trigger.
+    pub fn results_slides(&self) -> impl Iterator<Item = &Slide> {
+        self.slides().filter(|s| s.has_submit_results_trigger())
+    }
+
+    /// True when the course has at least one graded question in play order
+    /// (either directly on a scene slide or in a non-empty drawn question bank).
+    #[must_use]
+    pub fn has_graded_questions(&self) -> bool {
+        self.slides().any(|slide| {
+            if slide.question.as_ref().is_some_and(|q| q.max_points() > 0) {
+                return true;
+            }
+            if let Some(draw) = &slide.draw
+                && draw.count > 0
+                && let Some(bank) = self.bank(&draw.bank)
+            {
+                return bank
+                    .slides
+                    .iter()
+                    .any(|bs| bs.question.as_ref().is_some_and(|q| q.max_points() > 0));
+            }
+            false
+        })
+    }
+
+    /// True when the course can report a result to the LMS via triggers or
+    /// configured [`TrackingSettings`].
     #[must_use]
     pub fn reports_result(&self) -> bool {
-        self.slides().any(|slide| {
+        let has_trigger = self.slides().any(|slide| {
             slide
                 .triggers
                 .iter()
@@ -431,7 +466,20 @@ impl Course {
                         Action::SubmitResults | Action::CompleteCourse { .. }
                     )
                 })
-        })
+        });
+        if has_trigger {
+            return true;
+        }
+        if self.tracking.slides_viewed.is_some() && self.play_slide_count() > 0 {
+            return true;
+        }
+        self.tracking
+            .quiz
+            .as_ref()
+            .is_some_and(|qt| match &qt.slide {
+                Some(id) => self.slide_index(id).is_some(),
+                None => self.has_graded_questions(),
+            })
     }
 
     /// The slide the player opens on: `start_slide`, else the first slide.
@@ -445,6 +493,15 @@ impl Course {
 }
 
 impl Slide {
+    /// True when the slide or any of its layers has an enabled `SubmitResults` trigger.
+    #[must_use]
+    pub fn has_submit_results_trigger(&self) -> bool {
+        self.triggers
+            .iter()
+            .chain(self.layers.iter().flat_map(|layer| layer.triggers.iter()))
+            .any(|trigger| !trigger.disabled && matches!(trigger.action, Action::SubmitResults))
+    }
+
     #[must_use]
     pub fn layer(&self, id: &str) -> Option<&Layer> {
         self.layers.iter().find(|l| l.id == id)

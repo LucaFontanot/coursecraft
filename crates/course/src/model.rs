@@ -347,6 +347,10 @@ pub struct Course {
     pub start_slide: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quiz: Option<QuizSettings>,
+    /// Course-level LMS completion tracking options.
+    /// Omitted when default (triggers only) so existing courses stay byte-identical.
+    #[serde(default, skip_serializing_if = "TrackingSettings::is_default")]
+    pub tracking: TrackingSettings,
     #[serde(default)]
     pub player: PlayerSettings,
     #[serde(default, skip_serializing_if = "is_default_theme")]
@@ -387,13 +391,61 @@ pub struct Guide {
     pub at: f32,
 }
 
+/// How slide-viewing completion is measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SlidesViewedTracking {
+    /// Complete once the learner has entered every slide in play order.
+    All,
+    /// Complete once the learner has entered at least `count` distinct slides in play order (`1..=slide_count`).
+    AtLeast { count: u32 },
+}
+
+/// How quiz-result completion is measured.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuizTracking {
+    /// Optional slide id of the results (or question) slide that reports the quiz.
+    /// `None` evaluates the course's graded quiz on submit (or when all graded questions lock).
+    /// Omitted when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slide: Option<String>,
+}
+
+/// Course-level LMS completion tracking options.
+///
+/// The course reports completion to the LMS when ANY enabled option is met.
+/// Author triggers (`complete_course`, `submit_results`) always keep working.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackingSettings {
+    /// Complete after viewing all slides or at least N slides. Omitted when disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slides_viewed: Option<SlidesViewedTracking>,
+    /// Complete (passed or failed) from a quiz / results slide on submit. Omitted when disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiz: Option<QuizTracking>,
+}
+
+impl TrackingSettings {
+    /// Returns `true` when neither slides-viewed nor quiz-result tracking is enabled.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.slides_viewed.is_none() && self.quiz.is_none()
+    }
+}
+
 /// How SCORM 1.2 reports `cmi.core.lesson_status` to the LMS.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LmsStatus {
-    /// Report the status the runtime computed (default).
+    /// Report the status the runtime computed (default). A quiz result outranks a plain
+    /// completion: `incomplete < completed < failed < passed`.
     #[default]
     Auto,
+    /// Report the status the runtime computed, but a reported completion stays:
+    /// `incomplete < failed < completed < passed`.
+    AutoKeepCompleted,
     /// Passed or Completed -> `passed`; Failed or Incomplete -> `incomplete`.
     PassedIncomplete,
     /// Passed or Completed -> `passed`; Failed -> `failed`; Incomplete -> `incomplete`.

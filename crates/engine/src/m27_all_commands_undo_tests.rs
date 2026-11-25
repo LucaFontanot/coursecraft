@@ -892,6 +892,10 @@ fn command_cases() -> Vec<(&'static str, Json)> {
             json!({ "lms_status": "passed_failed" }),
         ),
         (
+            "course.set_tracking",
+            json!({ "slides_viewed": { "mode": "at_least", "count": 2 }, "quiz": { "slide": null } }),
+        ),
+        (
             "course.set_background_audio",
             json!({ "src": "audio/new.mp3", "volume": 0.25, "loop": false }),
         ),

@@ -100,6 +100,26 @@ fn scorm12_lms_status_table_maps_every_option_and_status_with_zero_violations() 
         (LmsStatus::Auto, CompletionStatus::Completed, "completed"),
         (LmsStatus::Auto, CompletionStatus::Incomplete, "incomplete"),
         (
+            LmsStatus::AutoKeepCompleted,
+            CompletionStatus::Passed,
+            "passed",
+        ),
+        (
+            LmsStatus::AutoKeepCompleted,
+            CompletionStatus::Failed,
+            "failed",
+        ),
+        (
+            LmsStatus::AutoKeepCompleted,
+            CompletionStatus::Completed,
+            "completed",
+        ),
+        (
+            LmsStatus::AutoKeepCompleted,
+            CompletionStatus::Incomplete,
+            "incomplete",
+        ),
+        (
             LmsStatus::PassedIncomplete,
             CompletionStatus::Passed,
             "passed",
@@ -220,6 +240,7 @@ fn scorm12_lms_status_table_maps_every_option_and_status_with_zero_violations() 
 fn scorm2004_output_is_identical_for_every_lms_status_option() {
     let options = [
         LmsStatus::Auto,
+        LmsStatus::AutoKeepCompleted,
         LmsStatus::PassedIncomplete,
         LmsStatus::PassedFailed,
         LmsStatus::CompletedIncomplete,
@@ -412,6 +433,7 @@ fn m31_15_scorm12_resume_protects_status_across_all_five_modes() {
     let state = PlayerState::default();
     let modes = [
         (LmsStatus::Auto, "passed"),
+        (LmsStatus::AutoKeepCompleted, "passed"),
         (LmsStatus::PassedIncomplete, "passed"),
         (LmsStatus::PassedFailed, "passed"),
         (LmsStatus::CompletedIncomplete, "completed"),

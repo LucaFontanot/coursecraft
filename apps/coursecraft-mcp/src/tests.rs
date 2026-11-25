@@ -530,3 +530,59 @@ fn m31_06_mcp_startup_open_folder_and_course_json_with_media_preserve_media() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn tr_14_mcp_command_list_and_run_course_set_tracking() {
+    let mut host = HeadlessHost::new(Session::blank("TR-14 MCP Tracking"), None);
+
+    let messages = vec![
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "command_list",
+                "arguments": {}
+            }
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "command_run",
+                "arguments": {
+                    "id": "course.set_tracking",
+                    "params": {
+                        "slides_viewed": { "mode": "at_least", "count": 2 },
+                        "quiz": { "slide": null }
+                    }
+                }
+            }
+        }),
+    ];
+
+    let responses = run_mcp_exchange(&messages, &mut host);
+    assert_eq!(responses.len(), 2);
+
+    let list_res = &responses[0]["result"];
+    assert!(list_res["isError"].is_null() || list_res["isError"] == false);
+    let list_text = list_res["content"][0]["text"].as_str().expect("list text");
+    assert!(
+        list_text.contains("course.set_tracking"),
+        "command_list must include course.set_tracking"
+    );
+
+    let run_res = &responses[1]["result"];
+    assert!(run_res["isError"].is_null() || run_res["isError"] == false);
+    let run_text = run_res["content"][0]["text"].as_str().expect("run text");
+    assert!(run_text.contains("tracking"), "got: {run_text}");
+    assert!(run_text.contains("at_least"), "got: {run_text}");
+    assert_eq!(
+        host.session.course.tracking,
+        coursecraft_course::TrackingSettings {
+            slides_viewed: Some(coursecraft_course::SlidesViewedTracking::AtLeast { count: 2 }),
+            quiz: Some(coursecraft_course::QuizTracking { slide: None }),
+        }
+    );
+}

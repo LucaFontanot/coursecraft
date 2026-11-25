@@ -27,7 +27,7 @@ mod tests;
 
 pub use flavor::Flavor;
 pub use launch::{LaunchError, LaunchParams};
-pub use package::{PackageSpec, activity_id_for, cmi5_xml, tincan_xml};
+pub use package::{MoveOn, PackageSpec, activity_id_for, cmi5_xml, tincan_xml};
 pub use statements::{AnsweredInput, StatementContext};
 
 /// Maximum launch-query length accepted by [`LaunchParams::parse`].

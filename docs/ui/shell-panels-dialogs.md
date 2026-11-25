@@ -133,7 +133,7 @@ New Slide ▸, New Scene, Apply Layout ▸, Duplicate, Delete, Rename, Move to S
 | Insert Slide | New Slide ▾ | `slides::show_new_slide_popup`, `interaction_gallery.rs` | 🟡 one dialog with filters (Type, In Use), search, sort, preview pane, multi-select |
 | Insert Question | New Slide › Graded/Survey/Custom | `toolbar::insert_question` | 🟡 same dialog, question tiles |
 | Player Properties | Home › Player | `course_settings.rs` | 🟡 own ribbon (Features, Menu, Resources, Glossary, Colors & Effects, Text Labels, Other) and live preview |
-| Publish | Home › Publish | `publish.rs` | 🟡 left list: Share for Review 🚫, Web ✅, Video ✅, Word ✅, LMS (SCORM 1.2, SCORM 2004, cmi5, xAPI) ✅; Properties links (Player, Quality, Publish scope, Tracking) |
+| Publish | Home › Publish | `publish.rs` | 🟡 left list: Share for Review 🚫, Web ✅, Video ✅, Word ✅, LMS (SCORM 1.2, SCORM 2004, cmi5, xAPI, LTI 1.3) ✅; Tracking controls (`tracking_ui.rs`) ✅; SCORM 1.2 Report status as, six choices with a hint for the two Automatic ones ✅; Properties links (Player, Quality, Publish scope) |
 | Font, Paragraph | ↘ launchers | Text settings panel (`panels.rs`) | 🟡 caps, highlight, underline styles, tab stops, columns to come ([panels.md](panels.md)) |
 | Size and Position | ↘ launcher, context menu | the Size and Position panel | 🟡 built and opened from Animations; the context menu entry is still to do |
 | Find and Replace | Home › Find / Replace | `find.rs` | ✅ |

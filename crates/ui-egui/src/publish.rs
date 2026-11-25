@@ -263,7 +263,7 @@ pub fn show_publish_dialog(
         let available = editor.publish_available;
         let missing_media = editor.missing_media();
         dialog.body(|ui| {
-            ui.set_max_width(430.0);
+            ui.set_max_width(390.0);
             ui.label(
                 small(editor.session.course.title.clone())
                     .size(SIZE_BODY)
@@ -277,6 +277,23 @@ pub fn show_publish_dialog(
             }
 
             show_standards(editor, ui, busy);
+
+            ui.separator();
+            ui.add_space(SPACE_SM);
+            if editor.ui.publish.standard == PublishStandard::Web {
+                ui.label(
+                    small(tl!("Web packages do not report completion to an LMS."))
+                        .color(p.text_secondary),
+                );
+            } else {
+                ui.label(
+                    RichText::new(tl!("Tracking"))
+                        .size(SIZE_BODY)
+                        .strong()
+                        .color(p.text),
+                );
+                crate::tracking_ui::show_tracking_controls(editor, ui, !busy, "publish_tracking");
+            }
 
             let warnings = editor.ui.validation_warnings;
             let audit_errors = editor
@@ -421,21 +438,39 @@ pub fn show_publish_dialog(
 const LMS_STATUS_TOOLTIP: &str =
     "What CourseCraft sends to the LMS when the learner finishes. Match what your LMS expects.";
 
-const LMS_STATUS_OPTIONS: [LmsStatus; 5] = [
+const LMS_STATUS_OPTIONS: [LmsStatus; 6] = [
     LmsStatus::Auto,
+    LmsStatus::AutoKeepCompleted,
     LmsStatus::PassedIncomplete,
     LmsStatus::PassedFailed,
     LmsStatus::CompletedIncomplete,
     LmsStatus::CompletedFailed,
 ];
 
-fn lms_status_label(status: LmsStatus) -> &'static str {
+fn lms_status_label(status: LmsStatus) -> String {
     match status {
-        LmsStatus::Auto => "Automatic",
-        LmsStatus::PassedIncomplete => "Passed / Incomplete",
-        LmsStatus::PassedFailed => "Passed / Failed",
-        LmsStatus::CompletedIncomplete => "Completed / Incomplete",
-        LmsStatus::CompletedFailed => "Completed / Failed",
+        LmsStatus::Auto => tl!("Automatic (quiz result wins)"),
+        LmsStatus::AutoKeepCompleted => tl!("Automatic (completion stays)"),
+        LmsStatus::PassedIncomplete => tl!("Passed / Incomplete"),
+        LmsStatus::PassedFailed => tl!("Passed / Failed"),
+        LmsStatus::CompletedIncomplete => tl!("Completed / Incomplete"),
+        LmsStatus::CompletedFailed => tl!("Completed / Failed"),
+    }
+    .to_owned()
+}
+
+fn lms_status_hint(status: LmsStatus) -> Option<String> {
+    match status {
+        LmsStatus::Auto => Some(
+            tl!("A failed quiz shows as failed, even after the course was completed.").to_owned(),
+        ),
+        LmsStatus::AutoKeepCompleted => Some(
+            tl!(
+                "Once completed, the course stays completed; a failed quiz still records its score."
+            )
+            .to_owned(),
+        ),
+        _ => None,
     }
 }
 
@@ -486,6 +521,9 @@ fn show_standards(editor: &mut Editor, ui: &mut egui::Ui, busy: bool) {
                 .on_hover_text(LMS_STATUS_TOOLTIP)
                 .on_disabled_hover_text("Wait for publishing to finish");
             });
+            if let Some(hint) = lms_status_hint(selected) {
+                ui.label(small(&hint).color(p.text_secondary));
+            }
         })
         .response
         .on_disabled_hover_text("Wait for publishing to finish");

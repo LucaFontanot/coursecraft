@@ -22,7 +22,7 @@ use coursecraft_course::{
     ObjectKind, SlideContainer, TextRun, TextStyle, visit_course_media,
 };
 use coursecraft_scorm::Standard;
-use coursecraft_xapi::{Flavor, PackageSpec, cmi5_xml, tincan_xml};
+use coursecraft_xapi::{Flavor, MoveOn, PackageSpec, cmi5_xml, tincan_xml};
 
 #[cfg(test)]
 mod tests;
@@ -374,10 +374,27 @@ fn build_package_entries(
                 path: PACKAGE_MARKER.to_string(),
                 bytes: Arc::from(marker.into_bytes()),
             });
+            let (move_on, mastery_score) = if course.tracking.is_default() {
+                (MoveOn::Auto, course.quiz.map(|q| q.passing_percent))
+            } else {
+                match (&course.tracking.slides_viewed, &course.tracking.quiz) {
+                    (Some(_), None) => (MoveOn::Completed, None),
+                    (None, Some(_)) => match course.quiz {
+                        Some(q) => (MoveOn::Passed, Some(q.passing_percent)),
+                        None => (MoveOn::Completed, None),
+                    },
+                    (Some(_), Some(_)) => (
+                        MoveOn::CompletedOrPassed,
+                        course.quiz.map(|q| q.passing_percent),
+                    ),
+                    (None, None) => (MoveOn::Auto, course.quiz.map(|q| q.passing_percent)),
+                }
+            };
             let spec = PackageSpec {
                 course_id: course.id.clone(),
                 title: course.title.clone(),
-                mastery_score: course.quiz.as_ref().map(|q| q.passing_percent),
+                mastery_score,
+                move_on,
             };
             let (path, xml) = match flavor {
                 Flavor::Cmi5 => ("cmi5.xml", cmi5_xml(&spec)),
@@ -409,12 +426,19 @@ fn build_package_entries(
         manifest_files.sort();
         manifest_files.dedup();
 
+        let mastery_score =
+            if course.tracking.slides_viewed.is_some() && course.tracking.quiz.is_none() {
+                None
+            } else {
+                course.quiz.map(|q| q.passing_percent)
+            };
+
         let spec = coursecraft_scorm::ManifestSpec {
             identifier: format!("coursecraft.{}", course.id),
             title: course.title.clone(),
             launch: "index.html".to_string(),
             files: manifest_files,
-            mastery_score: course.quiz.as_ref().map(|q| q.passing_percent),
+            mastery_score,
         };
 
         let manifest_xml = match scorm_standard {
