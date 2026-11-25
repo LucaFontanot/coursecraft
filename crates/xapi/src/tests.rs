@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::package::{PackageSpec, activity_id_for, cmi5_xml, tincan_xml};
+use crate::package::{MoveOn, PackageSpec, activity_id_for, cmi5_xml, tincan_xml};
 use crate::{AnsweredInput, Flavor, LaunchError, LaunchParams, StatementContext};
 
 fn encode(value: &str) -> String {
@@ -567,6 +567,7 @@ fn spec() -> PackageSpec {
         course_id: "hello course!".into(),
         title: "A & <B> \"C\"".into(),
         mastery_score: Some(80),
+        move_on: MoveOn::Auto,
     }
 }
 
@@ -613,6 +614,44 @@ fn cmi5_mastery_formats_and_controls_move_on() {
     let xml = cmi5_xml(&spec);
     assert!(xml.contains("moveOn=\"Completed\""));
     assert!(!xml.contains("masteryScore"));
+}
+
+#[test]
+fn tr_12_cmi5_xml_respects_move_on_variants() {
+    let mut auto_with_score = spec();
+    auto_with_score.move_on = MoveOn::Auto;
+    auto_with_score.mastery_score = Some(75);
+    let xml = cmi5_xml(&auto_with_score);
+    assert!(xml.contains("moveOn=\"Passed\""));
+    assert!(xml.contains("masteryScore=\"0.75\""));
+
+    let mut auto_no_score = spec();
+    auto_no_score.move_on = MoveOn::Auto;
+    auto_no_score.mastery_score = None;
+    let xml = cmi5_xml(&auto_no_score);
+    assert!(xml.contains("moveOn=\"Completed\""));
+    assert!(!xml.contains("masteryScore"));
+
+    let mut completed = spec();
+    completed.move_on = MoveOn::Completed;
+    completed.mastery_score = None;
+    let xml = cmi5_xml(&completed);
+    assert!(xml.contains("moveOn=\"Completed\""));
+    assert!(!xml.contains("masteryScore"));
+
+    let mut passed = spec();
+    passed.move_on = MoveOn::Passed;
+    passed.mastery_score = Some(80);
+    let xml = cmi5_xml(&passed);
+    assert!(xml.contains("moveOn=\"Passed\""));
+    assert!(xml.contains("masteryScore=\"0.8\""));
+
+    let mut both = spec();
+    both.move_on = MoveOn::CompletedOrPassed;
+    both.mastery_score = Some(80);
+    let xml = cmi5_xml(&both);
+    assert!(xml.contains("moveOn=\"CompletedOrPassed\""));
+    assert!(xml.contains("masteryScore=\"0.8\""));
 }
 
 #[test]
