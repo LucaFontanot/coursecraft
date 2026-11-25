@@ -578,4 +578,11 @@ fn tr_14_mcp_command_list_and_run_course_set_tracking() {
     let run_text = run_res["content"][0]["text"].as_str().expect("run text");
     assert!(run_text.contains("tracking"), "got: {run_text}");
     assert!(run_text.contains("at_least"), "got: {run_text}");
+    assert_eq!(
+        host.session.course.tracking,
+        coursecraft_course::TrackingSettings {
+            slides_viewed: Some(coursecraft_course::SlidesViewedTracking::AtLeast { count: 2 }),
+            quiz: Some(coursecraft_course::QuizTracking { slide: None }),
+        }
+    );
 }

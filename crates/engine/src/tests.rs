@@ -15331,13 +15331,22 @@ fn tr_13_course_set_tracking_sets_clears_and_undoes() {
 #[test]
 fn tr_13_course_set_tracking_rejects_invalid_params() {
     let mut s = Session::blank("Tracking Invalid Test");
+    let overlong_id = "a".repeat(65);
     for bad_params in [
+        json!(null),
+        json!([]),
         json!({}),
         json!({ "extra": 1 }),
+        json!({ "slides_viewed": { "mode": "all", "extra": 1 } }),
+        json!({ "slides_viewed": { "mode": "all", "count": 3 } }),
+        json!({ "slides_viewed": { "mode": "at_least", "count": 2, "extra": 1 } }),
         json!({ "slides_viewed": { "mode": "at_least", "count": 0 } }),
         json!({ "slides_viewed": { "mode": "at_least", "count": -1 } }),
+        json!({ "quiz": { "slide": null, "extra": 1 } }),
         json!({ "quiz": { "slide": "" } }),
         json!({ "quiz": { "slide": "bad id" } }),
+        json!({ "quiz": { "slide": overlong_id } }),
+        json!({ "slides_viewed": { "mode": "all" }, "quiz": { "slide": "bad id" } }),
     ] {
         let err = s
             .execute("course.set_tracking", &bad_params)
@@ -15346,5 +15355,11 @@ fn tr_13_course_set_tracking_rejects_invalid_params() {
             matches!(err, crate::EngineError::BadParams { .. }),
             "expected BadParams for {bad_params}, got {err:?}"
         );
+        assert_eq!(
+            s.course.tracking,
+            coursecraft_course::TrackingSettings::default(),
+            "failed command must not partially mutate tracking for {bad_params}"
+        );
+        assert_eq!(s.undo_len(), 0);
     }
 }

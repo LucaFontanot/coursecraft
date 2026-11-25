@@ -270,6 +270,15 @@ pub(super) fn course_set_tracking(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             let sv: SlidesViewedTracking = serde_json::from_value(val.clone())
                 .map_err(|e| bad(C, format!("`slides_viewed`: {e}")))?;
+            if matches!(sv, SlidesViewedTracking::All)
+                && let Some(sv_map) = val.as_object()
+                && let Some(extra) = sv_map.keys().find(|k| k.as_str() != "mode")
+            {
+                return Err(bad(
+                    C,
+                    format!("`slides_viewed`: unknown field `{extra}` for mode `all`"),
+                ));
+            }
             if matches!(sv, SlidesViewedTracking::AtLeast { count: 0 }) {
                 return Err(bad(C, "`slides_viewed.count` must be at least 1"));
             }

@@ -2301,4 +2301,115 @@ fn tr_14_cli_tracking_run_validate_simulate_and_diff() {
         sim_stdout.contains("\"completion\"") && sim_stdout.contains("\"completed\""),
         "expected Completion/Completed in simulate output: {sim_stdout}"
     );
+
+    // 5. Simulate verifies quiz-result tracking completion effects (no submit_results trigger).
+    let quiz_course = serde_json::json!({
+        "schema_version": 1,
+        "id": "tr14-quiz",
+        "title": "TR14 Quiz",
+        "quiz": { "passing_percent": 80 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "q1",
+                "title": "Question 1",
+                "objects": [
+                    {
+                        "id": "btn-submit",
+                        "kind": { "type": "button", "label": "Submit" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 40.0 }
+                    }
+                ],
+                "question": {
+                    "kind": "multiple_choice",
+                    "prompt": "Pick right",
+                    "choices": [
+                        { "id": "a", "text": "Wrong" },
+                        { "id": "b", "text": "Right", "correct": true }
+                    ],
+                    "points": 10,
+                    "attempts": 1
+                },
+                "triggers": [
+                    {
+                        "action": { "action": "submit_question" },
+                        "when": { "event": "click", "object": "btn-submit" }
+                    }
+                ]
+            }]
+        }]
+    });
+    let quiz_path = dir.join("quiz.json");
+    std::fs::write(&quiz_path, quiz_course.to_string()).expect("write quiz course");
+    let quiz_script = dir.join("quiz.script.json");
+    std::fs::write(
+        &quiz_script,
+        r#"[{"command":"course.set_tracking","params":{"quiz":{}}}]"#,
+    )
+    .expect("write quiz script");
+    let quiz_out = dir.join("quiz_out.json");
+    let code = run(Cli {
+        cmd: Cmd::Run {
+            course: quiz_path,
+            script: quiz_script,
+            out: quiz_out.clone(),
+        },
+    })
+    .expect("run quiz tracking script");
+    assert_eq!(code, ExitCode::SUCCESS);
+
+    let pass_inputs = dir.join("quiz_pass.inputs.json");
+    std::fs::write(
+        &pass_inputs,
+        r#"[{"input":"start"},{"input":"select_choice","choice":"b"},{"input":"click","object":"btn-submit"}]"#,
+    )
+    .expect("write quiz pass inputs");
+    let mut quiz_sim_out = Vec::new();
+    let mut quiz_sim_err = Vec::new();
+    let quiz_sim_code = run_simulate(
+        &quiz_out,
+        &pass_inputs,
+        0,
+        false,
+        &mut quiz_sim_out,
+        &mut quiz_sim_err,
+    )
+    .expect("simulate quiz tracking pass");
+    assert_eq!(quiz_sim_code, ExitCode::SUCCESS);
+    let quiz_sim_stdout = String::from_utf8(quiz_sim_out).expect("utf8 quiz simulate output");
+    assert!(
+        quiz_sim_stdout.contains("\"score\"")
+            && quiz_sim_stdout.contains("\"percent\":100")
+            && quiz_sim_stdout.contains("\"completion\"")
+            && quiz_sim_stdout.contains("\"passed\""),
+        "expected Score(100) + Completion(Passed) in quiz simulate output: {quiz_sim_stdout}"
+    );
+
+    let fail_inputs = dir.join("quiz_fail.inputs.json");
+    std::fs::write(
+        &fail_inputs,
+        r#"[{"input":"start"},{"input":"select_choice","choice":"a"},{"input":"click","object":"btn-submit"}]"#,
+    )
+    .expect("write quiz fail inputs");
+    let mut quiz_fail_out = Vec::new();
+    let mut quiz_fail_err = Vec::new();
+    let quiz_fail_code = run_simulate(
+        &quiz_out,
+        &fail_inputs,
+        0,
+        false,
+        &mut quiz_fail_out,
+        &mut quiz_fail_err,
+    )
+    .expect("simulate quiz tracking fail");
+    assert_eq!(quiz_fail_code, ExitCode::SUCCESS);
+    let quiz_fail_stdout = String::from_utf8(quiz_fail_out).expect("utf8 quiz fail output");
+    assert!(
+        quiz_fail_stdout.contains("\"score\"")
+            && quiz_fail_stdout.contains("\"percent\":0")
+            && quiz_fail_stdout.contains("\"completion\"")
+            && quiz_fail_stdout.contains("\"failed\""),
+        "expected Score(0) + Completion(Failed) in quiz fail simulate output: {quiz_fail_stdout}"
+    );
 }
