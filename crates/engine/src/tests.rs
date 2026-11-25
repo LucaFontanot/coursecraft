@@ -12615,10 +12615,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 24_336, "registry golden table byte length");
+    assert_eq!(table.len(), 24_343, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        0xdc61_5cf1_56dd_4f3d,
+        0x65da_d08d_988d_ef68,
         "registry golden table FNV-1a hash"
     );
 }
@@ -15237,4 +15237,336 @@ fn gb_15_slide_duplicate_remaps_interactive_group_triggers() {
     assert_eq!(s.course, before_course);
 
     gb_15_assert_no_group_slide_duplicate_identical();
+}
+
+#[test]
+fn autofit_grow_add_text_set_paragraphs_and_undo() {
+    let mut s = Session::blank("Grow Test");
+    let sid = s.course.scenes[0].slides[0].id.clone();
+
+    // 1. object.add with autofit = "grow": fits height headlessly, keeps width fixed, 1 undo step.
+    let undo0 = s.undo_len();
+    let res = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": sid,
+            "id": "grow1",
+            "frame": { "x": 100.0, "y": 120.0, "w": 220.0, "h": 40.0 },
+            "kind": {
+                "type": "text",
+                "text": "One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen",
+                "autofit": "grow",
+                "style": { "size": 20.0, "wrap": true }
+            }
+        }),
+    );
+    assert_eq!(res["id"], "grow1");
+    assert_eq!(s.undo_len(), undo0 + 1);
+
+    let frame_after_add = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(
+        frame_after_add.w, 220.0,
+        "object.add must keep Grow width fixed"
+    );
+    assert!(
+        frame_after_add.h > 80.0,
+        "object.add must refit Grow height to wrapped text, got {}",
+        frame_after_add.h
+    );
+
+    // 2. text.set to short text shrinks height back (never smaller than one line); width unchanged; 1 undo step.
+    let undo_before_short = s.undo_len();
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": sid, "object": "grow1", "text": "Hi" }),
+    );
+    assert_eq!(s.undo_len(), undo_before_short + 1);
+    let frame_short = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(frame_short.w, 220.0, "text.set must keep Grow width fixed");
+    assert!(
+        frame_short.h < frame_after_add.h * 0.5 && frame_short.h >= 20.0,
+        "text.set short text must shrink Grow height to ~1 line, got {}",
+        frame_short.h
+    );
+
+    // Empty text stays at least one line tall.
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": sid, "object": "grow1", "text": "" }),
+    );
+    let frame_empty = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(frame_empty.w, 220.0);
+    assert!(
+        frame_empty.h >= 20.0,
+        "empty Grow box must never shrink below one line, got {}",
+        frame_empty.h
+    );
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(
+        s.course
+            .slide(&sid)
+            .unwrap()
+            .object("grow1")
+            .unwrap()
+            .0
+            .frame,
+        frame_short,
+        "1-step undo must restore previous Grow height"
+    );
+
+    // 3. text.set_paragraphs (line_spacing + space_before + space_after) refits height; width unchanged.
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": sid, "object": "grow1", "text": "Line one\nLine two" }),
+    );
+    let frame_two = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(frame_two.w, 220.0);
+    assert!(frame_two.h > frame_short.h * 1.5);
+
+    let undo_para = s.undo_len();
+    ok(
+        &mut s,
+        "text.set_paragraphs",
+        json!({
+            "slide": sid,
+            "object": "grow1",
+            "line_spacing": 2.0,
+            "space_before": 10.0,
+            "space_after": 10.0
+        }),
+    );
+    assert_eq!(s.undo_len(), undo_para + 1);
+    let frame_spaced = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(frame_spaced.w, 220.0);
+    assert!(
+        frame_spaced.h > frame_two.h + 40.0,
+        "text.set_paragraphs must refit Grow height: spaced={} vs two={}",
+        frame_spaced.h,
+        frame_two.h
+    );
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(
+        s.course
+            .slide(&sid)
+            .unwrap()
+            .object("grow1")
+            .unwrap()
+            .0
+            .frame,
+        frame_two
+    );
+}
+
+#[test]
+fn autofit_grow_apply_style_set_autofit_and_hostile() {
+    use coursecraft_course::{Autofit, ObjectKind};
+
+    let mut s = Session::blank("Grow Style Test");
+    let sid = s.course.scenes[0].slides[0].id.clone();
+
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": sid,
+            "id": "grow1",
+            "frame": { "x": 100.0, "y": 120.0, "w": 220.0, "h": 40.0 },
+            "kind": {
+                "type": "text",
+                "text": "Line one\nLine two",
+                "autofit": "grow",
+                "style": { "size": 20.0, "wrap": true }
+            }
+        }),
+    );
+    let frame_two = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+
+    // 1. object.apply_style from a larger-font source refits Grow height; width unchanged.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": sid,
+            "id": "big-src",
+            "frame": { "x": 400.0, "y": 100.0, "w": 300.0, "h": 80.0 },
+            "kind": {
+                "type": "text",
+                "text": "Big",
+                "style": { "size": 48.0, "bold": true }
+            }
+        }),
+    );
+    let undo_style = s.undo_len();
+    ok(
+        &mut s,
+        "object.apply_style",
+        json!({ "slide": sid, "source_slide": sid, "source": "big-src", "object": "grow1" }),
+    );
+    assert_eq!(s.undo_len(), undo_style + 1);
+    let frame_styled = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(
+        frame_styled.w, 220.0,
+        "object.apply_style must keep Grow width fixed"
+    );
+    assert!(
+        frame_styled.h > frame_two.h * 1.8,
+        "object.apply_style with 48pt must grow height: styled={} vs two={}",
+        frame_styled.h,
+        frame_two.h
+    );
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(
+        s.course
+            .slide(&sid)
+            .unwrap()
+            .object("grow1")
+            .unwrap()
+            .0
+            .frame,
+        frame_two
+    );
+
+    // 2. object.set_autofit switching a None box -> Grow refits height in 1 undo step.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": sid,
+            "id": "area-none",
+            "frame": { "x": 100.0, "y": 300.0, "w": 180.0, "h": 30.0 },
+            "kind": {
+                "type": "text",
+                "text": "A long wrapping sentence that definitely does not fit in thirty pixels of height at width 180"
+            }
+        }),
+    );
+    let undo_af = s.undo_len();
+    ok(
+        &mut s,
+        "object.set_autofit",
+        json!({ "slide": sid, "object": "area-none", "autofit": "grow" }),
+    );
+    assert_eq!(s.undo_len(), undo_af + 1);
+    let (obj_af, _) = s.course.slide(&sid).unwrap().object("area-none").unwrap();
+    assert_eq!(obj_af.frame.w, 180.0);
+    assert!(obj_af.frame.h > 80.0);
+    assert!(matches!(
+        obj_af.kind,
+        ObjectKind::Text {
+            autofit: Autofit::Grow,
+            point_text: false,
+            ..
+        }
+    ));
+    ok(&mut s, "edit.undo", json!({}));
+    let (obj_af_undone, _) = s.course.slide(&sid).unwrap().object("area-none").unwrap();
+    assert_eq!(obj_af_undone.frame.h, 30.0);
+    assert!(matches!(
+        obj_af_undone.kind,
+        ObjectKind::Text {
+            autofit: Autofit::None,
+            ..
+        }
+    ));
+
+    // 3. Hostile inputs (huge measured_size, long repeating text) stay finite and clamped.
+    ok(
+        &mut s,
+        "text.set",
+        json!({
+            "slide": sid,
+            "object": "grow1",
+            "text": "Word ".repeat(600),
+            "measured_size": { "w": 99999999.0, "h": 99999999.0 }
+        }),
+    );
+    let hostile_frame = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(hostile_frame.w, 220.0);
+    assert!(hostile_frame.h.is_finite() && hostile_frame.h <= 10_000.0 && hostile_frame.h >= 1.0);
+
+    // Negative/zero measured_size falls back cleanly to headless measurement.
+    ok(
+        &mut s,
+        "text.set",
+        json!({
+            "slide": sid,
+            "object": "grow1",
+            "text": "Fallback line",
+            "measured_size": { "w": -50.0, "h": 0.0 }
+        }),
+    );
+    let fallback_frame = s
+        .course
+        .slide(&sid)
+        .unwrap()
+        .object("grow1")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(fallback_frame.w, 220.0);
+    assert!(
+        fallback_frame.h.is_finite() && fallback_frame.h >= 20.0 && fallback_frame.h < 60.0,
+        "fallback headless height should be ~1 line, got {}",
+        fallback_frame.h
+    );
 }

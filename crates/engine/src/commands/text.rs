@@ -8,7 +8,7 @@ use coursecraft_course::{
 };
 use coursecraft_media::text_metrics::{
     MeasuredRun, POINT_TEXT_MAX_DIM, POINT_TEXT_MIN_W, ParagraphMetrics, TextBoxInsets,
-    measure_unwrapped_text, point_text_box_size,
+    grow_text_box_height, measure_unwrapped_text, measure_wrapped_text_height, point_text_box_size,
 };
 use serde_json::Value as Json;
 
@@ -47,6 +47,65 @@ fn script_scale_for(baseline: Baseline) -> f32 {
     }
 }
 
+fn build_measured_runs<'a>(
+    text: &'a str,
+    runs: &'a [TextRun],
+    style: &TextStyle,
+) -> Vec<MeasuredRun<'a>> {
+    if runs.is_empty() {
+        vec![MeasuredRun {
+            text,
+            size: style.size,
+            bold: style.bold,
+            italic: style.italic,
+            letter_spacing: style.letter_spacing,
+            script_scale: script_scale_for(style.baseline),
+        }]
+    } else {
+        runs.iter()
+            .map(|run| MeasuredRun {
+                text: &run.text,
+                size: run.size.unwrap_or(style.size),
+                bold: run.bold.unwrap_or(style.bold),
+                italic: run.italic.unwrap_or(style.italic),
+                letter_spacing: run.letter_spacing.unwrap_or(style.letter_spacing),
+                script_scale: script_scale_for(run.baseline.unwrap_or(style.baseline)),
+            })
+            .collect()
+    }
+}
+
+fn build_paragraph_metrics(paragraphs: &[Paragraph]) -> Vec<ParagraphMetrics> {
+    paragraphs
+        .iter()
+        .map(|p| {
+            let level = f32::from(p.level.min(4));
+            let list_indent = if p.list == ListKind::None {
+                level * LIST_INDENT_STEP
+            } else {
+                (level + 1.0) * LIST_INDENT_STEP
+            };
+            ParagraphMetrics {
+                line_spacing: p.line_spacing,
+                space_before: p.space_before,
+                space_after: p.space_after,
+                list_indent,
+            }
+        })
+        .collect()
+}
+
+fn box_insets(style: &TextStyle) -> TextBoxInsets {
+    style
+        .insets
+        .map_or(TextBoxInsets::ZERO, |ins| TextBoxInsets {
+            left: ins.left,
+            top: ins.top,
+            right: ins.right,
+            bottom: ins.bottom,
+        })
+}
+
 /// Fit `frame` to unwrapped point text content using `measured_override` when
 /// supplied and valid, or `coursecraft-media`'s headless `skrifa` metrics
 /// otherwise. Keeps `(frame.x, frame.y)` fixed when `anchor_top_left` is true
@@ -66,52 +125,9 @@ pub(super) fn fit_point_text_frame(
             h.ceil().clamp(1.0, POINT_TEXT_MAX_DIM),
         ),
         _ => {
-            let measured_runs: Vec<MeasuredRun<'_>> = if runs.is_empty() {
-                vec![MeasuredRun {
-                    text,
-                    size: style.size,
-                    bold: style.bold,
-                    italic: style.italic,
-                    letter_spacing: style.letter_spacing,
-                    script_scale: script_scale_for(style.baseline),
-                }]
-            } else {
-                runs.iter()
-                    .map(|run| MeasuredRun {
-                        text: &run.text,
-                        size: run.size.unwrap_or(style.size),
-                        bold: run.bold.unwrap_or(style.bold),
-                        italic: run.italic.unwrap_or(style.italic),
-                        letter_spacing: run.letter_spacing.unwrap_or(style.letter_spacing),
-                        script_scale: script_scale_for(run.baseline.unwrap_or(style.baseline)),
-                    })
-                    .collect()
-            };
-            let para_metrics: Vec<ParagraphMetrics> = paragraphs
-                .iter()
-                .map(|p| {
-                    let level = f32::from(p.level.min(4));
-                    let list_indent = if p.list == ListKind::None {
-                        level * LIST_INDENT_STEP
-                    } else {
-                        (level + 1.0) * LIST_INDENT_STEP
-                    };
-                    ParagraphMetrics {
-                        line_spacing: p.line_spacing,
-                        space_before: p.space_before,
-                        space_after: p.space_after,
-                        list_indent,
-                    }
-                })
-                .collect();
-            let insets = style
-                .insets
-                .map_or(TextBoxInsets::ZERO, |ins| TextBoxInsets {
-                    left: ins.left,
-                    top: ins.top,
-                    right: ins.right,
-                    bottom: ins.bottom,
-                });
+            let measured_runs = build_measured_runs(text, runs, style);
+            let para_metrics = build_paragraph_metrics(paragraphs);
+            let insets = box_insets(style);
             let vertical = !matches!(style.direction, TextDirection::Horizontal);
             let (content_w, content_h) =
                 measure_unwrapped_text(&measured_runs, &para_metrics, style.size);
@@ -159,6 +175,75 @@ pub(super) fn fit_point_text_frame(
         0.0
     };
     frame.w = new_w.round().clamp(1.0, POINT_TEXT_MAX_DIM);
+    frame.h = new_h.round().clamp(1.0, POINT_TEXT_MAX_DIM);
+}
+
+/// Fit `frame.h` (keeping `frame.x` and `frame.w` unchanged) to wrapped text
+/// content for `Autofit::Grow`, using `measured_override` when supplied and
+/// valid or `coursecraft-media`'s headless `skrifa` metrics otherwise.
+/// Keeps `frame.y` fixed when `anchor_top_left` is true and preserves
+/// `style.valign` anchoring on subsequent edits.
+pub(super) fn fit_grow_text_frame(
+    frame: &mut Rect,
+    text: &str,
+    runs: &[TextRun],
+    style: &TextStyle,
+    paragraphs: &[Paragraph],
+    measured_override: Option<(f32, f32)>,
+    anchor_top_left: bool,
+) {
+    let new_h = match measured_override {
+        Some((_, h)) if h.is_finite() && h > 0.0 => h.ceil().clamp(1.0, POINT_TEXT_MAX_DIM),
+        _ => {
+            let measured_runs = build_measured_runs(text, runs, style);
+            let para_metrics = build_paragraph_metrics(paragraphs);
+            let insets = box_insets(style);
+            let box_w = if frame.w.is_finite() && frame.w > 0.0 {
+                frame.w.clamp(1.0, POINT_TEXT_MAX_DIM)
+            } else {
+                POINT_TEXT_MIN_W
+            };
+            let left_ins = if insets.left.is_finite() {
+                insets.left.max(0.0).min(box_w * 0.45)
+            } else {
+                0.0
+            };
+            let right_ins = if insets.right.is_finite() {
+                insets.right.max(0.0).min(box_w * 0.45)
+            } else {
+                0.0
+            };
+            let inner_w = (box_w - left_ins - right_ins).max(1.0);
+            let content_h = if style.wrap {
+                measure_wrapped_text_height(&measured_runs, &para_metrics, style.size, inner_w)
+            } else {
+                measure_unwrapped_text(&measured_runs, &para_metrics, style.size).1
+            };
+            grow_text_box_height(content_h, insets)
+        }
+    };
+
+    let old_y = if frame.y.is_finite() { frame.y } else { 0.0 };
+    let old_h = if frame.h.is_finite() && frame.h > 0.0 {
+        frame.h
+    } else {
+        new_h
+    };
+    let next_y = if anchor_top_left {
+        old_y
+    } else {
+        match style.valign {
+            VAlign::Top => old_y,
+            VAlign::Middle => old_y + (old_h - new_h) * 0.5,
+            VAlign::Bottom => old_y + (old_h - new_h),
+        }
+    };
+
+    frame.y = if next_y.is_finite() {
+        next_y.round()
+    } else {
+        0.0
+    };
     frame.h = new_h.round().clamp(1.0, POINT_TEXT_MAX_DIM);
 }
 
@@ -305,19 +390,32 @@ pub(super) fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
         style,
         runs,
         paragraphs,
-        point_text: true,
+        autofit,
+        point_text,
         ..
     } = &obj.kind
     {
-        fit_point_text_frame(
-            &mut obj.frame,
-            text,
-            runs,
-            style,
-            paragraphs,
-            parse_measured_size(p),
-            false,
-        );
+        if *point_text {
+            fit_point_text_frame(
+                &mut obj.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                parse_measured_size(p),
+                false,
+            );
+        } else if *autofit == Autofit::Grow {
+            fit_grow_text_frame(
+                &mut obj.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                parse_measured_size(p),
+                false,
+            );
+        }
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
@@ -398,12 +496,16 @@ pub(super) fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
         style,
         runs,
         paragraphs,
-        point_text: true,
+        autofit,
+        point_text,
         ..
     } = &obj.kind
-        && !style.wrap
     {
-        fit_point_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
+        if *point_text && !style.wrap {
+            fit_point_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
+        } else if !*point_text && *autofit == Autofit::Grow {
+            fit_grow_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
+        }
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
@@ -472,14 +574,21 @@ pub(super) fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
         style,
         runs,
         paragraphs,
+        autofit,
         point_text,
         ..
     } = &mut obj.kind
     {
         if wrap == Some(true) {
             *point_text = false;
-        } else if *point_text && !style.wrap && (insets_val.is_some() || direction.is_some()) {
+        }
+        if *point_text && !style.wrap && (insets_val.is_some() || direction.is_some()) {
             fit_point_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
+        } else if !*point_text
+            && *autofit == Autofit::Grow
+            && (wrap.is_some() || insets_val.is_some() || direction.is_some())
+        {
+            fit_grow_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
         }
     }
     keep_valid(s, was_valid)?;
@@ -563,12 +672,16 @@ pub(super) fn text_set_paragraphs(s: &mut Session, p: &Json) -> Result<Json> {
         style,
         runs,
         paragraphs,
-        point_text: true,
+        autofit,
+        point_text,
         ..
     } = &obj.kind
-        && !style.wrap
     {
-        fit_point_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
+        if *point_text && !style.wrap {
+            fit_point_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
+        } else if !*point_text && *autofit == Autofit::Grow {
+            fit_grow_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
+        }
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
@@ -639,10 +752,27 @@ pub(super) fn object_set_autofit(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(C, "a table cell has no autofit setting"));
     };
     *current = autofit;
-    if autofit == Autofit::Shrink
-        && let ObjectKind::Text { point_text, .. } = &mut obj.kind
+    if matches!(autofit, Autofit::Shrink | Autofit::Grow)
+        && let ObjectKind::Text {
+            point_text, style, ..
+        } = &mut obj.kind
     {
+        if *point_text && autofit == Autofit::Grow {
+            style.wrap = true;
+        }
         *point_text = false;
+    }
+    if autofit == Autofit::Grow
+        && let ObjectKind::Text {
+            text,
+            style,
+            runs,
+            paragraphs,
+            point_text: false,
+            ..
+        } = &obj.kind
+    {
+        fit_grow_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)

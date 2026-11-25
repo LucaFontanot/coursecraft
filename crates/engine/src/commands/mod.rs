@@ -1492,7 +1492,7 @@ static REGISTRY: &[Command] = &[
         label: "Set autofit",
         menu: "",
         shortcut: None,
-        params: r#"{"slide": id, "object": id, "autofit": "none"|"shrink"}"#,
+        params: r#"{"slide": id, "object": id, "autofit": "none"|"shrink"|"grow"}"#,
         mutates: true,
         scope: UndoScope::SingleSlide,
         slide_validation: true,

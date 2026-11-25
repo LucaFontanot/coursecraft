@@ -2841,13 +2841,15 @@ impl Default for Paragraph {
     }
 }
 
-/// How text shrinks when it does not fit its box.
+/// How text or its box adjusts when the text does not fit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Autofit {
     #[default]
     None,
     Shrink,
+    /// Fixed width; box height fits the wrapped text (never smaller than one line).
+    Grow,
 }
 
 fn is_default_autofit(autofit: &Autofit) -> bool {

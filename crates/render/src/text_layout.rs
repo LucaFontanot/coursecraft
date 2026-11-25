@@ -56,7 +56,7 @@ fn valign_tag(valign: VAlign) -> u8 {
 
 fn autofit_tag(autofit: Autofit) -> u8 {
     match autofit {
-        Autofit::None => 0,
+        Autofit::None | Autofit::Grow => 0,
         Autofit::Shrink => 1,
     }
 }
@@ -895,8 +895,25 @@ fn split_paragraphs(runs: &[ResolvedTextRun]) -> Vec<Vec<ResolvedTextRun>> {
             }
         }
     }
+    let mut last_style: Option<ResolvedTextRun> = runs.first().cloned();
     for paragraph in &mut paragraphs {
-        if paragraph.is_empty() {
+        if let Some(last) = paragraph.last() {
+            last_style = Some(last.clone());
+        } else if let Some(template) = &last_style {
+            paragraph.push(ResolvedTextRun {
+                text: " ".to_owned(),
+                size: template.size,
+                color: template.color,
+                bold: template.bold,
+                italic: template.italic,
+                underline: false,
+                font: template.font.clone(),
+                link: None,
+                strikethrough: false,
+                baseline: template.baseline,
+                letter_spacing: template.letter_spacing,
+            });
+        } else {
             paragraph.push(ResolvedTextRun {
                 text: " ".to_owned(),
                 size: FALLBACK_SIZE,

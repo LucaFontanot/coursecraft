@@ -269,6 +269,8 @@ mod text_format_ribbon_tests;
 #[cfg(test)]
 mod text_format_tests;
 #[cfg(test)]
+mod text_resize_tests;
+#[cfg(test)]
 mod timeline_cue_tests;
 #[cfg(test)]
 mod timeline_f23_tests;

@@ -812,71 +812,35 @@ fn show_choice_rows(
     let choices_count = editor.ui.question.choices.len();
     let mut choice_to_remove = None;
     let mut choice_to_swap = None;
+    let per_answer = editor.ui.question.scoring == Scoring::PerAnswer;
+    let has_trailing = per_answer || list_edit;
+    let mut reserve = if list_edit { 170.0 } else { 48.0 };
+    if per_answer {
+        reserve += 64.0;
+    }
+    // Width of the `{cid}.` label plus optional radio/checkbox in single-row mode.
+    let prefix_est = if marks { 70.0 } else { 22.0 };
 
     for idx in 0..choices_count {
-        ui.horizontal(|ui| {
-            let (cid, is_correct) = {
-                let c = &editor.ui.question.choices[idx];
-                (c.id.clone(), c.correct)
-            };
+        let Some((cid, is_correct)) = editor
+            .ui
+            .question
+            .choices
+            .get(idx)
+            .map(|c| (c.id.clone(), c.correct))
+        else {
+            continue;
+        };
+        let row_avail = ui.available_width();
+        let tight = row_avail - prefix_est - reserve < MIN_INLINE_TEXT_WIDTH;
+        let stack = has_trailing && tight;
+        let mut text_indent = 0.0_f32;
 
-            ui.label(RichText::new(format!("{cid}.")).strong());
-
-            if marks && single {
-                if ui
-                    .radio(is_correct, "")
-                    .on_hover_text("Mark as correct choice")
-                    .clicked()
-                    && !is_correct
-                {
-                    for (ci, c) in editor.ui.question.choices.iter_mut().enumerate() {
-                        c.correct = ci == idx;
-                    }
-                    *committed = true;
-                }
-            } else if marks {
-                let mut checked = is_correct;
-                if ui
-                    .checkbox(&mut checked, "")
-                    .on_hover_text("Mark as correct choice")
-                    .changed()
-                {
-                    if let Some(c) = editor.ui.question.choices.get_mut(idx) {
-                        c.correct = checked;
-                    }
-                    *committed = true;
-                }
-            }
-
-            // Leave room for the three reorder/remove buttons so narrow windows never overflow.
-            // hotspot_missing warning + button needs ~700 pt to sit on one line
-            let narrow = ui.available_width() < 700.0;
-            let mut reserve = if list_edit { 170.0 } else { 48.0 };
-            let per_answer = editor.ui.question.scoring == Scoring::PerAnswer;
-            if per_answer {
-                reserve += 64.0;
-            }
-            let text_w = (ui.available_width() - reserve).clamp(40.0, 320.0);
-            let text_committed = {
-                let c = &mut editor.ui.question.choices[idx];
-                show_singleline_text_field(
-                    ui,
-                    &mut c.text,
-                    text_w,
-                    format!("choice_text_{cid}"),
-                    narrow,
-                )
-            };
-            let current = editor.ui.question.choices.get(idx).map(|c| c.text.as_str());
-            let saved = slide
-                .question
-                .as_ref()
-                .and_then(|q| q.choices.get(idx))
-                .map(|c| c.text.as_str());
-            if text_committed && current != saved {
-                *committed = true;
-            }
-
+        let draw_trailing = |ui: &mut Ui,
+                             editor: &mut crate::Editor,
+                             committed: &mut bool,
+                             choice_to_swap: &mut Option<(usize, usize)>,
+                             choice_to_remove: &mut Option<usize>| {
             if per_answer {
                 let saved = slide
                     .question
@@ -884,7 +848,9 @@ fn show_choice_rows(
                     .and_then(|q| q.choices.get(idx))
                     .map(|c| c.points);
                 let pr = {
-                    let c = &mut editor.ui.question.choices[idx];
+                    let Some(c) = editor.ui.question.choices.get_mut(idx) else {
+                        return;
+                    };
                     ui.add(
                         DragValue::new(&mut c.points)
                             .speed(1.0)
@@ -910,7 +876,7 @@ fn show_choice_rows(
                 )
                 .clicked()
                 {
-                    choice_to_swap = Some((idx, idx - 1));
+                    *choice_to_swap = Some((idx, idx - 1));
                 }
                 if icon_button_enabled_reason(
                     ui,
@@ -921,7 +887,7 @@ fn show_choice_rows(
                 )
                 .clicked()
                 {
-                    choice_to_swap = Some((idx, idx + 1));
+                    *choice_to_swap = Some((idx, idx + 1));
                 }
                 let min_choices = if marks { 2 } else { 1 };
                 let can_remove = choices_count > min_choices;
@@ -939,10 +905,112 @@ fn show_choice_rows(
                 )
                 .clicked()
                 {
-                    choice_to_remove = Some(idx);
+                    *choice_to_remove = Some(idx);
                 }
             }
+        };
+
+        ui.horizontal(|ui| {
+            let row_start_x = ui.cursor().min.x;
+            if tight {
+                ui.spacing_mut().item_spacing.x = 4.0;
+            }
+            ui.label(RichText::new(format!("{cid}.")).strong());
+
+            if marks {
+                let prev_interact_x = ui.spacing().interact_size.x;
+                let prev_pad_x = ui.spacing().button_padding.x;
+                if tight {
+                    ui.spacing_mut().interact_size.x = 24.0;
+                    ui.spacing_mut().button_padding.x = 4.0;
+                }
+                if single {
+                    if ui
+                        .radio(is_correct, "")
+                        .on_hover_text("Mark as correct choice")
+                        .clicked()
+                        && !is_correct
+                    {
+                        for (ci, c) in editor.ui.question.choices.iter_mut().enumerate() {
+                            c.correct = ci == idx;
+                        }
+                        *committed = true;
+                    }
+                } else {
+                    let mut checked = is_correct;
+                    if ui
+                        .checkbox(&mut checked, "")
+                        .on_hover_text("Mark as correct choice")
+                        .changed()
+                    {
+                        if let Some(c) = editor.ui.question.choices.get_mut(idx) {
+                            c.correct = checked;
+                        }
+                        *committed = true;
+                    }
+                }
+                ui.spacing_mut().interact_size.x = prev_interact_x;
+                ui.spacing_mut().button_padding.x = prev_pad_x;
+            }
+
+            text_indent = (ui.cursor().min.x - row_start_x).max(0.0);
+
+            // Leave room for the three reorder/remove buttons so narrow windows never overflow.
+            // hotspot_missing warning + button needs ~700 pt to sit on one line
+            let narrow = tight || ui.available_width() < 700.0;
+            let text_w = if tight {
+                f32::INFINITY
+            } else {
+                (ui.available_width() - reserve).clamp(40.0, 320.0)
+            };
+            let text_committed = {
+                let Some(c) = editor.ui.question.choices.get_mut(idx) else {
+                    return;
+                };
+                show_singleline_text_field(
+                    ui,
+                    &mut c.text,
+                    text_w,
+                    format!("choice_text_{cid}"),
+                    narrow,
+                )
+            };
+            let current = editor.ui.question.choices.get(idx).map(|c| c.text.as_str());
+            let saved = slide
+                .question
+                .as_ref()
+                .and_then(|q| q.choices.get(idx))
+                .map(|c| c.text.as_str());
+            if text_committed && current != saved {
+                *committed = true;
+            }
+
+            if !stack {
+                draw_trailing(
+                    ui,
+                    editor,
+                    committed,
+                    &mut choice_to_swap,
+                    &mut choice_to_remove,
+                );
+            }
         });
+
+        if stack {
+            ui.horizontal(|ui| {
+                if text_indent > 0.0 {
+                    ui.add_space(text_indent);
+                }
+                draw_trailing(
+                    ui,
+                    editor,
+                    committed,
+                    &mut choice_to_swap,
+                    &mut choice_to_remove,
+                );
+            });
+            ui.add_space(4.0);
+        }
     }
 
     if let Some((i1, i2)) = choice_to_swap {
@@ -989,27 +1057,8 @@ fn show_fill_in(
 
     let mut remove = None;
     for idx in 0..n {
-        ui.horizontal(|ui| {
-            let text_w = (ui.available_width() - 48.0).clamp(100.0, 360.0);
-            let response = {
-                let Some(slot) = editor.ui.question.accepted.get_mut(idx) else {
-                    return;
-                };
-                ui.add(
-                    TextEdit::singleline(slot)
-                        .desired_width(text_w)
-                        .id_salt(format!("accepted_{idx}")),
-                )
-            };
-            let current = editor.ui.question.accepted.get(idx).map(String::as_str);
-            let saved = slide
-                .question
-                .as_ref()
-                .and_then(|q| q.accepted.get(idx))
-                .map(String::as_str);
-            if singleline_done(ui, &response) && current != saved {
-                *committed = true;
-            }
+        let stack = ui.available_width() - 48.0 < MIN_INLINE_TEXT_WIDTH;
+        let draw_remove = |ui: &mut Ui, remove: &mut Option<usize>| {
             if icon_button_danger_reason(
                 ui,
                 Icon::Trash,
@@ -1019,9 +1068,40 @@ fn show_fill_in(
             )
             .clicked()
             {
-                remove = Some(idx);
+                *remove = Some(idx);
+            }
+        };
+        ui.horizontal(|ui| {
+            let text_w = if stack {
+                f32::INFINITY
+            } else {
+                (ui.available_width() - 48.0).clamp(100.0, 360.0)
+            };
+            let text_committed = {
+                let Some(slot) = editor.ui.question.accepted.get_mut(idx) else {
+                    return;
+                };
+                show_singleline_text_field(ui, slot, text_w, format!("accepted_{idx}"), stack)
+            };
+            let current = editor.ui.question.accepted.get(idx).map(String::as_str);
+            let saved = slide
+                .question
+                .as_ref()
+                .and_then(|q| q.accepted.get(idx))
+                .map(String::as_str);
+            if text_committed && current != saved {
+                *committed = true;
+            }
+            if !stack {
+                draw_remove(ui, &mut remove);
             }
         });
+        if stack {
+            ui.horizontal(|ui| {
+                draw_remove(ui, &mut remove);
+            });
+            ui.add_space(4.0);
+        }
     }
     if let Some(index) = remove {
         structural.push((
@@ -1078,14 +1158,56 @@ fn show_sequence(
     let mut remove = None;
     let mut reorder: Option<(String, usize)> = None;
     for idx in 0..n {
+        let Some(cid) = editor.ui.question.choices.get(idx).map(|c| c.id.clone()) else {
+            continue;
+        };
+        let stack = ui.available_width() - 22.0 - 130.0 < MIN_INLINE_TEXT_WIDTH;
+        let mut text_indent = 0.0_f32;
+        let draw_buttons = |ui: &mut Ui,
+                            reorder: &mut Option<(String, usize)>,
+                            remove: &mut Option<usize>| {
+            if icon_button_enabled_reason(ui, Icon::ArrowUp, idx > 0, "Move up", "Already first")
+                .clicked()
+            {
+                *reorder = Some((cid.clone(), idx - 1));
+            }
+            if icon_button_enabled_reason(
+                ui,
+                Icon::ArrowDown,
+                idx + 1 < n,
+                "Move down",
+                "Already last",
+            )
+            .clicked()
+            {
+                *reorder = Some((cid.clone(), idx + 1));
+            }
+            if icon_button_danger_reason(
+                ui,
+                Icon::Trash,
+                n > 2,
+                "Remove choice",
+                "At least two choices are required",
+            )
+            .clicked()
+            {
+                *remove = Some(idx);
+            }
+        };
         ui.horizontal(|ui| {
-            let Some(cid) = editor.ui.question.choices.get(idx).map(|c| c.id.clone()) else {
-                return;
-            };
+            let row_start_x = ui.cursor().min.x;
+            if stack {
+                ui.spacing_mut().item_spacing.x = 4.0;
+            }
             ui.label(RichText::new(format!("{}.", idx + 1)).strong());
+            text_indent = (ui.cursor().min.x - row_start_x).max(0.0);
             // hotspot_missing warning + button needs ~700 pt to sit on one line
-            let narrow = ui.available_width() < 700.0;
-            let text_w = (ui.available_width() - 130.0).clamp(100.0, 320.0);
+            let narrow = stack || ui.available_width() < 700.0;
+            let text_w = if stack {
+                f32::INFINITY
+            } else {
+                (ui.available_width() - 130.0).clamp(100.0, 320.0)
+            };
             let text_committed = {
                 let Some(choice) = editor.ui.question.choices.get_mut(idx) else {
                     return;
@@ -1107,34 +1229,19 @@ fn show_sequence(
             if text_committed && current != saved {
                 *committed = true;
             }
-            if icon_button_enabled_reason(ui, Icon::ArrowUp, idx > 0, "Move up", "Already first")
-                .clicked()
-            {
-                reorder = Some((cid.clone(), idx - 1));
-            }
-            if icon_button_enabled_reason(
-                ui,
-                Icon::ArrowDown,
-                idx + 1 < n,
-                "Move down",
-                "Already last",
-            )
-            .clicked()
-            {
-                reorder = Some((cid, idx + 1));
-            }
-            if icon_button_danger_reason(
-                ui,
-                Icon::Trash,
-                n > 2,
-                "Remove choice",
-                "At least two choices are required",
-            )
-            .clicked()
-            {
-                remove = Some(idx);
+            if !stack {
+                draw_buttons(ui, &mut reorder, &mut remove);
             }
         });
+        if stack {
+            ui.horizontal(|ui| {
+                if text_indent > 0.0 {
+                    ui.add_space(text_indent);
+                }
+                draw_buttons(ui, &mut reorder, &mut remove);
+            });
+            ui.add_space(4.0);
+        }
     }
     if let Some((id, to)) = reorder {
         structural.push((
@@ -1175,14 +1282,70 @@ fn show_pairs(
 
     let mut remove: Option<String> = None;
     let mut reorder: Option<(String, usize)> = None;
-    let narrow = ui.available_width() < 520.0;
+    let narrow = ui.available_width() < MIN_INLINE_TEXT_WIDTH * 2.0 + 150.0 + 20.0;
     for idx in 0..n {
         let Some(pair_id) = editor.ui.question.pairs.get(idx).map(|p| p.id.clone()) else {
             continue;
         };
         if narrow {
+            let mut text_indent = 16.0_f32;
             ui.horizontal(|ui| {
+                let row_start_x = ui.cursor().min.x;
+                ui.spacing_mut().item_spacing.x = 4.0;
                 ui.label(RichText::new(format!("{}.", idx + 1)).strong());
+                text_indent = (ui.cursor().min.x - row_start_x).max(0.0);
+                let left_committed = {
+                    let Some(pair) = editor.ui.question.pairs.get_mut(idx) else {
+                        return;
+                    };
+                    show_singleline_text_field(
+                        ui,
+                        &mut pair.left,
+                        f32::INFINITY,
+                        format!("pair_left_{pair_id}"),
+                        true,
+                    )
+                };
+                let current = editor.ui.question.pairs.get(idx).map(|p| p.left.as_str());
+                let saved = slide
+                    .question
+                    .as_ref()
+                    .and_then(|q| q.pairs.get(idx))
+                    .map(|p| p.left.as_str());
+                if left_committed && current != saved {
+                    *committed = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                if text_indent > 0.0 {
+                    ui.add_space(text_indent);
+                }
+                let right_committed = {
+                    let Some(pair) = editor.ui.question.pairs.get_mut(idx) else {
+                        return;
+                    };
+                    show_singleline_text_field(
+                        ui,
+                        &mut pair.right,
+                        f32::INFINITY,
+                        format!("pair_right_{pair_id}"),
+                        true,
+                    )
+                };
+                let current = editor.ui.question.pairs.get(idx).map(|p| p.right.as_str());
+                let saved = slide
+                    .question
+                    .as_ref()
+                    .and_then(|q| q.pairs.get(idx))
+                    .map(|p| p.right.as_str());
+                if right_committed && current != saved {
+                    *committed = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                if text_indent > 0.0 {
+                    ui.add_space(text_indent);
+                }
                 if icon_button_enabled_reason(
                     ui,
                     Icon::ArrowUp,
@@ -1217,55 +1380,7 @@ fn show_pairs(
                     remove = Some(pair_id.clone());
                 }
             });
-            let text_w = (ui.available_width() - 24.0).max(120.0);
-            ui.horizontal(|ui| {
-                ui.add_space(16.0);
-                let left_committed = {
-                    let Some(pair) = editor.ui.question.pairs.get_mut(idx) else {
-                        return;
-                    };
-                    show_singleline_text_field(
-                        ui,
-                        &mut pair.left,
-                        text_w,
-                        format!("pair_left_{pair_id}"),
-                        true,
-                    )
-                };
-                let current = editor.ui.question.pairs.get(idx).map(|p| p.left.as_str());
-                let saved = slide
-                    .question
-                    .as_ref()
-                    .and_then(|q| q.pairs.get(idx))
-                    .map(|p| p.left.as_str());
-                if left_committed && current != saved {
-                    *committed = true;
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.add_space(16.0);
-                let right_committed = {
-                    let Some(pair) = editor.ui.question.pairs.get_mut(idx) else {
-                        return;
-                    };
-                    show_singleline_text_field(
-                        ui,
-                        &mut pair.right,
-                        text_w,
-                        format!("pair_right_{pair_id}"),
-                        true,
-                    )
-                };
-                let current = editor.ui.question.pairs.get(idx).map(|p| p.right.as_str());
-                let saved = slide
-                    .question
-                    .as_ref()
-                    .and_then(|q| q.pairs.get(idx))
-                    .map(|p| p.right.as_str());
-                if right_committed && current != saved {
-                    *committed = true;
-                }
-            });
+            ui.add_space(4.0);
             continue;
         }
         ui.horizontal(|ui| {
@@ -1927,47 +2042,68 @@ fn show_drag_drop(
 
     let mut remove_item: Option<String> = None;
     for (idx, d) in drag_items.iter().enumerate() {
+        let mut stack = false;
+        let mut indent = 0.0_f32;
+        let mut draw_target_and_remove =
+            |ui: &mut Ui, max_combo: f32, remove_item: &mut Option<String>| {
+                let current_target_name = obj_name(&d.target);
+                let combo_w = (ui.available_width() - 34.0).clamp(90.0, max_combo);
+                crate::widgets::styled_combo(ui, format!("target_combo_{}", d.item), combo_w)
+                    .truncate()
+                    .selected_text(current_target_name)
+                    .show_ui(ui, |ui| {
+                        for t_id in &target_candidates {
+                            if t_id == &d.item {
+                                continue;
+                            }
+                            let name = obj_name(t_id);
+                            let is_selected = t_id == &d.target;
+                            if ui.selectable_label(is_selected, name).clicked() && !is_selected {
+                                structural.push((
+                                    "question.update_drag_item",
+                                    serde_json::json!({
+                                        "slide": sid,
+                                        "item": d.item,
+                                        "target": t_id,
+                                    }),
+                                ));
+                            }
+                        }
+                    });
+
+                if icon_button_danger_reason(
+                    ui,
+                    Icon::Trash,
+                    n > 1,
+                    "Remove item",
+                    "At least one drag item is required",
+                )
+                .clicked()
+                {
+                    *remove_item = Some(d.item.clone());
+                }
+            };
         ui.horizontal(|ui| {
+            let row_avail = ui.available_width();
+            let row_start_x = ui.cursor().min.x;
             ui.label(RichText::new(format!("{}.", idx + 1)).strong());
+            indent = (ui.cursor().min.x - row_start_x).max(0.0);
             ui.label(format!("{} →", obj_name(&d.item)));
 
-            let current_target_name = obj_name(&d.target);
-            let combo_w = (ui.available_width() - 34.0).clamp(90.0, 160.0);
-            crate::widgets::styled_combo(ui, format!("target_combo_{}", d.item), combo_w)
-                .truncate()
-                .selected_text(current_target_name)
-                .show_ui(ui, |ui| {
-                    for t_id in &target_candidates {
-                        if t_id == &d.item {
-                            continue;
-                        }
-                        let name = obj_name(t_id);
-                        let is_selected = t_id == &d.target;
-                        if ui.selectable_label(is_selected, name).clicked() && !is_selected {
-                            structural.push((
-                                "question.update_drag_item",
-                                serde_json::json!({
-                                    "slide": sid,
-                                    "item": d.item,
-                                    "target": t_id,
-                                }),
-                            ));
-                        }
-                    }
-                });
-
-            if icon_button_danger_reason(
-                ui,
-                Icon::Trash,
-                n > 1,
-                "Remove item",
-                "At least one drag item is required",
-            )
-            .clicked()
-            {
-                remove_item = Some(d.item.clone());
+            stack = row_avail < 320.0 && ui.available_width() - 34.0 < 120.0;
+            if !stack {
+                draw_target_and_remove(ui, 160.0, &mut remove_item);
             }
         });
+        if stack {
+            ui.horizontal(|ui| {
+                if indent > 0.0 {
+                    ui.add_space(indent);
+                }
+                draw_target_and_remove(ui, 180.0, &mut remove_item);
+            });
+            ui.add_space(4.0);
+        }
     }
 
     if let Some(item) = remove_item {
@@ -2308,6 +2444,9 @@ fn add_try_again_button(
     }
 }
 
+/// Minimum width a row's text field must get alongside trailing controls before
+/// those controls wrap onto a second row indented under the text field.
+const MIN_INLINE_TEXT_WIDTH: f32 = 180.0;
 /// Minimum width of the whole form for the two-column layout (choices left, settings right).
 const TWO_COLUMN_MIN_WIDTH: f32 = 760.0;
 /// Width reserved for the settings column in the two-column layout.

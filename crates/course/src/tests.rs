@@ -7725,3 +7725,73 @@ fn gb_02_validation_accepts_valid_interactive_group_and_triggers() {
     assert!(s.local_ids().any(|id| id == "g-btn"));
     assert!(s.local_ids().any(|id| id == "g-layer-btn"));
 }
+
+#[test]
+fn autofit_grow_roundtrip_and_existing_examples_byte_identical() {
+    // 1. Existing example courses serialize byte-identically and never emit `"grow"`.
+    let examples: &[(&str, &str)] = &[
+        (
+            "hello-course",
+            include_str!("../../../examples/hello-course/course.json"),
+        ),
+        (
+            "showcase",
+            include_str!("../../../examples/showcase/course.json"),
+        ),
+        (
+            "healthy-habits",
+            include_str!("../../../examples/healthy-habits/course.json"),
+        ),
+        (
+            "reference-course",
+            include_str!("../../../examples/reference-course/course.json"),
+        ),
+        (
+            "rich-states",
+            include_str!("../../../examples/rich-states/course.json"),
+        ),
+    ];
+    for &(name, raw) in examples {
+        let course = Course::from_json(raw).expect("parse example course");
+        let first = course.to_json().expect("first serialize");
+        let reparsed = Course::from_json(&first).expect("reparse example course");
+        let second = reparsed.to_json().expect("second serialize");
+        assert_eq!(
+            first, second,
+            "{name}: canonical re-serialization must remain byte-identical"
+        );
+        assert_eq!(
+            course, reparsed,
+            "{name}: model must round-trip identically"
+        );
+        assert!(
+            !first.contains("\"grow\""),
+            "{name}: existing example must not emit autofit grow"
+        );
+        for slide in course.slides() {
+            for obj in &slide.objects {
+                if let crate::ObjectKind::Text { autofit, .. } = &obj.kind {
+                    assert_ne!(
+                        *autofit,
+                        crate::Autofit::Grow,
+                        "{name}/{}/{}: existing text object must not default to Grow",
+                        slide.id,
+                        obj.id
+                    );
+                }
+            }
+        }
+    }
+
+    // 2. Autofit::Grow serializes as "grow" and deserializes back cleanly; None stays omitted.
+    let mut c = Course::from_json(HELLO).expect("hello course");
+    let obj = &mut c.scenes[0].slides[0].objects[0];
+    let crate::ObjectKind::Text { autofit, .. } = &mut obj.kind else {
+        panic!("expected text object");
+    };
+    *autofit = crate::Autofit::Grow;
+    let json = c.to_json().expect("serialize grow");
+    assert!(json.contains("\"autofit\": \"grow\""), "must emit grow");
+    let parsed = Course::from_json(&json).expect("parse grow");
+    assert_eq!(parsed, c);
+}
