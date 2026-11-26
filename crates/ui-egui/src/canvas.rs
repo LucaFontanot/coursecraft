@@ -8658,28 +8658,49 @@ pub(crate) fn timeline_animated_items(
 ) -> Vec<DrawItem> {
     items
         .iter()
-        .filter_map(|item| {
+        .flat_map(|item| {
             let Hit::Object(id) = &item.hit else {
-                return Some(item.clone());
+                return vec![item.clone()];
             };
             let Some((obj, layer_id)) = slide.object(id) else {
-                return Some(item.clone());
+                return vec![item.clone()];
             };
             let duration_ms = layer_id
                 .and_then(|layer| slide.layer(layer))
                 .map_or(slide.duration_ms, |layer| layer.duration_ms);
-            let sample = coursecraft_logic::sample_timed_animation(
+            let Some(sample) = coursecraft_logic::sample_timed_animation(
                 obj,
                 playhead_ms,
                 duration_ms,
                 slide_size,
-            )?;
+            ) else {
+                return Vec::new();
+            };
+            // By paragraph or by letter: each part gets its own sample (M46 phase 7).
+            if !item.is_state_extra
+                && let Some(seq) = coursecraft_logic::plays_in_parts(obj)
+                && let Some(mut parts) = coursecraft_render::sequence::split_parts(item, seq)
+                && let Some(samples) = coursecraft_logic::sample_timed_parts(
+                    obj,
+                    playhead_ms,
+                    duration_ms,
+                    slide_size,
+                    parts.len(),
+                )
+                && samples.len() == parts.len()
+            {
+                for (part, s) in parts.iter_mut().zip(&samples) {
+                    coursecraft_render::apply_sample_to_items(std::slice::from_mut(part), s);
+                }
+                parts.retain(|p| p.opacity > 0.0);
+                return parts;
+            }
             if sample.opacity <= 0.0 {
-                return None;
+                return Vec::new();
             }
             let mut item = item.clone();
             coursecraft_render::apply_sample_to_items(std::slice::from_mut(&mut item), &sample);
-            Some(item)
+            vec![item]
         })
         .collect()
 }

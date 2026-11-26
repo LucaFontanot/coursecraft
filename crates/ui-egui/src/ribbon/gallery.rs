@@ -331,6 +331,7 @@ pub fn apply(editor: &mut Editor, gallery: Gallery, index: usize) {
                                     a.duration_ms
                                 }),
                             easing: old.map_or(Easing::EaseOut, |a| a.easing),
+                            sequence: Default::default(),
                         });
                         (s.id.clone(), o.id.clone(), animation)
                     })
@@ -542,9 +543,11 @@ pub fn effect_available(editor: &Editor, op: EffectOp) -> Result<(), &'static st
         }
         EffectOp::Options(motion) => {
             base(motion)?;
-            if current_effect(editor, motion)
-                .is_some_and(|e| e.def().is_some_and(|d| !d.options.is_empty()))
-            {
+            let effect = current_effect(editor, motion);
+            let has_options = effect
+                .as_ref()
+                .is_some_and(|e| e.def().is_some_and(|d| !d.options.is_empty()));
+            if has_options || (effect.is_some() && first_has_text(editor)) {
                 Ok(())
             } else {
                 Err("Pick an effect that has options first")
@@ -1047,6 +1050,83 @@ pub fn effect_options_menu(editor: &mut Editor, ui: &mut Ui, motion: Motion) {
         set_option(editor, motion, v);
         ui.close();
     }
+    if first_has_text(editor) {
+        if !def.options.is_empty() {
+            ui.separator();
+        }
+        sequence_section(editor, ui, motion);
+    }
+}
+
+/// Whether the first selected object has text to play in parts.
+fn first_has_text(editor: &Editor) -> bool {
+    objects(editor).first().is_some_and(|o| match &o.kind {
+        coursecraft_course::ObjectKind::Text { .. } => true,
+        coursecraft_course::ObjectKind::Shape { text, .. } => text.is_some(),
+        _ => false,
+    })
+}
+
+/// The Sequence section of Effect Options: as one object, by paragraph, by letter.
+fn sequence_section(editor: &mut Editor, ui: &mut Ui, motion: Motion) {
+    use coursecraft_course::Sequence;
+    let p = coursecraft_render::palette(ui.ctx());
+    let current = objects(editor)
+        .first()
+        .and_then(|o| animation(o, motion))
+        .map(|a| a.sequence);
+    ui.label(
+        egui::RichText::new(tl!("Sequence"))
+            .size(11.0)
+            .color(p.text_secondary),
+    );
+    let mut picked = None;
+    for v in Sequence::ALL {
+        let icon = match v {
+            Sequence::AsOne => Icon::Square,
+            Sequence::ByParagraph => Icon::ListBullets,
+            Sequence::ByLetter => Icon::TextAa,
+        };
+        let on = current == Some(v);
+        let name = tl!(v.label());
+        let size = egui::vec2(ui.available_width().max(140.0), 24.0);
+        let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
+        let radius = CornerRadius::same(coursecraft_render::RADIUS_SM as u8);
+        if on {
+            ui.painter().rect_filled(rect, radius, p.accent_subtle);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(rect, radius, p.hover);
+        }
+        let ink = if on { p.accent_text } else { p.text };
+        super::effect_art::paint_glyph(
+            ui.painter(),
+            egui::pos2(rect.min.x + 13.0, rect.center().y),
+            16.0,
+            ink,
+            super::effect_art::Glyph::Icon(icon),
+        );
+        ui.painter().text(
+            egui::pos2(rect.min.x + 28.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            name,
+            FontId::proportional(12.0),
+            ink,
+        );
+        if resp.clicked() && !on {
+            picked = Some(v);
+        }
+    }
+    if let Some(v) = picked {
+        set_sequence(editor, motion, v);
+        ui.close();
+    }
+}
+
+/// Set the text sequence of every selected object's `motion` animation.
+pub fn set_sequence(editor: &mut Editor, motion: Motion, sequence: coursecraft_course::Sequence) {
+    update(editor, motion, |_| {}, |a| a.sequence = sequence);
+    preview_current(editor, motion);
 }
 
 /// Set option `value` on every selected object's effect of `motion` that takes it.

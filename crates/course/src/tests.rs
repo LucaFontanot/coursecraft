@@ -784,11 +784,13 @@ fn animation_and_transition_serialization_and_validation() {
         effect: AnimEffect::with_from("fly_in", Direction::Bottom),
         duration_ms: 400,
         easing: Easing::EaseOut,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
         effect: AnimEffect::new("fade"),
         duration_ms: 300,
         easing: Easing::EaseIn,
+        sequence: Default::default(),
     });
     obj.motion_paths = vec![MotionPath {
         id: "path1".into(),
@@ -892,6 +894,7 @@ fn animation_and_transition_serialization_and_validation() {
         effect: AnimEffect::new("fade"),
         duration_ms: 70000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     assert!(
         errors(&bad_c2)

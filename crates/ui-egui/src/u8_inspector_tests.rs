@@ -307,7 +307,7 @@ fn inspector_and_states_combos_have_sufficient_width_and_tall_popup() {
     h.editor.ui.inspector_tab = InspectorTab::Animate;
     h.editor.selection.set_many(["obj_text"]);
     h.idle_frame();
-    for combo_label in ["Fade in", "EaseInOut"] {
+    for combo_label in ["Fade in", "Ease in and out"] {
         let findings = h.audit_combo(combo_label);
         assert!(
             findings.is_empty(),

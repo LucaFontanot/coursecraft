@@ -1528,6 +1528,41 @@ pub struct Animation {
     pub duration_ms: u32,
     #[serde(default)]
     pub easing: Easing,
+    /// Text plays as one, by paragraph or by letter (M46 phase 7). Omitted when `as_one`.
+    #[serde(default, skip_serializing_if = "Sequence::is_as_one")]
+    pub sequence: Sequence,
+}
+
+/// How an entrance or exit plays over an object's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sequence {
+    /// The whole object at once.
+    #[default]
+    AsOne,
+    /// One paragraph after another (the shape comes with the first).
+    ByParagraph,
+    /// Letter by letter, overlapping.
+    ByLetter,
+}
+
+impl Sequence {
+    pub const ALL: [Self; 3] = [Self::AsOne, Self::ByParagraph, Self::ByLetter];
+
+    #[must_use]
+    pub fn is_as_one(&self) -> bool {
+        *self == Self::AsOne
+    }
+
+    /// English label (the editor passes it through `tl!`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AsOne => "As one object",
+            Self::ByParagraph => "By paragraph",
+            Self::ByLetter => "By letter",
+        }
+    }
 }
 
 /// An emphasis animation: the object stays on screen and pulses, turns, shakes or changes
@@ -1770,6 +1805,39 @@ pub enum Easing {
     #[default]
     EaseOut,
     EaseInOut,
+    /// Goes a little past the end and settles back (M46 phase 7).
+    Overshoot,
+    /// Lands and bounces three times.
+    Bounce,
+    /// Springs past the end and wobbles to rest.
+    Elastic,
+}
+
+impl Easing {
+    /// Every easing, in picker order.
+    pub const ALL: [Self; 7] = [
+        Self::EaseOut,
+        Self::Linear,
+        Self::EaseIn,
+        Self::EaseInOut,
+        Self::Overshoot,
+        Self::Bounce,
+        Self::Elastic,
+    ];
+
+    /// English label (the editor passes it through `tl!`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Linear => "Linear",
+            Self::EaseIn => "Ease in",
+            Self::EaseOut => "Ease out",
+            Self::EaseInOut => "Ease in and out",
+            Self::Overshoot => "Overshoot",
+            Self::Bounce => "Bounce",
+            Self::Elastic => "Elastic",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -2756,7 +2756,12 @@ fn push_base_items(
             .first()
             .is_some_and(|item| !matches!(item.visual, Visual::Audio { .. }))
         {
-            apply_sample_to_items(&mut obj_items, &sample);
+            crate::sequence::apply_object_samples(
+                &mut obj_items,
+                coursecraft_logic::plays_in_parts(obj),
+                &sample,
+                |n| player.sample_object_parts(&obj.id, n),
+            );
             if let Some(parent) = obj_items.first_mut() {
                 apply_runtime_media_state(parent, player, &obj.id);
             }
@@ -3033,7 +3038,12 @@ pub fn compose_with_pointer(
                     .first()
                     .is_some_and(|item| !matches!(item.visual, Visual::Audio { .. }))
                 {
-                    apply_sample_to_items(&mut obj_items, &sample);
+                    crate::sequence::apply_object_samples(
+                        &mut obj_items,
+                        coursecraft_logic::plays_in_parts(obj),
+                        &sample,
+                        |n| player.sample_object_parts(&obj.id, n),
+                    );
                     if let Some(parent) = obj_items.first_mut() {
                         apply_runtime_media_state(parent, player, &obj.id);
                     }

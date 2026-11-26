@@ -534,7 +534,11 @@ rebuilt Animations panel; live preview on the canvas.
   `object.add_emphasis`, `object.set_emphasis`, `object.remove_emphasis` and
   `object.copy_animation`; the Emphasis gallery in the ribbon, the Emphasis card in the Animate
   inspector, amber, green and red strips on timeline bars, and the Animation Painter.
-- Next: build by paragraph, transitions.
+- Phase 7 (sequence and easings) **built (2026-11-26)**: entrances and exits play as one, by
+  paragraph or by letter (`Animation.sequence`) inside their duration; the renderer splits the
+  text into parts that keep its layout. New easings: Overshoot, Bounce, Elastic. Sequence in
+  Effect Options and the Animate cards; the easing picker shows all seven as curves.
+- Next: transitions.
 
 ## After the first release
 

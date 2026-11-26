@@ -18624,11 +18624,13 @@ fn timeline_play_shows_entrance_and_exit_on_the_canvas() {
         effect: AnimEffect::with_from("fly_in", Direction::Left),
         duration_ms: 1000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
         effect: AnimEffect::new("fade"),
         duration_ms: 1000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     let Some(slide) = course.slide("s1") else {
         panic!("slide s1");

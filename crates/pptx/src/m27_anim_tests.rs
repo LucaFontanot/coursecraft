@@ -207,6 +207,7 @@ fn c1_1_all_five_mapped_entrance_effects_and_directions() {
                 effect,
                 duration_ms: dur,
                 easing: Easing::EaseOut,
+                sequence: Default::default(),
             }),
             "mismatch on {name}"
         );
@@ -318,6 +319,7 @@ fn c1_3_all_five_mapped_exit_effects_and_player_sampling() {
                 effect,
                 duration_ms: dur,
                 easing: Easing::EaseOut,
+                sequence: Default::default(),
             })
         );
         assert!(slide.duration_ms >= 1000 + dur);
@@ -625,6 +627,7 @@ fn c1_8_group_and_connector_targeting() {
                 effect: AnimEffect::new("fade"),
                 duration_ms: 500,
                 easing: Easing::EaseOut,
+                sequence: Default::default(),
             })
         );
     }
@@ -635,6 +638,7 @@ fn c1_8_group_and_connector_targeting() {
             effect: AnimEffect::with_from("wipe", Direction::Left),
             duration_ms: 400,
             easing: Easing::EaseOut,
+            sequence: Default::default(),
         })
     );
 }

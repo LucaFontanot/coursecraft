@@ -258,6 +258,17 @@ Each phase updates `docs/spec/triggers.md`, `docs/ui/ribbon.md` and `docs/ui/fea
   and canvas clicks are shared; it dispatches `object.copy_animation`.
 - PowerPoint import still reports emphasis presets as not imported.
 
+## Phase 7 as built
+
+- `Sequence` lives on `Animation` (not on the effect): every effect can play in parts.
+- Parts share the animation's duration (`coursecraft_logic::part_progress`), so the timeline bar,
+  completion event and exit timing don't move. `sample_timed_parts` and
+  `Player::sample_object_parts` give one sample per part.
+- `coursecraft_render::sequence` splits a text item into copies that each show one part (the
+  other characters drawn transparent), so the layout is identical; `apply_object_samples` is
+  used by the player, the editor's timeline preview and the live preview.
+- By word, and PowerPoint's build-by-paragraph import, are follow-ups.
+
 ## On stock icons from Magnific / Freepik
 
 Searching the stock library for animation icons returned a mixed, mostly premium set ("Sputnik",

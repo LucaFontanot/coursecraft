@@ -282,3 +282,46 @@ fn the_animation_painter_copies_animations_onto_a_clicked_object() {
         .is_err()
     );
 }
+
+#[test]
+fn effect_options_offer_a_sequence_for_text() {
+    use super::spec::{EffectOp, Motion};
+    let json = serde_json::json!({
+        "schema_version": 1, "id": "sq", "title": "Sequence",
+        "slide_size": { "w": 1000, "h": 600 },
+        "scenes": [{ "id": "sc1", "title": "Scene 1", "slides": [
+            { "id": "sl1", "title": "One", "duration_ms": 5000, "objects": [
+                { "id": "tx", "kind": { "type": "text", "text": "One\nTwo" },
+                  "frame": { "x": 100, "y": 100, "w": 300, "h": 120 },
+                  "entrance": { "effect": { "type": "fade" }, "duration_ms": 800 } }
+            ] }
+        ] }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid course");
+    let mut h = TestHarness::new_with_size(course, (2400.0, 900.0));
+    h.editor.ui.ribbon.visible = true;
+    h.editor.selection = crate::Selection::new("sl1");
+    h.editor.selection.object = Some("tx".into());
+    frames(&mut h, 2);
+    // Fade has no options, but text can play by paragraph.
+    assert!(
+        super::gallery::effect_available(&h.editor, EffectOp::Options(Motion::Entrance)).is_ok()
+    );
+    open_tab(&mut h, "animations");
+    let options = h.find_texts("Effect Options");
+    h.click_at(options.first().copied().expect("Effect Options"));
+    frames(&mut h, 3);
+    let by_paragraph = h.find_text_last("By paragraph").expect("By paragraph row");
+    h.click_at(by_paragraph);
+    frames(&mut h, 2);
+    let a = h
+        .editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("tx"))
+        .and_then(|(o, _)| o.entrance.clone())
+        .expect("entrance");
+    assert_eq!(a.sequence, coursecraft_course::Sequence::ByParagraph);
+    assert_eq!(a.duration_ms, 800, "the rest is kept");
+}

@@ -40,6 +40,21 @@ impl EffectCtx {
             1.0
         }
     }
+
+    /// [`Self::shown`] without the clamp to `[0, 1]` (kept within `[-0.5, 1.5]`), so the
+    /// Overshoot and Elastic easings carry moving and growing effects past their resting place.
+    #[must_use]
+    pub fn travel(&self) -> f32 {
+        let s = match self.phase {
+            AnimationPhase::Entering => self.eased,
+            AnimationPhase::Exiting => 1.0 - self.eased,
+        };
+        if s.is_finite() {
+            s.clamp(-0.5, 1.5)
+        } else {
+            1.0
+        }
+    }
 }
 
 /// One effect's sample function.
@@ -95,7 +110,8 @@ fn sampler(id: &str) -> Option<SampleFn> {
 /// [`ObjectSample::IDENTITY`] once fully shown.
 #[must_use]
 pub fn sample_effect(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
-    if ctx.shown() >= 1.0 {
+    // At rest, unless an overshooting easing is carrying the object past it.
+    if ctx.shown() >= 1.0 && (ctx.travel() - 1.0).abs() < 1e-4 {
         return ObjectSample::IDENTITY;
     }
     let sample = sampler(&effect.id)
@@ -359,7 +375,7 @@ fn fade(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
 
 fn grow(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     ObjectSample {
-        scale: ObjectSample::uniform(ctx.shown()),
+        scale: ObjectSample::uniform(ctx.travel().max(0.0)),
         ..ObjectSample::IDENTITY
     }
 }
@@ -380,7 +396,7 @@ fn fly_in(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
         off(vx, f.x, f.w, ctx.slide_size.w as f32),
         off(vy, f.y, f.h, ctx.slide_size.h as f32),
     );
-    let away = 1.0 - ctx.shown();
+    let away = 1.0 - ctx.travel();
     ObjectSample {
         offset: (full.0 * away, full.1 * away),
         ..ObjectSample::IDENTITY
@@ -393,7 +409,7 @@ const FLOAT_DISTANCE: f32 = 40.0;
 fn float(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     let (vx, vy) = from(effect).vector();
     let s = ctx.shown();
-    let away = 1.0 - s;
+    let away = 1.0 - ctx.travel();
     ObjectSample {
         offset: (vx * FLOAT_DISTANCE * away, vy * FLOAT_DISTANCE * away),
         opacity: s,
@@ -537,7 +553,7 @@ fn random_bars(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
 fn zoom(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     let s = ctx.shown();
     ObjectSample {
-        scale: ObjectSample::uniform(s),
+        scale: ObjectSample::uniform(ctx.travel().max(0.0)),
         opacity: s,
         ..ObjectSample::IDENTITY
     }
@@ -1237,5 +1253,85 @@ mod tests {
         // Second pass, then rest.
         assert!(at(2000).scale.0 > 1.2);
         assert_eq!(at(2600), ObjectSample::IDENTITY);
+    }
+
+    #[test]
+    fn new_easings_start_and_end_in_place_and_shape_their_path() {
+        use coursecraft_course::Easing;
+        for e in [Easing::Overshoot, Easing::Bounce, Easing::Elastic] {
+            assert!(crate::ease(e, 0.0).abs() < 1e-4, "{e:?} at 0");
+            assert!((crate::ease(e, 1.0) - 1.0).abs() < 1e-4, "{e:?} at 1");
+            for i in 0..=100 {
+                let v = crate::ease(e, i as f32 / 100.0);
+                assert!(v.is_finite() && (-0.5..=1.5).contains(&v), "{e:?} {v}");
+            }
+        }
+        let peak = |e| {
+            (0..=100)
+                .map(|i| crate::ease(e, i as f32 / 100.0))
+                .fold(f32::MIN, f32::max)
+        };
+        assert!(peak(Easing::Overshoot) > 1.05, "overshoots");
+        assert!(peak(Easing::Elastic) > 1.05, "springs past");
+        assert!(
+            peak(Easing::Bounce) <= 1.0 + 1e-4,
+            "bounce never passes the end"
+        );
+        // Fly in carries the object past its place with Overshoot.
+        let ctx = EffectCtx {
+            phase: AnimationPhase::Entering,
+            eased: crate::ease(Easing::Overshoot, 0.7),
+            frame: Rect {
+                x: 100.0,
+                y: 100.0,
+                w: 100.0,
+                h: 100.0,
+            },
+            slide_size: Size { w: 960, h: 540 },
+        };
+        let s = sample_effect(&AnimEffect::with_from("fly_in", Direction::Left), &ctx);
+        assert!(s.offset.0 > 0.0, "past the resting place: {s:?}");
+    }
+
+    #[test]
+    fn parts_get_their_own_windows() {
+        use coursecraft_course::Sequence;
+        // By paragraph, 3 parts: one after another.
+        assert!(
+            (crate::part_progress(Sequence::ByParagraph, (0, 3), 1.0 / 6.0) - 0.5).abs() < 1e-4
+        );
+        assert!(crate::part_progress(Sequence::ByParagraph, (1, 3), 0.3).abs() < 1e-4);
+        assert!((crate::part_progress(Sequence::ByParagraph, (2, 3), 1.0) - 1.0).abs() < 1e-4);
+        // By letter they overlap: the last starts before the first is long done.
+        let last_start = 1.0 - 0.25;
+        assert!(crate::part_progress(Sequence::ByLetter, (9, 10), last_start - 0.01) == 0.0);
+        assert!(crate::part_progress(Sequence::ByLetter, (9, 10), 1.0) > 0.99);
+        // As one, or one part: unchanged.
+        assert!((crate::part_progress(Sequence::AsOne, (2, 3), 0.4) - 0.4).abs() < 1e-6);
+        assert!((crate::part_progress(Sequence::ByLetter, (0, 1), 0.4) - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn timed_parts_reveal_one_paragraph_after_another() {
+        let json = serde_json::json!({
+            "id": "o", "kind": { "type": "text", "text": "One\nTwo" },
+            "frame": { "x": 0, "y": 0, "w": 100, "h": 100 },
+            "entrance": { "effect": { "type": "fade" }, "duration_ms": 1000, "easing": "linear", "sequence": "by_paragraph" }
+        });
+        let obj: coursecraft_course::Object = serde_json::from_value(json).expect("object");
+        assert_eq!(
+            crate::plays_in_parts(&obj),
+            Some(coursecraft_course::Sequence::ByParagraph)
+        );
+        let size = Size { w: 960, h: 540 };
+        let at = |ms| crate::sample_timed_parts(&obj, ms, 10_000, size, 2).expect("visible");
+        let early = at(250);
+        assert!(
+            early[0].opacity > 0.4 && early[1].opacity < 0.01,
+            "{early:?}"
+        );
+        let late = at(750);
+        assert!((late[0].opacity - 1.0).abs() < 1e-4 && late[1].opacity > 0.4);
+        assert_eq!(at(1000), vec![ObjectSample::IDENTITY; 2]);
     }
 }

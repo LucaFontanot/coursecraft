@@ -3826,6 +3826,7 @@ fn compose_with_animated_object_scales_and_translates() {
         effect: coursecraft_course::AnimEffect::new("fade"),
         duration_ms: 1000,
         easing: coursecraft_course::Easing::Linear,
+        sequence: Default::default(),
     });
     btn.timing.start_ms = 0;
 
@@ -8339,11 +8340,13 @@ fn exit_animations_render_with_and_without_slide_transition() {
             effect: AnimEffect::with_from("fly_in", Direction::Left),
             duration_ms: 1000,
             easing: Easing::Linear,
+            sequence: Default::default(),
         });
         s2.objects[1].exit = Some(Animation {
             effect: AnimEffect::new("fade"),
             duration_ms: 1000,
             easing: Easing::Linear,
+            sequence: Default::default(),
         });
         s2.triggers.clear();
     }

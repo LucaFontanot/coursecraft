@@ -28,6 +28,8 @@ pub struct CardState<'a> {
     pub fx: &'a mut AnimEffect,
     pub duration_ms: &'a mut u32,
     pub easing: &'a mut Easing,
+    /// The text sequence, when the object has text to play in parts.
+    pub sequence: Option<&'a mut coursecraft_course::Sequence>,
 }
 
 const CATEGORIES: [(EffectCategory, &str); 4] = [
@@ -36,20 +38,6 @@ const CATEGORIES: [(EffectCategory, &str); 4] = [
     (EffectCategory::Moderate, "Moderate"),
     (EffectCategory::Exciting, "Exciting"),
 ];
-
-const EASINGS: [(Easing, &str); 4] = [
-    (Easing::EaseOut, "Ease out"),
-    (Easing::Linear, "Linear"),
-    (Easing::EaseIn, "Ease in"),
-    (Easing::EaseInOut, "Ease in and out"),
-];
-
-fn easing_label(e: Easing) -> &'static str {
-    EASINGS
-        .iter()
-        .find(|(v, _)| *v == e)
-        .map_or("Ease out", |(_, l)| l)
-}
 
 /// The label of effect id `id` (or `"none"`) as an entrance or exit. English.
 #[must_use]
@@ -98,6 +86,9 @@ pub fn show_card(
             changed |= option_rows(ui, exit, state.fx);
             changed |= duration_row(ui, state.duration_ms);
             changed |= easing_row(ui, state.easing);
+            if let Some(sequence) = state.sequence {
+                changed |= sequence_row(ui, which, sequence);
+            }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let play = egui::Button::new(
@@ -407,7 +398,7 @@ fn easing_row(ui: &mut Ui, easing: &mut Easing) -> bool {
     crate::properties::inspector_row(ui, tl!("Easing"), |ui| {
         let w = ui.available_width().max(30.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
-        let label = tl!(easing_label(*easing));
+        let label = tl!(easing.label());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label));
         let radius = CornerRadius::same(coursecraft_render::RADIUS_SM as u8);
         ui.painter()
@@ -422,7 +413,8 @@ fn easing_row(ui: &mut Ui, easing: &mut Easing) -> bool {
             p.text,
         );
         egui::Popup::menu(&resp).show(|ui| {
-            for (value, name) in EASINGS {
+            for value in Easing::ALL {
+                let name = value.label();
                 let (r, item) = ui.allocate_exact_size(vec2(170.0, 24.0), Sense::click());
                 let on = value == *easing;
                 if on {
@@ -597,4 +589,31 @@ fn emphasis_row(
     if commit && changed != *e {
         out.push(EmphasisRequest::Set(i, changed));
     }
+}
+
+/// Sequence: the text plays as one, by paragraph or by letter. Returns whether it changed.
+fn sequence_row(
+    ui: &mut Ui,
+    which: &'static str,
+    sequence: &mut coursecraft_course::Sequence,
+) -> bool {
+    let mut changed = false;
+    crate::properties::inspector_row(ui, tl!("Sequence"), |ui| {
+        let w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, format!("anim_sequence_{which}"), w)
+            .selected_text(tl!(sequence.label()))
+            .show_ui(ui, |ui| {
+                for v in coursecraft_course::Sequence::ALL {
+                    if ui
+                        .selectable_label(*sequence == v, tl!(v.label()))
+                        .clicked()
+                        && *sequence != v
+                    {
+                        *sequence = v;
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
 }

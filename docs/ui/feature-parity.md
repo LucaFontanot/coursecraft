@@ -19,13 +19,13 @@
 | Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
-| Animation, transitions, timeline | 17 | 1 | 6 | 0 |
+| Animation, transitions, timeline | 18 | 1 | 5 | 0 |
 | Questions and quizzes | 8 | 4 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **115** | **38** | **56** | **12** |
+| **Total** | **116** | **38** | **55** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -198,7 +198,7 @@ Counted from the tables below; recount when a row changes.
 | Path options | | 🟡 | M42 |
 | Emphasis animations | 12 effects (`object.add_emphasis`, `set_emphasis`, `remove_emphasis`); Animations › Emphasis gallery, the Animate inspector's Emphasis card, amber strips on timeline bars | ✅ | M46 |
 | Animation painter | Animations › Animation Painter (`object.copy_animation`) | ✅ | M46 |
-| Sequence by paragraph (build steps) | — | ⛔ | M42 |
+| Sequence by paragraph (build steps) | `Animation.sequence`: as one, by paragraph, by letter (Effect Options ▾ and the Animate inspector's cards) | ✅ | M46 |
 | Transition: apply to all | `slide.set_transition_all`, Transitions › Apply To All | ✅ | — |
 | Timeline: fit to longest, reset, align to playhead/cue | — | ⛔ | M42 |
 | Timing dialog | — | ⛔ | M42 |

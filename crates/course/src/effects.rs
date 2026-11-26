@@ -677,11 +677,13 @@ mod tests {
             },
             duration_ms: 500,
             easing: crate::Easing::EaseOut,
+            sequence: crate::Sequence::AsOne,
         });
         obj.exit = Some(Animation {
             effect: AnimEffect::with_from("zoom", Direction::Left),
             duration_ms: 500,
             easing: crate::Easing::EaseOut,
+            sequence: Default::default(),
         });
         let issues = c.validate();
         let warn = |needle: &str| {

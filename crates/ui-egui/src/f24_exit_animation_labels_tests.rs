@@ -142,11 +142,13 @@ fn existing_course_with_fly_in_exit_loads_and_shows_fly_out() {
         effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::EaseOut,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
         effect: AnimEffect::with_from("fly_in", Direction::Right),
         duration_ms: 600,
         easing: Easing::EaseOut,
+        sequence: Default::default(),
     });
 
     // Round-trip through JSON to verify no file format change.

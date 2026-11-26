@@ -272,3 +272,38 @@ fn every_effect_ends_at_the_resting_look() {
         }
     }
 }
+
+/// By paragraph: half way through a two-paragraph fade, the first paragraph shows and the
+/// second doesn't yet.
+#[test]
+fn by_paragraph_reveals_the_first_paragraph_first() {
+    let json = serde_json::json!({
+        "schema_version": 1, "id": "m46-seq", "title": "Seq",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{ "id": "s1", "title": "Scene", "slides": [{
+            "id": "slide1", "title": "Slide", "background": "#FFFFFF", "duration_ms": 3000,
+            "objects": [{
+                "id": "t",
+                "kind": { "type": "text", "text": "MMMMMMMM\nMMMMMMMM", "style": { "size": 40.0, "color": "#000000" } },
+                "frame": { "x": 100, "y": 100, "w": 600, "h": 200 },
+                "entrance": { "effect": { "type": "fade" }, "duration_ms": 1000, "easing": "linear", "sequence": "by_paragraph" }
+            }]
+        }] }]
+    });
+    let c = Course::from_json(&json.to_string()).expect("valid course");
+    let dark_rows = |img: &RgbaImage, y0: u32, y1: u32| {
+        (y0..y1)
+            .filter(|&y| (100..700).any(|x| px(img, x, y)[0] < 128))
+            .count()
+    };
+    let half = player_at(&c, 480);
+    let end = player_at(&c, 2000);
+    // Find the two lines at rest, then check the half-way frame line by line.
+    let rows: Vec<u32> = (100..300)
+        .filter(|&y| (100..700).any(|x| px(&end, x, y)[0] < 128))
+        .collect();
+    assert!(rows.len() > 10, "text drawn at rest");
+    let mid = (rows[0] + rows[rows.len() - 1]) / 2;
+    assert!(dark_rows(&half, 100, mid) > 5, "first paragraph shows");
+    assert_eq!(dark_rows(&half, mid, 300), 0, "second paragraph not yet");
+}

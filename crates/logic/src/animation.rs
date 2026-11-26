@@ -32,6 +32,39 @@ pub fn ease(easing: Easing, t: f32) -> f32 {
                 1.0 - 4.0 * inv * inv * inv
             }
         }
+        // Back-out: about 10 % past the end, then back.
+        Easing::Overshoot => {
+            const C1: f32 = 1.701_58;
+            let u = t - 1.0;
+            1.0 + (C1 + 1.0) * u * u * u + C1 * u * u
+        }
+        Easing::Bounce => bounce_out(t),
+        Easing::Elastic => {
+            if t <= 0.0 || t >= 1.0 {
+                t
+            } else {
+                let c4 = std::f32::consts::TAU / 3.0;
+                2f32.powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0
+            }
+        }
+    }
+}
+
+/// Standard bounce-out: lands at 1 and bounces three times, smaller each time.
+fn bounce_out(t: f32) -> f32 {
+    const N: f32 = 7.5625;
+    const D: f32 = 2.75;
+    if t < 1.0 / D {
+        N * t * t
+    } else if t < 2.0 / D {
+        let t = t - 1.5 / D;
+        N * t * t + 0.75
+    } else if t < 2.5 / D {
+        let t = t - 2.25 / D;
+        N * t * t + 0.9375
+    } else {
+        let t = t - 2.625 / D;
+        N * t * t + 0.984_375
     }
 }
 

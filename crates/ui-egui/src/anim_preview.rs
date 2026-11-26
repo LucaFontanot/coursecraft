@@ -50,16 +50,26 @@ impl Played {
         }
     }
 
-    /// The sample of an object with `frame` at `t_ms` into the run.
+    /// The text sequence the run plays in, when it plays in parts.
+    fn sequence(&self) -> Option<coursecraft_course::Sequence> {
+        match self {
+            Self::Anim(_, a) if !a.sequence.is_as_one() => Some(a.sequence),
+            _ => None,
+        }
+    }
+
+    /// The sample of part `part` (`(k, n)`) of an object with `frame` at `t_ms` into the run.
     fn sample(
         &self,
         t_ms: f64,
         frame: coursecraft_course::Rect,
         size: coursecraft_course::Size,
+        part: (usize, usize),
     ) -> ObjectSample {
         match self {
             Self::Anim(slot, a) => {
-                let progress = (t_ms / f64::from(a.duration_ms.max(1))).clamp(0.0, 1.0) as f32;
+                let raw = (t_ms / f64::from(a.duration_ms.max(1))).clamp(0.0, 1.0) as f32;
+                let progress = coursecraft_logic::part_progress(a.sequence, part, raw);
                 let phase = match slot {
                     Slot::Entrance => AnimationPhase::Entering,
                     Slot::Exit => AnimationPhase::Exiting,
@@ -200,6 +210,7 @@ impl PreviewState {
                 effect,
                 duration_ms,
                 easing,
+                sequence: Default::default(),
             },
         );
         self.hover_played(slide, objects, what, pass);
@@ -259,23 +270,35 @@ impl PreviewState {
         let into = (t - LEAD_MS).clamp(0.0, duration);
         let out = items
             .iter()
-            .filter_map(|item| {
+            .flat_map(|item| {
                 let Hit::Object(id) = &item.hit else {
-                    return Some(item.clone());
+                    return vec![item.clone()];
                 };
                 if !p.objects.iter().any(|o| o == id) {
-                    return Some(item.clone());
+                    return vec![item.clone()];
                 }
                 let Some((obj, _)) = slide.object(id) else {
-                    return Some(item.clone());
+                    return vec![item.clone()];
                 };
-                let sample = p.what.sample(into, obj.frame, course.slide_size);
+                if !item.is_state_extra
+                    && let Some(seq) = p.what.sequence()
+                    && let Some(mut parts) = coursecraft_render::sequence::split_parts(item, seq)
+                {
+                    let n = parts.len();
+                    for (k, part) in parts.iter_mut().enumerate() {
+                        let s = p.what.sample(into, obj.frame, course.slide_size, (k, n));
+                        coursecraft_render::apply_sample_to_items(std::slice::from_mut(part), &s);
+                    }
+                    parts.retain(|part| part.opacity > 0.0);
+                    return parts;
+                }
+                let sample = p.what.sample(into, obj.frame, course.slide_size, (0, 1));
                 if sample.opacity <= 0.0 {
-                    return None;
+                    return Vec::new();
                 }
                 let mut item = item.clone();
                 coursecraft_render::apply_sample_to_items(std::slice::from_mut(&mut item), &sample);
-                Some(item)
+                vec![item]
             })
             .collect();
         Some(out)
@@ -311,6 +334,7 @@ mod tests {
             effect: AnimEffect::new("fade"),
             duration_ms: 1000,
             easing: Easing::Linear,
+            sequence: Default::default(),
         }
     }
 

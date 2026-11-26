@@ -2973,6 +2973,7 @@ fn sampling_fade_and_fly_in() {
         effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let f_in_0 = sample_animation(&fade, AnimationPhase::Entering, 0.0, frame, slide_size);
     let f_in_mid = sample_animation(&fade, AnimationPhase::Entering, 0.5, frame, slide_size);
@@ -2993,6 +2994,7 @@ fn sampling_fade_and_fly_in() {
         effect: AnimEffect::with_from("fly_in", Direction::Bottom),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     // Bottom: slide_size.h - frame.y = 720 - 100 = 620
     let fly_in_0 = sample_animation(
@@ -3047,6 +3049,7 @@ fn sampling_zoom() {
         effect: AnimEffect::new("zoom"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let z_in_0 = sample_animation(&zoom, AnimationPhase::Entering, 0.0, frame, slide_size);
     let z_in_mid = sample_animation(&zoom, AnimationPhase::Entering, 0.5, frame, slide_size);
@@ -3087,6 +3090,7 @@ fn sampling_wipe_and_float() {
         effect: AnimEffect::with_from("wipe", Direction::Left),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let w_in_0 = sample_animation(&wipe, AnimationPhase::Entering, 0.0, frame, slide_size);
     let w_in_mid = sample_animation(&wipe, AnimationPhase::Entering, 0.5, frame, slide_size);
@@ -3139,6 +3143,7 @@ fn sampling_wipe_and_float() {
         effect: AnimEffect::with_from("float", Direction::Bottom),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let fl_in_0 = sample_animation(&float, AnimationPhase::Entering, 0.0, frame, slide_size);
     let fl_in_mid = sample_animation(&float, AnimationPhase::Entering, 0.5, frame, slide_size);
@@ -3175,6 +3180,7 @@ fn exit_with_none_end_ms_makes_object_not_live() {
         effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
 
     let mut p = Player::new(&c).expect("player");
@@ -3436,6 +3442,7 @@ fn entrance_animation_completes_event_fires_once_at_right_tick() {
         effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     // Add trigger on AnimationCompletes
     s.triggers.push(Trigger {
@@ -3497,6 +3504,7 @@ fn entrance_trigger_ignores_path_and_exit_completions() {
         effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     obj.motion_paths.push(MotionPath {
         id: "path1".into(),
@@ -10094,11 +10102,13 @@ fn timed_animation_follows_entrance_timing_and_exit() {
         effect: AnimEffect::with_from("fly_in", Direction::Left),
         duration_ms: 1000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
         effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     let size = Size { w: 1280, h: 720 };
     let sample = |ms| crate::sample_timed_animation(&obj, ms, 10_000, size);
@@ -11094,6 +11104,7 @@ fn exit_animations_with_slide_transition_fly_out_and_disappear() {
         effect: AnimEffect::new("zoom"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
 }
 
@@ -11137,11 +11148,13 @@ fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
                 effect: AnimEffect::new("fade"),
                 duration_ms: 1000,
                 easing: Easing::Linear,
+                sequence: Default::default(),
             });
             s.objects[0].exit = Some(Animation {
                 effect: effect.clone(),
                 duration_ms: 1000,
                 easing: Easing::Linear,
+                sequence: Default::default(),
             });
             s.triggers.clear();
 
@@ -11504,11 +11517,13 @@ fn w01_next_wake_ms_immediate_during_entrance_exit_and_motion_path() {
         effect: AnimEffect::new("fade"),
         duration_ms: 400,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     box1.exit = Some(Animation {
         effect: AnimEffect::new("fade"),
         duration_ms: 300,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     let btn = slide
         .objects

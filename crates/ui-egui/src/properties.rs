@@ -394,12 +394,14 @@ pub struct PropertiesState {
     pub entrance_fx: AnimEffect,
     pub entrance_duration_ms: u32,
     pub entrance_easing: Easing,
+    pub entrance_sequence: coursecraft_course::Sequence,
 
     pub exit_effect: String,
     /// Options of the exit effect; its id follows `exit_effect`.
     pub exit_fx: AnimEffect,
     pub exit_duration_ms: u32,
     pub exit_easing: Easing,
+    pub exit_sequence: coursecraft_course::Sequence,
 
     // Slide transition buffers
     pub slide_transition_effect: String,
@@ -635,10 +637,12 @@ impl Default for PropertiesState {
             entrance_fx: AnimEffect::default(),
             entrance_duration_ms: 500,
             entrance_easing: Easing::EaseOut,
+            entrance_sequence: coursecraft_course::Sequence::AsOne,
             exit_effect: "none".into(),
             exit_fx: AnimEffect::default(),
             exit_duration_ms: 500,
             exit_easing: Easing::EaseOut,
+            exit_sequence: coursecraft_course::Sequence::AsOne,
             slide_transition_effect: "none".into(),
             slide_transition_direction: Direction::Bottom,
             slide_transition_duration_ms: 500,
@@ -838,11 +842,13 @@ impl PropertiesState {
                 self.entrance_fx = a.effect.clone();
                 self.entrance_duration_ms = a.duration_ms;
                 self.entrance_easing = a.easing;
+                self.entrance_sequence = a.sequence;
             } else {
                 self.entrance_effect = "none".to_owned();
                 self.entrance_fx = AnimEffect::default();
                 self.entrance_duration_ms = 500;
                 self.entrance_easing = Easing::EaseOut;
+                self.entrance_sequence = coursecraft_course::Sequence::AsOne;
             }
 
             if let Some(ref a) = obj.exit {
@@ -850,11 +856,13 @@ impl PropertiesState {
                 self.exit_fx = a.effect.clone();
                 self.exit_duration_ms = a.duration_ms;
                 self.exit_easing = a.easing;
+                self.exit_sequence = a.sequence;
             } else {
                 self.exit_effect = "none".to_owned();
                 self.exit_fx = AnimEffect::default();
                 self.exit_duration_ms = 500;
                 self.exit_easing = Easing::EaseOut;
+                self.exit_sequence = coursecraft_course::Sequence::AsOne;
             }
 
             match &obj.kind {
@@ -1205,11 +1213,13 @@ impl PropertiesState {
             self.entrance_fx = a.effect.clone();
             self.entrance_duration_ms = a.duration_ms;
             self.entrance_easing = a.easing;
+            self.entrance_sequence = a.sequence;
         } else {
             self.entrance_effect = "none".to_owned();
             self.entrance_fx = AnimEffect::default();
             self.entrance_duration_ms = 500;
             self.entrance_easing = Easing::EaseOut;
+            self.entrance_sequence = coursecraft_course::Sequence::AsOne;
         }
 
         let same_exit = objects
@@ -1220,11 +1230,13 @@ impl PropertiesState {
             self.exit_fx = a.effect.clone();
             self.exit_duration_ms = a.duration_ms;
             self.exit_easing = a.easing;
+            self.exit_sequence = a.sequence;
         } else {
             self.exit_effect = "none".to_owned();
             self.exit_fx = AnimEffect::default();
             self.exit_duration_ms = 500;
             self.exit_easing = Easing::EaseOut;
+            self.exit_sequence = coursecraft_course::Sequence::AsOne;
         }
 
         self.multi_text = objects
@@ -1973,6 +1985,7 @@ fn show_anim_row(
     fx: &mut AnimEffect,
     duration_ms: &mut u32,
     easing: &mut Easing,
+    (sequence, has_text): (&mut coursecraft_course::Sequence, bool),
     slide_id: &str,
     obj_id: &str,
     action_to_run: &mut Option<(&'static str, Json)>,
@@ -1988,19 +2001,23 @@ fn show_anim_row(
             fx,
             duration_ms,
             easing,
+            sequence: has_text.then_some(&mut *sequence),
         },
         pv,
         preview,
     );
     if changed {
-        *action_to_run = Some(animation_command(
-            which,
-            effect_str,
-            fx,
-            *duration_ms,
-            *easing,
-            slide_id,
-            obj_id,
+        *action_to_run = Some(with_sequence(
+            animation_command(
+                which,
+                effect_str,
+                fx,
+                *duration_ms,
+                *easing,
+                slide_id,
+                obj_id,
+            ),
+            *sequence,
         ));
         if pv.auto && effect_str.as_str() != "none" {
             *preview = Some(crate::anim_panel::PanelPreview::Play);
@@ -2060,10 +2077,16 @@ fn apply_card_preview(
             if effect.as_str() == "none" {
                 return;
             }
+            let sequence = if exit {
+                props.exit_sequence
+            } else {
+                props.entrance_sequence
+            };
             let animation = coursecraft_course::Animation {
                 effect: fx.switched_to(effect),
                 duration_ms,
                 easing,
+                sequence,
             };
             pv.play(slide, ids, slot, animation);
         }
@@ -2084,6 +2107,19 @@ fn apply_card_preview(
             );
         }
     }
+}
+
+/// `cmd` (an `object.set_animation` call) with the animation's text `sequence` set.
+pub(crate) fn with_sequence(
+    mut cmd: (&'static str, Json),
+    sequence: coursecraft_course::Sequence,
+) -> (&'static str, Json) {
+    if !sequence.is_as_one()
+        && let Some(anim) = cmd.1.get_mut("animation").and_then(Json::as_object_mut)
+    {
+        anim.insert("sequence".to_owned(), serde_json::json!(sequence));
+    }
+    cmd
 }
 
 /// The `object.set_animation` call for one row of the Animations section.
@@ -4745,6 +4781,7 @@ fn show_animate_tab(
                 &mut props.entrance_fx,
                 &mut props.entrance_duration_ms,
                 &mut props.entrance_easing,
+                (&mut props.entrance_sequence, true),
                 &slide_id,
                 "",
                 &mut entrance_action,
@@ -4760,6 +4797,7 @@ fn show_animate_tab(
                 &mut props.exit_fx,
                 &mut props.exit_duration_ms,
                 &mut props.exit_easing,
+                (&mut props.exit_sequence, true),
                 &slide_id,
                 "",
                 &mut exit_action,
@@ -4771,27 +4809,33 @@ fn show_animate_tab(
             let props = &mut editor.ui.properties;
             if entrance_action.is_some() {
                 for id in &ids {
-                    actions_to_run.push(animation_command(
-                        "entrance",
-                        &props.entrance_effect,
-                        &props.entrance_fx,
-                        props.entrance_duration_ms,
-                        props.entrance_easing,
-                        &slide_id,
-                        id,
+                    actions_to_run.push(with_sequence(
+                        animation_command(
+                            "entrance",
+                            &props.entrance_effect,
+                            &props.entrance_fx,
+                            props.entrance_duration_ms,
+                            props.entrance_easing,
+                            &slide_id,
+                            id,
+                        ),
+                        props.entrance_sequence,
                     ));
                 }
             }
             if exit_action.is_some() {
                 for id in &ids {
-                    actions_to_run.push(animation_command(
-                        "exit",
-                        &props.exit_effect,
-                        &props.exit_fx,
-                        props.exit_duration_ms,
-                        props.exit_easing,
-                        &slide_id,
-                        id,
+                    actions_to_run.push(with_sequence(
+                        animation_command(
+                            "exit",
+                            &props.exit_effect,
+                            &props.exit_fx,
+                            props.exit_duration_ms,
+                            props.exit_easing,
+                            &slide_id,
+                            id,
+                        ),
+                        props.exit_sequence,
                     ));
                 }
             }
@@ -11558,6 +11602,12 @@ pub fn show_animations_section(
 
     auto_preview_toggle(ui, &mut editor.ui.anim_preview.auto);
     let editor_playhead = editor.ui.timeline.playhead_ms;
+    // By paragraph and by letter only mean something for objects with text.
+    let has_text = match &obj.kind {
+        coursecraft_course::ObjectKind::Text { .. } => true,
+        coursecraft_course::ObjectKind::Shape { text, .. } => text.is_some(),
+        _ => false,
+    };
     let selected_ids = editor.selection.ids();
     let props = &mut editor.ui.properties;
     let pv = &mut editor.ui.anim_preview;
@@ -11572,6 +11622,7 @@ pub fn show_animations_section(
         &mut props.entrance_fx,
         &mut props.entrance_duration_ms,
         &mut props.entrance_easing,
+        (&mut props.entrance_sequence, has_text),
         &slide.id,
         &obj.id,
         &mut action_to_run,
@@ -11603,6 +11654,7 @@ pub fn show_animations_section(
         &mut props.exit_fx,
         &mut props.exit_duration_ms,
         &mut props.exit_easing,
+        (&mut props.exit_sequence, has_text),
         &slide.id,
         &obj.id,
         &mut action_to_run,
@@ -11699,22 +11751,13 @@ pub fn show_animations_section(
                     }
 
                     let mut ease = path.easing;
-                    let ease_label = match ease {
-                        Easing::Linear => "Linear",
-                        Easing::EaseIn => "EaseIn",
-                        Easing::EaseOut => "EaseOut",
-                        Easing::EaseInOut => "EaseInOut",
-                    };
+                    let ease_label = crate::tl!(ease.label());
                     let rem_w = ui.available_width().max(30.0);
                     crate::widgets::styled_combo(ui, format!("mp_easing_{}", path.id), rem_w)
                         .selected_text(ease_label)
                         .show_ui(ui, |ui| {
-                            for (val, l) in [
-                                (Easing::EaseOut, "EaseOut"),
-                                (Easing::Linear, "Linear"),
-                                (Easing::EaseIn, "EaseIn"),
-                                (Easing::EaseInOut, "EaseInOut"),
-                            ] {
+                            for val in Easing::ALL {
+                                let l = crate::tl!(val.label());
                                 if ui.selectable_value(&mut ease, val, l).clicked()
                                     && val != path.easing
                                 {

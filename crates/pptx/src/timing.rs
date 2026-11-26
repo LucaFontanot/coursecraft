@@ -369,6 +369,7 @@ fn schedule_main_sequence(
                         effect,
                         duration_ms: eff.duration_ms,
                         easing: eff.easing,
+                        sequence: Default::default(),
                     });
                 }
                 PresetClass::Exit => {
@@ -395,6 +396,7 @@ fn schedule_main_sequence(
                         effect,
                         duration_ms: eff.duration_ms,
                         easing: eff.easing,
+                        sequence: Default::default(),
                     });
                 }
                 PresetClass::Path => {
@@ -1185,6 +1187,7 @@ mod tests {
                 effect: AnimEffect::new("fade"),
                 duration_ms: 500,
                 easing: Easing::EaseOut,
+                sequence: Default::default(),
             })
         );
         assert_eq!(objects[1].timing.start_ms, 200);
@@ -1194,6 +1197,7 @@ mod tests {
                 effect: AnimEffect::with_from("fly_in", Direction::Left),
                 duration_ms: 400,
                 easing: Easing::EaseIn,
+                sequence: Default::default(),
             })
         );
         // Emphasis at 600 + 100 = 700..1300; clickEffect at 1300 + 500 = 1800..2300.
@@ -1204,6 +1208,7 @@ mod tests {
                 effect: AnimEffect::with_from("wipe", Direction::Right),
                 duration_ms: 500,
                 easing: Easing::EaseInOut,
+                sequence: Default::default(),
             })
         );
         assert_eq!(max_end, 2300);
@@ -1261,6 +1266,7 @@ mod tests {
                     effect: AnimEffect::new("fade"),
                     duration_ms: 500,
                     easing: Easing::EaseOut,
+                    sequence: Default::default(),
                 })
             );
         }
@@ -1325,6 +1331,7 @@ mod tests {
                 effect: AnimEffect::new("fade"),
                 duration_ms: 60_000,
                 easing: Easing::EaseOut,
+                sequence: Default::default(),
             })
         );
     }

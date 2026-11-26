@@ -32,6 +32,7 @@ pub mod offscreen;
 pub mod paint;
 pub mod path_geometry;
 pub mod player_frame;
+pub mod sequence;
 pub mod shape_fill;
 pub mod shape_geometry;
 pub mod snapshot;
