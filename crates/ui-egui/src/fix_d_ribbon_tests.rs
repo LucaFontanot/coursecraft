@@ -103,7 +103,11 @@ fn ribbon_tooltips_show_the_shortcut() {
     let mut h = harness();
     let pos = h.find_text("Paste").expect("Paste");
     let tip = h.probe_tooltip(pos).unwrap_or_default();
-    assert!(tip.contains("Ctrl+V"), "tooltip was {tip:?}");
+    // macOS shows Cmd where Windows and Linux show Ctrl.
+    assert!(
+        tip.contains("Ctrl+V") || tip.contains("Cmd+V"),
+        "tooltip was {tip:?}"
+    );
 }
 
 #[test]
