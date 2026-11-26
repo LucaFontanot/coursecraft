@@ -1066,6 +1066,22 @@ pub fn item_link_at(item: &DrawItem, point: egui::Pos2) -> Option<&ResolvedLinkR
 /// flips are undone first, so the hit shape is the exact rotated frame.
 #[must_use]
 pub fn item_hit_test(item: &DrawItem, point: egui::Pos2) -> bool {
+    item_hit_test_scaled(item, point, 1.0)
+}
+
+/// Like [`item_hit_test`], with the pixel tolerance given in screen pixels.
+///
+/// `scale` is screen pixels per slide pixel. A path hits within
+/// `max(6 / scale, stroke/2 + 2)` slide pixels of its line, so a thin line stays
+/// as easy to click when the slide is zoomed out. A `scale` that is not a
+/// positive finite number counts as 1.
+#[must_use]
+pub fn item_hit_test_scaled(item: &DrawItem, point: egui::Pos2, scale: f32) -> bool {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
     if !point.x.is_finite() || !point.y.is_finite() || !item.rect.is_positive() {
         return false;
     }
@@ -1093,7 +1109,7 @@ pub fn item_hit_test(item: &DrawItem, point: egui::Pos2) -> bool {
         .outline
         .as_ref()
         .map_or(0.0, |outline| outline.width * 0.5);
-    let threshold = (half_stroke + 2.0).max(6.0);
+    let threshold = (half_stroke + 2.0).max(6.0 / scale);
     if crate::path_geometry::path_distance(&flat, (point.x, point.y)) <= threshold {
         return true;
     }

@@ -255,10 +255,10 @@ fn add_motion_path_needs_an_object() {
 }
 
 #[test]
-fn clicking_the_open_tab_collapses_the_ribbon() {
+fn double_clicking_the_open_tab_collapses_the_ribbon() {
     let mut h = harness_with_ribbon();
     let pos = h.find_text("Home").expect("Home tab");
-    h.click_at(pos);
+    h.double_click_at(pos);
     h.idle_frame();
     assert!(h.editor.ui.ribbon.collapsed);
     assert!(h.find_text("Clipboard").is_none());

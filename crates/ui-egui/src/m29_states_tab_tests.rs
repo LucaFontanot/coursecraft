@@ -7,7 +7,7 @@ use crate::test_harness::TestHarness;
 use coursecraft_course::Course;
 use egui::pos2;
 
-fn course_with_states(n_custom: usize) -> Course {
+pub(crate) fn course_with_states(n_custom: usize) -> Course {
     let mut states = Vec::with_capacity(n_custom);
     let preset = ["hover", "selected", "visited"];
     for i in 0..n_custom {

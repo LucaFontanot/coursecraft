@@ -1997,8 +1997,11 @@ fn placeholders_match(source: &str, target: &str, braces: bool) -> bool {
     true
 }
 
-fn percent_placeholders(text: &str) -> std::collections::BTreeSet<String> {
-    let mut set = std::collections::BTreeSet::new();
+/// Every `%name%` reference in `text`, sorted, with repeats kept. A literal `%%`
+/// is skipped. A `%` that opens nothing (such as the sign in "100% of %name%")
+/// is a plain character: the scan moves on one byte, as the player does.
+fn percent_placeholders(text: &str) -> Vec<String> {
+    let mut list = Vec::new();
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -2010,29 +2013,27 @@ fn percent_placeholders(text: &str) -> std::collections::BTreeSet<String> {
             i = i.saturating_add(2);
             continue;
         }
-        let mut j = i.saturating_add(1);
-        let mut end = None;
-        while j < bytes.len() {
-            if bytes.get(j) == Some(&b'%') {
-                end = Some(j);
-                break;
-            }
-            j = j.saturating_add(1);
-        }
+        let end = bytes
+            .get(i.saturating_add(1)..)
+            .and_then(|rest| rest.iter().position(|&b| b == b'%'))
+            .map(|offset| i.saturating_add(1).saturating_add(offset));
         let Some(end) = end else { break };
-        if let Some(name) = text.get(i.saturating_add(1)..end)
-            && !name.is_empty()
-            && name.len() <= 128
-        {
-            set.insert(name.to_owned());
+        let name = text.get(i.saturating_add(1)..end).unwrap_or_default();
+        let plausible = !name.is_empty() && name.len() <= 128 && name.trim() == name;
+        if plausible {
+            list.push(name.to_owned());
+            i = end.saturating_add(1);
+        } else {
+            i = i.saturating_add(1);
         }
-        i = end.saturating_add(1);
     }
-    set
+    list.sort();
+    list
 }
 
-fn brace_placeholders(text: &str) -> std::collections::BTreeSet<String> {
-    let mut set = std::collections::BTreeSet::new();
+/// Every `{name}` reference in `text`, sorted, with repeats kept.
+fn brace_placeholders(text: &str) -> Vec<String> {
+    let mut set = Vec::new();
     let mut rest = text;
     while let Some(open) = rest.find('{') {
         let Some(after) = rest.get(open.saturating_add(1)..) else {
@@ -2044,9 +2045,10 @@ fn brace_placeholders(text: &str) -> std::collections::BTreeSet<String> {
         if let Some(name) = after.get(..close)
             && !name.is_empty()
         {
-            set.insert(name.to_owned());
+            set.push(name.to_owned());
         }
         rest = after.get(close.saturating_add(1)..).unwrap_or_default();
     }
+    set.sort();
     set
 }

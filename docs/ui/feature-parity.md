@@ -273,7 +273,7 @@ Counted from the tables below; recount when a row changes.
 | **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar, and the contextual tabs (Drawing, Button, Picture, Video, Audio, Table, Question Tools; `ribbon/contextual.rs`) and the theme, transition and animation galleries (`ribbon/gallery.rs`), and the Slide Master tab in Master View; the other modes' tab strips to come | 🟡 | M38 |
 | Settings panels from the ↘ launchers, opening by themselves for the work in hand | `panels.rs` (`docs/ui/panels.md`): Text; the other categories to come | 🟡 | M38–M43 |
 | Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M38 |
-| Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
+| Collapse ribbon | double-click the open tab, Ctrl+F1 (not while a dialog or text field has focus); a click opens a tab and never collapses | ✅ | — |
 | View tabs for open slides | `doc_tabs.rs`: a Course Map tab, then a tab per opened slide (× closes it), under the ribbon | ✅ | — |
 | Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels), the four inspectors included; a floating panel can leave the app window as its own OS window (desktop, not Wayland); a panel dropped on the window's outer edge takes the whole width (bottom, top) or height (left, right); the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
 | Reset panel layout | View › Panels › Reset Panel Layout | ✅ | — |

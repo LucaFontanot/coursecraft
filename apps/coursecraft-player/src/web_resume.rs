@@ -146,7 +146,13 @@ impl<S: SuspendStorage> WebResume<S> {
 
     /// Update cached state and persist to storage when the slide changes.
     pub fn after_input(&mut self, course: &Course, state: &PlayerState, effects: &[Effect]) {
-        self.last_state = Some(state.clone());
+        // Most inputs leave the state alone; copy it only when it changed, and
+        // into the old copy so its buffers are reused.
+        match &mut self.last_state {
+            Some(last) if *last == *state => {}
+            Some(last) => last.clone_from(state),
+            None => self.last_state = Some(state.clone()),
+        }
         if effects
             .iter()
             .any(|effect| matches!(effect, Effect::SlideEntered { .. }))

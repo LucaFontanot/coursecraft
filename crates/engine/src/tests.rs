@@ -8276,6 +8276,42 @@ fn set_slide_size_scale_uses_one_factor_and_centres_everything() {
 }
 
 #[test]
+fn set_slide_size_scales_the_tile_scale_of_picture_fills() {
+    // N1: a tiled picture fill follows the content when the slide size scales it.
+    let mut s = sized_course();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "tiled",
+            "kind": {
+                "type": "shape", "shape": "rectangle", "fill": "#224466",
+                "fill_style": { "type": "picture", "src": "t.png", "mode": "tile", "tile_scale": [2.0, 0.5] }
+            },
+            "frame": { "x": 0, "y": 0, "w": 640, "h": 360 }
+        }),
+    );
+    let before = s.course.to_json().unwrap();
+    // 1280x720 -> 640x360 halves everything.
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 640, "h": 360, "mode": "scale" }),
+    );
+    let tiled = s.course.slide("slide1").unwrap().object("tiled").unwrap().0;
+    match &tiled.kind {
+        ObjectKind::Shape {
+            fill_style: Some(coursecraft_course::FillStyle::Picture { tile_scale, .. }),
+            ..
+        } => assert!((tile_scale[0] - 1.0).abs() < 1e-4 && (tile_scale[1] - 0.25).abs() < 1e-4),
+        other => panic!("{other:?}"),
+    }
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+}
+
+#[test]
 fn set_slide_size_fill_uses_max_factor_and_centres_overhang() {
     // A-01: 1280x720 -> 1000x1000 with "fill" uses factor = max(1000/1280, 1000/720) = 1000/720.
     let mut s = sized_course();

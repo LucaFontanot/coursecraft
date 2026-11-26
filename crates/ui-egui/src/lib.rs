@@ -180,6 +180,14 @@ mod fill_style_tests;
 #[cfg(test)]
 mod find_tests;
 #[cfg(test)]
+mod fix_a_shell_tests;
+#[cfg(test)]
+mod fix_b_canvas_tests;
+#[cfg(test)]
+mod fix_c_fields_tests;
+#[cfg(test)]
+mod fix_d_ribbon_tests;
+#[cfg(test)]
 mod font_harness_tests;
 #[cfg(test)]
 mod font_picker_tests;
@@ -727,6 +735,42 @@ pub enum ActiveArea {
     Navigator,
 }
 
+/// An engine command and its parsed keyboard shortcut.
+type RegistryShortcut = (&'static coursecraft_engine::Command, egui::KeyboardShortcut);
+
+/// Every engine command that has a shortcut, most specific first (so Cmd+Shift+G
+/// is not swallowed by Cmd+G). The registry is static, so this is built once.
+fn registry_shortcuts() -> &'static [RegistryShortcut] {
+    static TABLE: std::sync::OnceLock<Vec<RegistryShortcut>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table: Vec<(&'static coursecraft_engine::Command, &'static str)> = registry()
+            .iter()
+            .filter_map(|cmd| cmd.shortcut.map(|shortcut| (cmd, shortcut)))
+            .collect();
+        table.sort_by_key(|(_, shortcut)| std::cmp::Reverse(shortcut.matches('+').count()));
+        table
+            .into_iter()
+            .filter_map(|(cmd, shortcut)| menu::parse_shortcut(shortcut).map(|sc| (cmd, sc)))
+            .collect()
+    })
+}
+
+/// Repeats of a held arrow key within this time stay one undo step.
+const NUDGE_BURST_SECS: f64 = 1.0;
+
+/// The last arrow-key nudge: what it moved and when, to merge a held key's
+/// repeats into one undo step.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NudgeBurst {
+    /// Session revision right after the nudge.
+    pub revision: u64,
+    /// Slide and objects that moved.
+    pub slide: String,
+    pub ids: Vec<String>,
+    /// `UiState::current_time` of the nudge.
+    pub time: f64,
+}
+
 /// A drawing tool in the gallery's Draw group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DrawTool {
@@ -847,6 +891,18 @@ pub struct UiState {
     pub(crate) last_known_slides: Vec<(String, Vec<String>)>,
     /// True when the last mutating command was `edit.undo` or `edit.redo`.
     pub(crate) pending_undo_redo: bool,
+    /// The last arrow-key nudge, so a held key stays one undo step.
+    pub(crate) nudge_burst: Option<NudgeBurst>,
+    /// The slide at the moving end of a Shift+arrow range in the slide list.
+    pub(crate) slides_cursor: Option<String>,
+    /// Frames the slide list has not moved while scrolling the selected slide into view.
+    pub(crate) slides_scroll_stalled: u8,
+    /// Distance from the selected slide to the top of the slide list at the last scroll step.
+    pub(crate) slides_scroll_gap: f32,
+    /// The zoom level drawn last frame, to keep the view centre when it changes.
+    pub(crate) zoom_drawn: Option<ZoomLevel>,
+    /// Ctrl+S pressed in a text field: save once the field has committed.
+    pub(crate) save_after_commit: bool,
     /// Active slide-thumbnail drag in the navigator.
     pub slide_drag: Option<slides::SlideDrag>,
     pub last_seen_revision: u64,
@@ -1559,6 +1615,12 @@ impl Editor {
                 slides_scrolled_to: None,
                 last_known_slides: initial_slides,
                 pending_undo_redo: false,
+                nudge_burst: None,
+                slides_cursor: None,
+                slides_scroll_stalled: 0,
+                slides_scroll_gap: f32::NAN,
+                zoom_drawn: None,
+                save_after_commit: false,
                 slide_drag: None,
                 last_seen_revision: u64::MAX,
                 last_error: None,
@@ -2116,7 +2178,9 @@ impl Editor {
         self.ui.inspector_tab = InspectorTab::Slide;
         self.ui.last_selected_object = None;
         self.ui.zoom = ZoomLevel::Fit;
+        // A course really loaded: the start page and the File page have done their job.
         self.ui.show_welcome = false;
+        self.ui.file_page.open = false;
         self.ui.has_loaded_course = true;
         self.ui.show_shortcuts_dialog = false;
         self.ui.last_active_area = ActiveArea::Canvas;
@@ -2614,6 +2678,22 @@ impl Editor {
         if unchanged_frame && unchanged_crop {
             return;
         }
+        // The window was edited upright; a turned or flipped picture goes back
+        // to its place on the slide.
+        let frame = canvas::CropXform {
+            pivot: egui::pos2(
+                object.frame.x + object.frame.w * 0.5,
+                object.frame.y + object.frame.h * 0.5,
+            ),
+            rotation: if object.rotation.is_finite() {
+                object.rotation
+            } else {
+                0.0
+            },
+            flip_h: object.flip_h,
+            flip_v: object.flip_v,
+        }
+        .world_frame(frame);
         let full = coursecraft_course::CropRect::from(crop).is_full();
         let crop_json = if full {
             Json::Null
@@ -3820,9 +3900,22 @@ impl Editor {
         if crate::canvas::delete_selected_path_point(self) {
             return;
         }
-        let ids = self.selected_object_ids();
-        if ids.is_empty() {
+        let all_ids = self.selected_object_ids();
+        if all_ids.is_empty() {
             self.set_status("Select an object to delete");
+            return;
+        }
+        // Locked objects are not deleted by a keystroke, whatever put them in the selection.
+        let locked = |id: &String| {
+            self.session
+                .course
+                .slide(&self.selection.slide)
+                .and_then(|slide| slide.object(id))
+                .is_some_and(|(object, _)| object.locked)
+        };
+        let ids: Vec<String> = all_ids.iter().filter(|id| !locked(id)).cloned().collect();
+        if ids.is_empty() {
+            self.set_status(tl!("Unlock the object to delete it"));
             return;
         }
         let slide = self.selection.slide.clone();
@@ -4166,14 +4259,99 @@ impl Editor {
         let Some(slide) = self.session.course.slide(&self.selection.slide) else {
             return;
         };
+        // Locked and hidden objects cannot be picked on the canvas, so Select All
+        // skips them too: a following move or delete must not reach them.
+        let pickable = |o: &coursecraft_course::Object| !o.locked && !o.editor_hidden;
         let ids: Vec<String> = match self.selection.layer.as_deref() {
             Some(lid) => slide
                 .layer(lid)
-                .map(|layer| layer.objects.iter().map(|o| o.id.clone()).collect())
+                .map(|layer| {
+                    layer
+                        .objects
+                        .iter()
+                        .filter(|o| pickable(o))
+                        .map(|o| o.id.clone())
+                        .collect()
+                })
                 .unwrap_or_default(),
-            None => slide.objects.iter().map(|o| o.id.clone()).collect(),
+            None => slide
+                .objects
+                .iter()
+                .filter(|o| pickable(o))
+                .map(|o| o.id.clone())
+                .collect(),
         };
         self.selection.set_many(ids);
+    }
+
+    /// True when a dialog or window that owns the keyboard is open.
+    ///
+    /// Shortcuts that act on the course (Delete, arrows, Undo, Select All,
+    /// New, Open) must not reach the editor behind it. Publish, Layer Settings,
+    /// Fonts and the trigger editor are left out on purpose: they follow the
+    /// course live, so Undo works behind them and they close or refresh with it.
+    #[must_use]
+    pub(crate) fn modal_dialog_open(&self) -> bool {
+        let ui = &self.ui;
+        ui.ai.open
+            || ui.alt.open
+            || ui.captions.open
+            || ui.speech.open
+            || ui.record_narration.open
+            || ui.translate.open
+            || ui.document.open
+            || ui.prefs.open
+            || ui.versions.open
+            || ui.report.open
+            || ui.slide_size_dialog.open
+            || ui.show_course_settings_window
+            || ui.show_theme_window
+            || ui.show_shortcuts_dialog
+            || ui.show_outline_dialog
+            || ui.show_export_video
+            || ui.show_export_review
+            || ui.show_export_translation
+            || ui.show_web_window
+            || ui.pending_delete_scene.is_some()
+            || ui.pending_delete_master.is_some()
+            || ui.confirm_delete_library_template.is_some()
+            || ui.pending_remove_font.is_some()
+    }
+
+    /// The scale `Fit` shows now, from the slide drawn last frame.
+    fn fit_scale(&self) -> Option<f32> {
+        let rect = self.ui.last_slide_rect?;
+        let width = self.session.course.slide_size.w as f32;
+        (width > 0.0 && rect.width().is_finite()).then(|| rect.width() / width)
+    }
+
+    /// The zoom level one step in (Zoom in button, Ctrl+=).
+    #[must_use]
+    pub fn zoom_in_level(&self) -> ZoomLevel {
+        self.ui.zoom.zoom_in_at(self.fit_scale())
+    }
+
+    /// The zoom level one step out (Zoom out button, Ctrl+-).
+    #[must_use]
+    pub fn zoom_out_level(&self) -> ZoomLevel {
+        self.ui.zoom.zoom_out_at(self.fit_scale())
+    }
+
+    /// Zoom one step in.
+    pub fn zoom_in(&mut self) {
+        self.ui.zoom = self.zoom_in_level();
+    }
+
+    /// Zoom one step out.
+    pub fn zoom_out(&mut self) {
+        self.ui.zoom = self.zoom_out_level();
+    }
+
+    /// The one guard for editor keys that change the course or the selection:
+    /// the start page, the File page and every modal dialog block them.
+    #[must_use]
+    pub(crate) fn global_keys_blocked(&self) -> bool {
+        self.ui.show_welcome || self.ui.file_page.open || self.modal_dialog_open()
     }
 
     /// Nudge every selected object by `(dx, dy)` as one undo step.
@@ -4217,10 +4395,15 @@ impl Editor {
             return;
         };
         let mut steps: Vec<(String, Json)> = Vec::new();
+        let mut moved: Vec<String> = Vec::new();
         for id in self.selection.ids() {
             let Some((object, _)) = slide.object(&id) else {
                 continue;
             };
+            // A locked object stays where it is, whatever put it in the selection.
+            if object.locked {
+                continue;
+            }
             let frame = coursecraft_course::Rect {
                 x: object.frame.x + dx,
                 y: object.frame.y + dy,
@@ -4230,6 +4413,7 @@ impl Editor {
             if !frame.x.is_finite() || !frame.y.is_finite() {
                 continue;
             }
+            moved.push(id.clone());
             steps.push((
                 "object.set_frame".to_owned(),
                 serde_json::json!({
@@ -4244,9 +4428,31 @@ impl Editor {
                 }),
             ));
         }
-        if !steps.is_empty() {
-            self.run_batch(&steps);
+        if steps.is_empty() {
+            return;
         }
+        let slide_id = self.selection.slide.clone();
+        let revision_before = self.session.revision;
+        let continues_burst = self.ui.nudge_burst.as_ref().is_some_and(|burst| {
+            burst.revision == revision_before
+                && burst.slide == slide_id
+                && burst.ids == moved
+                && self.ui.current_time - burst.time <= NUDGE_BURST_SECS
+        });
+        if self.run_batch(&steps).is_none() {
+            self.ui.nudge_burst = None;
+            return;
+        }
+        // A held arrow key is one undo step, not one per repeat.
+        if continues_burst && self.session.revision != revision_before {
+            self.session.merge_last_two_undos(None);
+        }
+        self.ui.nudge_burst = Some(NudgeBurst {
+            revision: self.session.revision,
+            slide: slide_id,
+            ids: moved,
+            time: self.ui.current_time,
+        });
     }
 
     /// Single place that calls `session.execute`.
@@ -4763,8 +4969,7 @@ impl Editor {
         let mut requests = Vec::new();
 
         // File shortcuts (Save As before Save because egui's COMMAND match ignores extra Shift).
-        let file_shortcuts_allowed = !preview_has_focus
-            && !ui.ctx().egui_wants_keyboard_input()
+        let file_shortcuts_base = !preview_has_focus
             && self.ui.inline_edit.is_none()
             && !self.is_cropping()
             && !self.ui.ai.open
@@ -4773,6 +4978,29 @@ impl Editor {
             && !self.ui.translate.open
             && !self.ui.show_shortcuts_dialog
             && !matches!(self.ui.publish.phase, PublishPhase::Busy);
+        let file_shortcuts_allowed = file_shortcuts_base && !ui.ctx().egui_wants_keyboard_input();
+        // Ctrl+S in a text field commits the field first (it loses focus), then
+        // saves one frame later, so the save holds what was just typed.
+        if self.ui.save_after_commit {
+            self.ui.save_after_commit = false;
+            if self.file_ops_available && !self.ui.show_welcome {
+                requests.push(EditorRequest::Save);
+            }
+        } else if file_shortcuts_base
+            && !self.modal_dialog_open()
+            && !self.ui.show_welcome
+            && ui.ctx().egui_wants_keyboard_input()
+            && let Some(save_as) = menu::parse_shortcut("Ctrl+Shift+S")
+            && let Some(sc) = menu::parse_shortcut("Ctrl+S")
+            // Ctrl+Shift+S stays suppressed in a field; egui would match it as Ctrl+S.
+            && !ui.input_mut(|i| i.consume_shortcut(&save_as))
+            && ui.input_mut(|i| i.consume_shortcut(&sc))
+            && let Some(focused) = ui.memory(|m| m.focused())
+        {
+            ui.memory_mut(|m| m.surrender_focus(focused));
+            self.ui.save_after_commit = true;
+            ui.ctx().request_repaint();
+        }
         if file_shortcuts_allowed {
             if self.file_ops_available && !self.ui.show_welcome {
                 if let Some(sc) = menu::parse_shortcut("Ctrl+Shift+S")
@@ -4785,16 +5013,19 @@ impl Editor {
                     requests.push(EditorRequest::Save);
                 }
             }
-            if self.file_ops_available
-                && let Some(sc) = menu::parse_shortcut("Ctrl+O")
-                && ui.input_mut(|i| i.consume_shortcut(&sc))
-            {
-                requests.push(EditorRequest::Open);
-            }
-            if let Some(sc) = menu::parse_shortcut("Ctrl+N")
-                && ui.input_mut(|i| i.consume_shortcut(&sc))
-            {
-                requests.push(EditorRequest::New);
+            // New and Open stay on the start page and File page; a dialog blocks them.
+            if !self.modal_dialog_open() {
+                if self.file_ops_available
+                    && let Some(sc) = menu::parse_shortcut("Ctrl+O")
+                    && ui.input_mut(|i| i.consume_shortcut(&sc))
+                {
+                    requests.push(EditorRequest::Open);
+                }
+                if let Some(sc) = menu::parse_shortcut("Ctrl+N")
+                    && ui.input_mut(|i| i.consume_shortcut(&sc))
+                {
+                    requests.push(EditorRequest::New);
+                }
             }
         }
 
@@ -4862,6 +5093,7 @@ impl Editor {
             && !self.ui.document.open
             && !self.ui.alt.open
             && !self.ui.translate.open
+            && !self.global_keys_blocked()
             && let Some(sc) = menu::parse_shortcut("Ctrl+Shift+Z")
             && ui.input_mut(|i| i.consume_shortcut(&sc))
             && let Some(params) = menu::adapter(self, "edit.redo")
@@ -4873,32 +5105,30 @@ impl Editor {
         // first so Cmd+Shift+G is not swallowed by Cmd+G. While a text field or
         // the inline text editor has focus, skip registry shortcuts (Save, Save
         // As, Open, Preview, and Cmd+B/I/U are handled outside the registry).
-        let mut shortcuts: Vec<(&coursecraft_engine::Command, &str)> = registry()
-            .iter()
-            // Crop mode owns the keyboard until Enter applies or Escape cancels,
-            // and AI Settings owns it while the dialog is open.
-            .filter(|_| {
-                !preview_has_focus
-                    && !text_focus
-                    && !self.is_cropping()
-                    && !self.ui.ai.open
-                    && !self.ui.document.open
-                    && !self.ui.alt.open
-                    && !self.ui.translate.open
-            })
-            .filter_map(|cmd| cmd.shortcut.map(|shortcut| (cmd, shortcut)))
-            .collect();
-        shortcuts.sort_by_key(|(_, shortcut)| std::cmp::Reverse(shortcut.matches('+').count()));
-        for (cmd, sc_str) in shortcuts {
+        // Crop mode owns the keyboard until Enter applies or Escape cancels, AI
+        // Settings owns it while the dialog is open, and the start page, File page
+        // and every modal dialog block the keys that change the course.
+        let registry_keys_allowed = !preview_has_focus
+            && !text_focus
+            && !self.is_cropping()
+            && !self.ui.ai.open
+            && !self.ui.document.open
+            && !self.ui.alt.open
+            && !self.ui.translate.open
+            && !self.global_keys_blocked();
+        let shortcuts: &[RegistryShortcut] = if registry_keys_allowed {
+            registry_shortcuts()
+        } else {
+            &[]
+        };
+        for &(cmd, sc) in shortcuts {
             if cmd.id == "object.delete"
                 && self.ui.bottom_tab == BottomTab::States
                 && self.ui.states.card_strip_focused
             {
                 continue;
             }
-            if let Some(sc) = menu::parse_shortcut(sc_str)
-                && ui.input_mut(|i| i.consume_shortcut(&sc))
-            {
+            if ui.input_mut(|i| i.consume_shortcut(&sc)) {
                 if cmd.id == "course.find" {
                     find::open(self);
                 } else if cmd.id == "object.duplicate" && self.selection.is_multi() {
@@ -4961,10 +5191,12 @@ impl Editor {
             && !ui.memory(|m| m.focused().is_some())
             && !(self.ui.bottom_tab == BottomTab::States && self.ui.states.card_strip_focused)
         {
-            let del_pressed = ui.input_mut(|i| {
-                i.consume_key(Modifiers::NONE, Key::Delete)
-                    || i.consume_key(Modifiers::NONE, Key::Backspace)
-            });
+            let keys_blocked = self.global_keys_blocked();
+            let del_pressed = !keys_blocked
+                && ui.input_mut(|i| {
+                    i.consume_key(Modifiers::NONE, Key::Delete)
+                        || i.consume_key(Modifiers::NONE, Key::Backspace)
+                });
             if del_pressed {
                 if let Some((object, cue)) = self.ui.timeline.cue_selected.take() {
                     self.run(
@@ -5007,7 +5239,7 @@ impl Editor {
                 self.run("slide.add_cue", params);
             }
 
-            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) {
+            if !keys_blocked && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) {
                 self.select_all_objects();
             }
 
@@ -5018,15 +5250,56 @@ impl Editor {
                 Modifiers::NONE
             };
             let step = if shift { 10.0 } else { 1.0 };
+            // A key that is not held ends an arrow-key burst: the next nudge is a new undo step.
+            let arrow_down = ui.input(|i| {
+                [
+                    Key::ArrowLeft,
+                    Key::ArrowRight,
+                    Key::ArrowUp,
+                    Key::ArrowDown,
+                ]
+                .iter()
+                .any(|key| i.key_down(*key))
+            });
+            if !arrow_down {
+                self.ui.nudge_burst = None;
+            }
+            // With the slide list active, Up and Down walk the slides; Home and End
+            // jump to the first and last. Shift extends the range.
+            let slide_list_keys = !keys_blocked
+                && self.ui.last_active_area == ActiveArea::Navigator
+                && !self.ui.master_view
+                && !self.ui.story_view;
+            let slide_nav = if slide_list_keys {
+                [
+                    (Key::ArrowUp, slides::SlideNav::Prev),
+                    (Key::ArrowDown, slides::SlideNav::Next),
+                    (Key::Home, slides::SlideNav::First),
+                    (Key::End, slides::SlideNav::Last),
+                ]
+                .into_iter()
+                .find(|(key, _)| ui.input_mut(|i| i.consume_key(nudge_mods, *key)))
+            } else {
+                None
+            };
+            if let Some((_, nav)) = slide_nav {
+                self.navigate_slides(nav, shift);
+            }
             // In the Course map the arrows move the map selection instead.
-            let left =
-                !self.ui.story_view && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowLeft));
-            let right =
-                !self.ui.story_view && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowRight));
-            let up =
-                !self.ui.story_view && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowUp));
-            let down =
-                !self.ui.story_view && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowDown));
+            let left = !keys_blocked
+                && !self.ui.story_view
+                && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowLeft));
+            let right = !keys_blocked
+                && !self.ui.story_view
+                && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowRight));
+            let up = !keys_blocked
+                && !self.ui.story_view
+                && !slide_list_keys
+                && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowUp));
+            let down = !keys_blocked
+                && !self.ui.story_view
+                && !slide_list_keys
+                && ui.input_mut(|i| i.consume_key(nudge_mods, Key::ArrowDown));
             if left {
                 self.nudge_selection(-step, 0.0);
             } else if right {
@@ -5047,9 +5320,9 @@ impl Editor {
             if fit_pressed {
                 self.ui.zoom = ZoomLevel::Fit;
             } else if in_pressed {
-                self.ui.zoom = self.ui.zoom.zoom_in();
+                self.zoom_in();
             } else if out_pressed {
-                self.ui.zoom = self.ui.zoom.zoom_out();
+                self.zoom_out();
             }
 
             let question_pressed = ui.input_mut(|i| {

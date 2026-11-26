@@ -974,7 +974,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             )
             .clicked()
             {
-                editor.ui.zoom = editor.ui.zoom.zoom_in();
+                editor.zoom_in();
                 ui.close();
             }
             if menu_button(
@@ -986,7 +986,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             )
             .clicked()
             {
-                editor.ui.zoom = editor.ui.zoom.zoom_out();
+                editor.zoom_out();
                 ui.close();
             }
             ui.separator();

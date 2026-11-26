@@ -20,12 +20,15 @@ struct CachedVersionInfo {
 
 static VERSION_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedVersionInfo>>> = OnceLock::new();
 
+// Per thread, so parallel tests that list versions do not disturb each other's count.
 #[cfg(test)]
-static VERSION_CACHE_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    static VERSION_CACHE_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 pub(crate) fn cache_hits() -> usize {
-    VERSION_CACHE_HITS.load(std::sync::atomic::Ordering::Relaxed)
+    VERSION_CACHE_HITS.with(std::cell::Cell::get)
 }
 
 /// Most bytes of versions kept for one project (5 GB). The oldest go first.
@@ -197,7 +200,7 @@ fn describe(config_dir: &Path, project: &Path, id: &str) -> Version {
         && entry.size == size
     {
         #[cfg(test)]
-        VERSION_CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        VERSION_CACHE_HITS.with(|hits| hits.set(hits.get() + 1));
         return Version {
             id: id.to_string(),
             path,

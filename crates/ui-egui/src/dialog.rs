@@ -29,6 +29,18 @@ fn footer_id(window: Id) -> Id {
     window.with("dialog_footer_height")
 }
 
+fn shown_id() -> Id {
+    Id::unique("coursecraft_dialog_shown_frame")
+}
+
+/// Whether a [`Dialog`] was drawn this frame or the one before. Global shortcuts use it to
+/// stay out of a dialog's way (the ribbon is drawn before the dialogs).
+#[must_use]
+pub fn any_open(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(shown_id()))
+        .is_some_and(|frame| frame + 1 >= ctx.cumulative_frame_nr())
+}
+
 /// Record the y below the menu bar and toolbar. Dialogs open below it.
 pub(crate) fn set_top_inset(ctx: &Context, y: f32) {
     ctx.data_mut(|d| d.insert_temp(top_inset_id(), y));
@@ -202,9 +214,16 @@ impl<'a> Dialog<'a> {
             })
         };
 
+        let mark_shown = |shown: bool| {
+            if shown {
+                let frame = ctx.cumulative_frame_nr();
+                ctx.data_mut(|d| d.insert_temp(shown_id(), frame));
+            }
+        };
         if let Some(open) = self.open {
             let mut still_open = *open;
             let response = show_window(window.open(&mut still_open));
+            mark_shown(response.is_some());
             if response.is_some()
                 && still_open
                 && close_on_escape
@@ -217,7 +236,9 @@ impl<'a> Dialog<'a> {
             *open = still_open;
             response
         } else {
-            show_window(window)
+            let response = show_window(window);
+            mark_shown(response.is_some());
+            response
         }
     }
 }

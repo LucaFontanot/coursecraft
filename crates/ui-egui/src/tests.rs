@@ -7252,6 +7252,15 @@ fn canvas_zoom_transform_hit_test_and_drag() {
         "clicking object center at Fit zoom should select it"
     );
 
+    // The zoomed view stays on the slide centre, so move the title there to keep it in view.
+    harness
+        .editor
+        .run(
+            "object.set_frame",
+            serde_json::json!({ "slide": "s-intro", "object": "title", "frame": { "x": 560.0, "y": 310.0, "w": 160.0, "h": 100.0 } }),
+        )
+        .expect("move the title");
+    let title_slide_rect = Rect::from_min_size(pos2(560.0, 310.0), vec2(160.0, 100.0));
     // 2. At 200%, dragging an object by 20 screen px moves it 10 slide px
     harness.editor.ui.zoom = ZoomLevel::Percent200;
     harness.idle_frame();
@@ -7271,13 +7280,20 @@ fn canvas_zoom_transform_hit_test_and_drag() {
     let scale_200 = 2.0;
     let slide_w = sw * scale_200;
     let slide_h = sh * scale_200;
-    let offset_x = c_rect.min.x + (c_rect.width().max(slide_w + 64.0) - slide_w) * 0.5;
-    let offset_y = c_rect.min.y + (c_rect.height().max(slide_h + 96.0) - slide_h) * 0.5;
-    let slide_rect_200 = Rect::from_min_size(pos2(offset_x, offset_y), vec2(slide_w, slide_h));
+    // Zooming keeps the view centre, so the slide is where the canvas drew it,
+    // not at the top-left of the scrollable area.
+    harness.idle_frame();
+    let slide_rect_200 = harness.editor.ui.last_slide_rect.expect("slide drawn");
+    assert!(
+        (slide_rect_200.width() - slide_w).abs() < 1.0
+            && (slide_rect_200.height() - slide_h).abs() < 1.0,
+        "200% slide rect {slide_rect_200:?}"
+    );
     let t_200 = SlideTransform::fit(slide_rect_200, slide_size).expect("200% transform");
 
     let title_200_rect = t_200.to_screen_rect(title_slide_rect);
-    let start_pos = pos2(title_200_rect.min.x + 50.0, title_200_rect.center().y);
+    // The title sits at the slide centre, which the zoom keeps at the view centre.
+    let start_pos = title_200_rect.center();
 
     // Drag by 20 screen px to the right
     harness.drag_by(start_pos, vec2(20.0, 0.0), 4, Modifiers::NONE);
@@ -19435,10 +19451,10 @@ fn m31_02_file_shortcuts_suppressed_in_text_edit_inline_preview_and_welcome() {
         "Find dialog must own keyboard input"
     );
     for (key, mods) in [
-        (Key::S, Modifiers::COMMAND),
         (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
         (Key::O, Modifiers::COMMAND),
         (Key::N, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND),
     ] {
         let reqs = h.frame(key_event(key, mods));
         assert!(
@@ -19446,6 +19462,13 @@ fn m31_02_file_shortcuts_suppressed_in_text_edit_inline_preview_and_welcome() {
             "file shortcut ({key:?}) must be suppressed while TextEdit is focused: {reqs:?}"
         );
     }
+    // Ctrl+S in a field is the exception (R4): the field commits first, and the
+    // save follows one frame later, never in the same frame.
+    let after = h.idle_frame();
+    assert!(
+        after.iter().any(|r| matches!(r, EditorRequest::Save)),
+        "Ctrl+S in a text field saves after the field commits: {after:?}"
+    );
     h.press(Key::Escape, Modifiers::NONE);
     h.idle_frame();
 

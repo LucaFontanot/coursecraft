@@ -55,6 +55,21 @@ fn kill_child_writer() {
     }
 }
 
+/// Open the project, trying again for a moment when a read lands on the instant
+/// the writer swaps the file in. A damaged file fails every time, so this never
+/// hides real damage.
+fn open_retrying(target: &Path) -> Result<crate::files::LoadedCourse, String> {
+    let mut last = String::new();
+    for _ in 0..40 {
+        match open_from(target) {
+            Ok(loaded) => return Ok(loaded),
+            Err(e) => last = e,
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    Err(last)
+}
+
 #[test]
 fn a_killed_save_never_damages_the_project() {
     let dir = scratch_dir("test-kill-save");
@@ -81,12 +96,27 @@ fn a_killed_save_never_damages_the_project() {
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
+        // Wait until this child has really replaced the file at least once, so a
+        // slow start under a loaded machine cannot end the round before any save.
+        let started = std::time::Instant::now();
+        let before = open_retrying(&target).map(|(c, _)| c.title);
+        loop {
+            let now = open_retrying(&target).map(|(c, _)| c.title);
+            if now.is_ok() && now != before {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "round {round}: the child never completed a save"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         std::thread::sleep(Duration::from_millis(delay));
         let _ = child.kill();
         let _ = child.wait();
 
         let (course, media) =
-            open_from(&target).unwrap_or_else(|e| panic!("round {round}: target damaged: {e}"));
+            open_retrying(&target).unwrap_or_else(|e| panic!("round {round}: target damaged: {e}"));
         let n: u32 = course.title.strip_prefix('v').unwrap().parse().unwrap();
         newest = newest.max(n);
         assert_eq!(media.len(), 1, "round {round}");

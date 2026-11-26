@@ -1,8 +1,9 @@
 //! Changing the slide size, with or without scaling the content.
 
 use coursecraft_course::{
-    Course, Glow, MAX_OBJECT_FRAME_SIZE, Object, ObjectKind, Outline, Paragraph, Shadow, ShapeText,
-    Size, Slide, StateDef, StateExtra, StateExtraKind, TextRun, TextStyle, clamp_letter_spacing,
+    Course, FillStyle, Glow, MAX_OBJECT_FRAME_SIZE, Object, ObjectKind, Outline, Paragraph, Shadow,
+    ShapeText, Size, Slide, StateDef, StateExtra, StateExtraKind, TextRun, TextStyle,
+    clamp_letter_spacing,
 };
 
 /// Smallest and largest slide sides the command accepts, in pixels.
@@ -92,6 +93,26 @@ fn scale_outline(outline: &mut Outline, m: Map) {
     outline.width = m.len(outline.width).clamp(0.0, 50.0);
 }
 
+/// A tiled picture fill repeats at its natural size times `tile_scale`, so the
+/// scale follows the content when the slide size changes.
+fn scale_fill_style(fill: Option<&mut FillStyle>, m: Map) {
+    if let Some(FillStyle::Picture {
+        mode: coursecraft_course::PictureFillMode::Tile,
+        tile_scale,
+        ..
+    }) = fill
+    {
+        for side in tile_scale.iter_mut() {
+            let scaled = m.len(*side);
+            *side = if scaled.is_finite() && scaled > 0.0 {
+                scaled.clamp(0.01, 100.0)
+            } else {
+                1.0
+            };
+        }
+    }
+}
+
 fn scale_paragraph(paragraph: &mut Paragraph, m: Map) {
     paragraph.space_before = m.len(paragraph.space_before).clamp(0.0, 200.0);
     paragraph.space_after = m.len(paragraph.space_after).clamp(0.0, 200.0);
@@ -135,7 +156,13 @@ fn scale_state_extra(extra: &mut StateExtra, m: Map) {
         scale_glow(glow, m);
     }
     match &mut extra.kind {
-        StateExtraKind::Shape { outline, text, .. } => {
+        StateExtraKind::Shape {
+            outline,
+            text,
+            fill_style,
+            ..
+        } => {
+            scale_fill_style(fill_style.as_mut(), m);
             if let Some(outline) = outline {
                 scale_outline(outline, m);
             }
@@ -163,6 +190,7 @@ fn scale_state_extra(extra: &mut StateExtra, m: Map) {
             }
         }
         StateExtraKind::Path { path } => {
+            scale_fill_style(path.fill_style.as_mut(), m);
             scale_outline(&mut path.outline, m);
             if let Some(text) = path.text.as_mut() {
                 scale_shape_text(text, m);
@@ -190,6 +218,7 @@ fn scale_state(state: &mut StateDef, m: Map) {
     if let Some(glow) = state.glow.as_mut() {
         scale_glow(glow, m);
     }
+    scale_fill_style(state.fill_style.as_mut(), m);
     for extra in &mut state.extras {
         scale_state_extra(extra, m);
     }
@@ -237,7 +266,16 @@ fn scale_object(o: &mut Object, m: Map) {
                 scale_outline(outline, m);
             }
         }
-        ObjectKind::Shape { outline, text, .. } => {
+        ObjectKind::Button { fill_style, .. } => {
+            scale_fill_style(fill_style.as_mut(), m);
+        }
+        ObjectKind::Shape {
+            outline,
+            text,
+            fill_style,
+            ..
+        } => {
+            scale_fill_style(fill_style.as_mut(), m);
             if let Some(outline) = outline {
                 scale_outline(outline, m);
             }
@@ -252,6 +290,7 @@ fn scale_object(o: &mut Object, m: Map) {
             scale_outline(outline, m);
         }
         ObjectKind::Path { path } => {
+            scale_fill_style(path.fill_style.as_mut(), m);
             scale_outline(&mut path.outline, m);
             if let Some(text) = path.text.as_mut() {
                 scale_shape_text(text, m);

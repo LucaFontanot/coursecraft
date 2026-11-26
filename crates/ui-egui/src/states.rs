@@ -58,6 +58,9 @@ pub struct StatesState {
     pub new_state_name_rect: Option<Rect>,
     pub add_button_rect: Option<Rect>,
     pub state_row_rects: HashMap<String, Rect>,
+
+    /// Composed state cards by (object id, state name): see [`ThumbCard`].
+    pub thumb_cards: HashMap<(String, String), ThumbCard>,
 }
 
 impl StatesState {
@@ -865,6 +868,63 @@ pub(crate) fn compose_thumbnail_items(
     )
 }
 
+/// Cards kept composed; a stale or oversized cache is dropped whole.
+const MAX_CACHED_CARDS: usize = 64;
+
+/// One state card's composed items, with what they were composed from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThumbCard {
+    revision: u64,
+    media_generation: u64,
+    obj: Object,
+    /// The items moved to the origin, and the size they fit in; `None` when
+    /// the card draws nothing.
+    items: Option<(Vec<DrawItem>, f32, f32)>,
+}
+
+fn compose_thumb_card(editor: &Editor, obj: &Object, state_name: &str) -> ThumbCard {
+    let mut card = ThumbCard {
+        revision: editor.session.revision,
+        media_generation: editor.media.generation(),
+        obj: obj.clone(),
+        items: None,
+    };
+    let mut items = compose_thumbnail_items(&editor.session.course, obj, state_name);
+    if items.is_empty() {
+        return card;
+    }
+    crate::canvas::missing_images_as_placeholders(
+        &mut items,
+        &editor.media,
+        Some(editor.media.index()),
+    );
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for it in &items {
+        min_x = min_x.min(it.rect.min.x);
+        min_y = min_y.min(it.rect.min.y);
+        max_x = max_x.max(it.rect.max.x);
+        max_y = max_y.max(it.rect.max.y);
+    }
+    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+        return card;
+    }
+    let raw_w = (max_x - min_x).max(1.0);
+    let raw_h = (max_y - min_y).max(1.0);
+    let pad = (raw_w.max(raw_h) * 0.10).max(2.0);
+    let origin_x = min_x - pad;
+    let origin_y = min_y - pad;
+    let bounds_w = (raw_w + pad * 2.0).max(1.0);
+    let bounds_h = (raw_h + pad * 2.0).max(1.0);
+    for it in &mut items {
+        it.rect = it.rect.translate(vec2(-origin_x, -origin_y));
+    }
+    card.items = Some((items, bounds_w, bounds_h));
+    card
+}
+
 fn paint_state_thumbnail(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -915,39 +975,27 @@ fn paint_state_thumbnail(
         return;
     }
 
-    let mut items = compose_thumbnail_items(&editor.session.course, obj, state_name);
-    if items.is_empty() {
+    // Composing a card is not free, and a card changes rarely: keep the
+    // composed items until the course, the media or the object change.
+    let key = (obj.id.clone(), state_name.to_owned());
+    let revision = editor.session.revision;
+    let media_generation = editor.media.generation();
+    let fresh = editor.ui.states.thumb_cards.get(&key).is_some_and(|c| {
+        c.revision == revision && c.media_generation == media_generation && c.obj == *obj
+    });
+    if !fresh {
+        if editor.ui.states.thumb_cards.len() > MAX_CACHED_CARDS {
+            editor.ui.states.thumb_cards.clear();
+        }
+        let card = compose_thumb_card(editor, obj, state_name);
+        editor.ui.states.thumb_cards.insert(key.clone(), card);
+    }
+    let Some(card) = editor.ui.states.thumb_cards.get(&key) else {
         return;
-    }
-    crate::canvas::missing_images_as_placeholders(
-        &mut items,
-        &editor.media,
-        Some(editor.media.index()),
-    );
-
-    let mut min_x = f32::INFINITY;
-    let mut min_y = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut max_y = f32::NEG_INFINITY;
-    for it in &items {
-        min_x = min_x.min(it.rect.min.x);
-        min_y = min_y.min(it.rect.min.y);
-        max_x = max_x.max(it.rect.max.x);
-        max_y = max_y.max(it.rect.max.y);
-    }
-    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+    };
+    let Some((items, bounds_w, bounds_h)) = &card.items else {
         return;
-    }
-    let raw_w = (max_x - min_x).max(1.0);
-    let raw_h = (max_y - min_y).max(1.0);
-    let pad = (raw_w.max(raw_h) * 0.10).max(2.0);
-    let origin_x = min_x - pad;
-    let origin_y = min_y - pad;
-    let bounds_w = (raw_w + pad * 2.0).max(1.0);
-    let bounds_h = (raw_h + pad * 2.0).max(1.0);
-    for it in &mut items {
-        it.rect = it.rect.translate(vec2(-origin_x, -origin_y));
-    }
+    };
 
     let Some(t) = SlideTransform::fit(
         thumb_rect,
@@ -962,7 +1010,7 @@ fn paint_state_thumbnail(
     paint(
         &painter,
         &t,
-        &items,
+        items,
         Highlight::default(),
         Some((&mut editor.media_cache, &source)),
         Some(&editor.session.course.theme),

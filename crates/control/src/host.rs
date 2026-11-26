@@ -172,6 +172,35 @@ impl HeadlessMediaSource {
     }
 }
 
+/// Write `media` into the `media/` folder next to a bare `.json` course. A file
+/// that already holds the same bytes is left alone.
+fn write_sibling_media(target: &Path, media: &[(String, Vec<u8>)]) -> Result<(), HostError> {
+    if media.is_empty() {
+        return Ok(());
+    }
+    let dir = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join("media");
+    for (name, bytes) in media {
+        if !coursecraft_format::is_safe_relative_path(name) {
+            return Err(HostError::Io(format!(
+                "media name {name:?} is not a safe path, nothing was marked saved"
+            )));
+        }
+        let file = dir.join(name);
+        if std::fs::read(&file).is_ok_and(|old| old == *bytes) {
+            continue;
+        }
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| HostError::Io(e.to_string()))?;
+        }
+        std::fs::write(&file, bytes).map_err(|e| HostError::Io(e.to_string()))?;
+    }
+    Ok(())
+}
+
 impl coursecraft_render::MediaSource for HeadlessMediaSource {
     fn get(&self, src: &str) -> coursecraft_render::MediaFetch {
         if !coursecraft_format::is_safe_relative_path(src) {
@@ -488,6 +517,11 @@ impl ControlHost for HeadlessHost {
                     .course
                     .to_json()
                     .map_err(|e| HostError::Engine(e.to_string()))?;
+                // A bare `.json` keeps its pictures and sounds in a sibling
+                // `media/` folder. Write them first; if one fails, return the
+                // error before the course file or the clean mark changes.
+                let media = self.collect_media_for_save();
+                write_sibling_media(&target, &media)?;
                 std::fs::write(&target, format!("{json_text}\n"))
                     .map_err(|e| HostError::Io(e.to_string()))?;
             }
@@ -509,23 +543,27 @@ impl ControlHost for HeadlessHost {
             .and_then(|ext| ext.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
 
+        // Read and parse first. The session media changes only when the open worked.
+        let new_media: Vec<(String, Vec<u8>)>;
         let course = if is_ccraft {
             let file = std::fs::File::open(path).map_err(|e| HostError::Io(e.to_string()))?;
             let reader = std::io::BufReader::with_capacity(256 * 1024, file);
             let proj = coursecraft_format::open_project_from(reader)
                 .map_err(|e| HostError::Engine(e.to_string()))?;
-            self.media_source.set_in_memory(&proj.media);
+            new_media = proj.media;
             proj.course
         } else if path.is_dir() {
             let opened = coursecraft_format::open_project_folder(path)
                 .map_err(|e| HostError::Engine(e.to_string()))?;
-            self.media_source.set_in_memory(&opened.project.media);
+            new_media = opened.project.media;
             opened.project.course
         } else {
-            self.media_source.set_in_memory(&[]);
             let text = std::fs::read_to_string(path).map_err(|e| HostError::Io(e.to_string()))?;
-            Course::from_json(&text).map_err(|e| HostError::Engine(e.to_string()))?
+            let course = Course::from_json(&text).map_err(|e| HostError::Engine(e.to_string()))?;
+            new_media = Vec::new();
+            course
         };
+        self.media_source.set_in_memory(&new_media);
 
         self.media_source.set_path(Some(path.to_path_buf()));
 

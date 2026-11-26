@@ -497,7 +497,8 @@ fn bleed_separator(ui: &mut Ui) {
     ui.add_space(ui.spacing().item_spacing.y);
 }
 
-/// Hidden and locked object IDs on the active slide or layer.
+/// Hidden and locked object IDs on the active slide: its own objects and those
+/// of every layer, so "Show all" and "Unlock all" mean the whole slide.
 pub(crate) fn hidden_and_locked_ids(
     course: &Course,
     selection: &crate::Selection,
@@ -505,21 +506,17 @@ pub(crate) fn hidden_and_locked_ids(
     let Some(slide) = course.slide(&selection.slide) else {
         return (Vec::new(), Vec::new());
     };
-    let objs = match selection.layer.as_deref().and_then(|lid| slide.layer(lid)) {
-        Some(layer) => layer.objects.as_slice(),
-        None if selection.layer.is_some() => &[],
-        None => slide.objects.as_slice(),
+    let objs = || {
+        slide
+            .objects
+            .iter()
+            .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
     };
-    let hidden_ids = objs
-        .iter()
+    let hidden_ids = objs()
         .filter(|o| o.editor_hidden)
         .map(|o| o.id.clone())
         .collect();
-    let locked_ids = objs
-        .iter()
-        .filter(|o| o.locked)
-        .map(|o| o.id.clone())
-        .collect();
+    let locked_ids = objs().filter(|o| o.locked).map(|o| o.id.clone()).collect();
     (hidden_ids, locked_ids)
 }
 
@@ -1147,7 +1144,13 @@ fn draw_bar_or_preview(
                 let wf_max_x = (bar_rect.min.x + wf_width).min(bar_rect.max.x - 1.0);
                 let peak_span = (peak_end_frac - peak_start_frac).max(0.0);
                 let n = peaks.len();
-                let mut x = bar_rect.min.x + 1.0;
+                // Draw only what is visible: a zoomed-in bar can be far wider
+                // than the panel, and the clip would discard the rest.
+                let visible = wf_painter.clip_rect();
+                let first_x = bar_rect.min.x + 1.0;
+                let skipped = ((visible.min.x - first_x) / step).floor().max(0.0);
+                let mut x = first_x + skipped * step;
+                let wf_max_x = wf_max_x.min(visible.max.x + step);
                 while x < wf_max_x {
                     let u0 = ((x - bar_rect.min.x) / wf_width).clamp(0.0, 1.0);
                     let u1 = ((x + step - bar_rect.min.x) / wf_width).clamp(0.0, 1.0);

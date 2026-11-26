@@ -481,6 +481,28 @@ impl TestHarness {
         self.idle_frame();
     }
 
+    /// Like [`Self::set_field`], but like a person: click, select all, type in one frame, run
+    /// idle frames, then press Enter in a LATER frame. A field bound to a value that is rebuilt
+    /// every frame loses the typed text in the idle frames; `set_field` cannot show that.
+    pub fn type_field_then_enter(&mut self, pos: Pos2, text: &str) {
+        self.click_at(pos);
+        self.idle_frame();
+        self.press(Key::A, Modifiers::COMMAND);
+        self.type_text(text);
+        self.idle_frame();
+        self.idle_frame();
+        self.press(Key::Enter, Modifiers::NONE);
+        self.idle_frame();
+    }
+
+    /// Drag a DragValue at `pos` over `steps` frames (pointer down, moves, pointer up). Idle
+    /// frames follow the release.
+    pub fn drag_value_by(&mut self, pos: Pos2, dx: f32, steps: usize) {
+        self.drag_by(pos, egui::vec2(dx, 0.0), steps, Modifiers::NONE);
+        self.idle_frame();
+        self.idle_frame();
+    }
+
     /// Click a multiline text edit at `pos`, select all, type `text`, and click away to commit on blur.
     pub fn set_multiline_field(&mut self, pos: Pos2, text: &str, click_away_pos: Pos2) {
         self.click_at(pos);

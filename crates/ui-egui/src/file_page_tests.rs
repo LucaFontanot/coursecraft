@@ -142,6 +142,10 @@ fn new_on_the_welcome_page_starts_a_course() {
     let new = h.find_text("New").expect("New entry");
     let reqs = h.click_at_requests(new);
     assert!(reqs.iter().any(|r| matches!(r, EditorRequest::New)));
+    // The page closes when the course has really loaded (the shell replaces it).
+    assert!(h.editor.ui.show_welcome);
+    let course = Course::from_json(HELLO_COURSE).expect("hello course parses");
+    h.editor.replace_course(course);
     assert!(!h.editor.ui.show_welcome);
     assert!(h.editor.ui.has_loaded_course);
 }

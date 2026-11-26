@@ -12,6 +12,9 @@ use serde_json::Value as Json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Frames the slide list may stand still while scrolling a slide into view, before giving up.
+const MAX_SCROLL_STALLED: u8 = 3;
+
 /// Maximum number of composed thumbnails retained in [`ThumbnailCache`].
 pub(crate) const MAX_CACHED_THUMBNAILS: usize = 128;
 
@@ -402,12 +405,208 @@ enum SlideMenuAction {
     Rename(String),
     DeleteSelected,
     PreviewSelected,
+    DuplicateSelected,
+    MoveSelected { up: bool },
 }
 
 enum SlideClick {
     Single(String),
     Toggle(String),
     Range(String),
+}
+
+/// A move of the slide selection by keyboard in the slide list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlideNav {
+    Prev,
+    Next,
+    First,
+    Last,
+}
+
+/// A slide menu acts on the whole selection when its slide is part of it, and on
+/// that slide alone otherwise.
+fn select_slide_for_menu(editor: &mut Editor, id: String) {
+    if !editor.selection.is_slide_selected(&id) {
+        editor.selection.slide = id;
+        editor.selection.also_slides.clear();
+    }
+    editor.selection.layer = None;
+    editor.selection.clear_objects();
+}
+
+/// The moves that shift every selected slide one place up or down in its scene,
+/// as `(slide, scene, new index)` in the order to run them. A selected slide at the
+/// edge of its scene, or behind one that cannot move, stays; the rest move.
+#[must_use]
+pub(crate) fn plan_slide_moves(
+    course: &Course,
+    selected: &[String],
+    up: bool,
+) -> Vec<(String, String, usize)> {
+    let mut plan = Vec::new();
+    for scene in &course.scenes {
+        let mut order: Vec<&str> = scene.slides.iter().map(|s| s.id.as_str()).collect();
+        let mut walk: Vec<&str> = order
+            .iter()
+            .copied()
+            .filter(|id| selected.iter().any(|s| s == id))
+            .collect();
+        if !up {
+            walk.reverse();
+        }
+        let mut stuck: Vec<&str> = Vec::new();
+        for id in walk {
+            let Some(pos) = order.iter().position(|other| *other == id) else {
+                continue;
+            };
+            let neighbour = if up {
+                pos.checked_sub(1)
+            } else {
+                Some(pos + 1).filter(|next| *next < order.len())
+            };
+            let Some(neighbour) = neighbour else {
+                stuck.push(id);
+                continue;
+            };
+            if order
+                .get(neighbour)
+                .is_some_and(|other| stuck.contains(other))
+            {
+                stuck.push(id);
+                continue;
+            }
+            order.remove(pos);
+            order.insert(neighbour, id);
+            plan.push((id.to_owned(), scene.id.clone(), neighbour));
+        }
+    }
+    plan
+}
+
+impl Editor {
+    /// Slides in the order the slide list shows them: scenes, then the slides of
+    /// the question banks that are expanded.
+    #[must_use]
+    pub(crate) fn navigator_slide_order(&self) -> Vec<String> {
+        let mut order: Vec<String> = self
+            .session
+            .course
+            .slides()
+            .map(|slide| slide.id.clone())
+            .collect();
+        for bank in &self.session.course.banks {
+            if self.ui.bank_expanded.contains(&bank.id) {
+                order.extend(bank.slides.iter().map(|slide| slide.id.clone()));
+            }
+        }
+        order
+    }
+
+    /// Every selected slide, in the order of the slide list.
+    #[must_use]
+    pub(crate) fn selected_slides_in_order(&self) -> Vec<String> {
+        let ids: Vec<String> = self
+            .navigator_slide_order()
+            .into_iter()
+            .filter(|id| self.selection.is_slide_selected(id))
+            .collect();
+        if ids.is_empty() && !self.selection.slide.is_empty() {
+            vec![self.selection.slide.clone()]
+        } else {
+            ids
+        }
+    }
+
+    /// Move the slide selection by key: previous, next, first or last slide in list
+    /// order, across scenes. `extend` grows or shrinks the range from the slide that
+    /// was selected first (Shift+arrow). Like a click, it clears the object and layer.
+    pub(crate) fn navigate_slides(&mut self, nav: SlideNav, extend: bool) {
+        let order = self.navigator_slide_order();
+        let Some(last) = order.len().checked_sub(1) else {
+            return;
+        };
+        let cursor = self
+            .ui
+            .slides_cursor
+            .clone()
+            .filter(|id| self.selection.is_slide_selected(id) && order.contains(id))
+            .unwrap_or_else(|| self.selection.slide.clone());
+        let at = order.iter().position(|id| id == &cursor);
+        let index = match (nav, at) {
+            (SlideNav::First, _) => 0,
+            (SlideNav::Last, _) => last,
+            (SlideNav::Next, Some(i)) => (i + 1).min(last),
+            (SlideNav::Prev, Some(i)) => i.saturating_sub(1),
+            (SlideNav::Next, None) => 0,
+            (SlideNav::Prev, None) => last,
+        };
+        let Some(target) = order.get(index).cloned() else {
+            return;
+        };
+        let in_scenes = |id: &str| self.session.course.slide_index(id).is_some();
+        if extend && in_scenes(&self.selection.slide) && in_scenes(&target) {
+            self.selection
+                .select_slide_range(&self.session.course, &target);
+            self.ui.slides_cursor = Some(target);
+        } else {
+            self.selection.slide = target;
+            self.selection.also_slides.clear();
+            self.ui.slides_cursor = None;
+        }
+        self.selection.layer = None;
+        self.selection.clear_objects();
+        self.ui.slides_scrolled_to = None;
+        self.ui.slides_scroll_stalled = 0;
+        self.ui.slides_scroll_gap = f32::NAN;
+    }
+
+    /// Duplicate every selected slide, each right after its original, as one undo step.
+    pub(crate) fn duplicate_selected_slides(&mut self) {
+        let ids = self.selected_slides_in_order();
+        let steps: Vec<(String, Json)> = ids
+            .iter()
+            .filter(|id| self.session.course.slide(id).is_some())
+            .map(|id| {
+                (
+                    "slide.duplicate".to_owned(),
+                    serde_json::json!({ "slide": id }),
+                )
+            })
+            .collect();
+        match steps.as_slice() {
+            [] => {}
+            [(_, params)] => {
+                self.run("slide.duplicate", params.clone());
+            }
+            _ => {
+                self.run_batch(&steps);
+            }
+        }
+    }
+
+    /// Move every selected slide one place up or down in its scene as one undo step.
+    pub(crate) fn move_selected_slides(&mut self, up: bool) {
+        let selected = self.selected_slides_in_order();
+        let steps: Vec<(String, Json)> = plan_slide_moves(&self.session.course, &selected, up)
+            .into_iter()
+            .map(|(slide, scene, index)| {
+                (
+                    "slide.move".to_owned(),
+                    serde_json::json!({ "slide": slide, "scene": scene, "index": index }),
+                )
+            })
+            .collect();
+        match steps.as_slice() {
+            [] => {}
+            [(_, params)] => {
+                self.run("slide.move", params.clone());
+            }
+            _ => {
+                self.run_batch(&steps);
+            }
+        }
+    }
 }
 
 /// Returns the thumbnail rect for a given slide id, given the left panel rect.
@@ -1223,6 +1422,7 @@ fn show_slide_menu_items(
     total_slides: usize,
     multi_selected: bool,
     selected_count: usize,
+    multi_move: Option<(bool, bool)>,
     can_paste: bool,
     has_question: bool,
     banks: &[(String, String)],
@@ -1248,8 +1448,17 @@ fn show_slide_menu_items(
         ));
         ui.close();
     }
-    if ui.button("Duplicate slide").clicked() {
-        *action_to_run = Some(("slide.duplicate", serde_json::json!({ "slide": slide_id })));
+    let duplicate_label = if multi_selected {
+        "Duplicate slides"
+    } else {
+        "Duplicate slide"
+    };
+    if ui.button(duplicate_label).clicked() {
+        if multi_selected {
+            *slide_action = Some(SlideMenuAction::DuplicateSelected);
+        } else {
+            *action_to_run = Some(("slide.duplicate", serde_json::json!({ "slide": slide_id })));
+        }
         ui.close();
     }
     if crate::menu::menu_button(
@@ -1268,7 +1477,11 @@ fn show_slide_menu_items(
     }
     ui.separator();
 
-    let can_cut = total_slides > 1;
+    let can_cut = if multi_selected {
+        total_slides > selected_count
+    } else {
+        total_slides > 1
+    };
     if crate::menu::menu_button(
         ui,
         "Cut",
@@ -1313,36 +1526,44 @@ fn show_slide_menu_items(
     }
     ui.separator();
 
-    let can_up = slide_idx > 0;
+    let can_up = multi_move.map_or(slide_idx > 0, |(up, _)| up);
     if ui
         .add_enabled(can_up, egui::Button::new("Move up"))
         .on_disabled_hover_text("Slide is already at the top of this scene")
         .clicked()
     {
-        *action_to_run = Some((
-            "slide.move",
-            serde_json::json!({
-                "slide": slide_id,
-                "scene": scene_id,
-                "index": slide_idx.saturating_sub(1),
-            }),
-        ));
+        if multi_move.is_some() {
+            *slide_action = Some(SlideMenuAction::MoveSelected { up: true });
+        } else {
+            *action_to_run = Some((
+                "slide.move",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "scene": scene_id,
+                    "index": slide_idx.saturating_sub(1),
+                }),
+            ));
+        }
         ui.close();
     }
-    let can_down = slide_idx + 1 < total_in_scene;
+    let can_down = multi_move.map_or(slide_idx + 1 < total_in_scene, |(_, down)| down);
     if ui
         .add_enabled(can_down, egui::Button::new("Move down"))
         .on_disabled_hover_text("Slide is already at the bottom of this scene")
         .clicked()
     {
-        *action_to_run = Some((
-            "slide.move",
-            serde_json::json!({
-                "slide": slide_id,
-                "scene": scene_id,
-                "index": slide_idx + 1,
-            }),
-        ));
+        if multi_move.is_some() {
+            *slide_action = Some(SlideMenuAction::MoveSelected { up: false });
+        } else {
+            *action_to_run = Some((
+                "slide.move",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "scene": scene_id,
+                    "index": slide_idx + 1,
+                }),
+            ));
+        }
         ui.close();
     }
     ui.separator();
@@ -1573,6 +1794,21 @@ fn show_slides_empty_menu(editor: &mut Editor, ui: &mut Ui) {
 #[allow(clippy::cognitive_complexity)]
 fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     let mut selected_rect: Option<Rect> = None;
+    // The slide to keep in view: the moving end of a Shift+arrow range, else the primary.
+    let scroll_target = editor
+        .ui
+        .slides_cursor
+        .clone()
+        .filter(|id| editor.selection.is_slide_selected(id))
+        .unwrap_or_else(|| editor.selection.slide.clone());
+    // With several slides selected: can Move up and Move down shift any of them?
+    let multi_move_all = (!editor.selection.also_slides.is_empty()).then(|| {
+        let selected = editor.selected_slides_in_order();
+        (
+            !plan_slide_moves(&editor.session.course, &selected, true).is_empty(),
+            !plan_slide_moves(&editor.session.course, &selected, false).is_empty(),
+        )
+    });
     let mut action_to_run: Option<(&'static str, Json)> = None;
     let mut slide_action: Option<SlideMenuAction> = None;
     let mut slide_to_select: Option<SlideClick> = None;
@@ -1704,7 +1940,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 pos2(panel_rect.min.x, thumb_rect.min.y),
                 pos2(thumb_rect.max.x, title_rect.max.y),
             );
-            if editor.selection.slide == slide.id {
+            if scroll_target == slide.id {
                 selected_rect = Some(Rect::from_min_size(
                     thumb_rect.min,
                     vec2(thumb_w, thumb_h + TITLE_GAP + TITLE_HEIGHT),
@@ -1853,6 +2089,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             let multi_selected = !editor.selection.also_slides.is_empty()
                 && editor.selection.is_slide_selected(&slide.id);
             let selected_slide_count = editor.selection.slide_ids().len();
+            let multi_move = multi_selected.then_some(multi_move_all).flatten();
             thumb_response.context_menu(|ui| {
                 show_slide_menu_items(
                     ui,
@@ -1863,6 +2100,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     total_course_slides,
                     multi_selected,
                     selected_slide_count,
+                    multi_move,
                     can_paste,
                     slide.is_question,
                     &nav.bank_menu,
@@ -1950,6 +2188,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                         total_course_slides,
                         multi_selected,
                         selected_slide_count,
+                        multi_move,
                         can_paste,
                         slide.is_question,
                         &nav.bank_menu,
@@ -1996,6 +2235,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                         total_course_slides,
                         multi_selected,
                         selected_slide_count,
+                        multi_move,
                         can_paste,
                         slide.is_question,
                         &nav.bank_menu,
@@ -2155,7 +2395,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 );
                 let hit_rect = Rect::from_min_max(thumb_rect.min, title_rect.max);
                 let is_selected = editor.selection.slide == slide.id;
-                if is_selected {
+                if scroll_target == slide.id {
                     selected_rect = Some(hit_rect);
                 }
 
@@ -2269,12 +2509,28 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     // Blank space below the last slide: the usual way to add or paste.
     show_slides_empty_area(editor, ui, panel_rect, total_height);
 
-    if editor.ui.slides_scrolled_to.as_deref() != Some(editor.selection.slide.as_str())
+    if editor.ui.slides_scrolled_to.as_deref() != Some(scroll_target.as_str())
         && let Some(r) = selected_rect
     {
         let clip = ui.clip_rect();
-        if r.min.y >= clip.min.y - 1.0 && r.max.y <= clip.max.y + 1.0 {
-            editor.ui.slides_scrolled_to = Some(editor.selection.slide.clone());
+        // A thumbnail taller than the panel can never show whole: its top edge is enough.
+        let fits = r.min.y >= clip.min.y - 1.0
+            && (r.max.y <= clip.max.y + 1.0
+                || (r.height() > clip.height() && r.min.y <= clip.max.y));
+        // The list moves while it scrolls; a list that stands still has nowhere left to go.
+        let gap = r.min.y - clip.min.y;
+        let moving = !editor.ui.slides_scroll_gap.is_finite()
+            || (gap - editor.ui.slides_scroll_gap).abs() > 0.5;
+        editor.ui.slides_scroll_gap = gap;
+        if moving {
+            editor.ui.slides_scroll_stalled = 0;
+        } else {
+            editor.ui.slides_scroll_stalled += 1;
+        }
+        if fits || editor.ui.slides_scroll_stalled >= MAX_SCROLL_STALLED {
+            editor.ui.slides_scrolled_to = Some(scroll_target.clone());
+            editor.ui.slides_scroll_stalled = 0;
+            editor.ui.slides_scroll_gap = f32::NAN;
         } else {
             ui.scroll_to_rect(r.expand2(vec2(0.0, 12.0)), None);
             ui.ctx().request_repaint();
@@ -2282,6 +2538,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     }
 
     if let Some(click) = slide_to_select {
+        editor.ui.slides_cursor = None;
         match click {
             SlideClick::Single(sid) => {
                 editor.selection.slide = sid;
@@ -2317,17 +2574,15 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
         editor.ui.last_active_area = crate::ActiveArea::Navigator;
         match action {
             SlideMenuAction::Copy(id) => {
-                editor.selection.slide = id;
-                editor.selection.layer = None;
-                editor.selection.clear_objects();
+                select_slide_for_menu(editor, id);
                 crate::clipboard::copy(editor);
             }
             SlideMenuAction::Cut(id) => {
-                editor.selection.slide = id;
-                editor.selection.layer = None;
-                editor.selection.clear_objects();
+                select_slide_for_menu(editor, id);
                 crate::clipboard::cut(editor);
             }
+            SlideMenuAction::DuplicateSelected => editor.duplicate_selected_slides(),
+            SlideMenuAction::MoveSelected { up } => editor.move_selected_slides(up),
             SlideMenuAction::Paste => crate::clipboard::paste_private(editor),
             SlideMenuAction::Rename(id) => start_slide_rename(editor, &id),
             SlideMenuAction::DeleteSelected => editor.delete_selected_slides(),

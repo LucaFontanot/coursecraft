@@ -171,19 +171,23 @@ pub fn targets(editor: &Editor) -> Result<Vec<Target>, &'static str> {
 }
 
 /// One object's text as stored, or as typed while it is being edited.
-struct Parts {
-    style: TextStyle,
-    runs: Vec<TextRun>,
-    text: String,
-    paragraphs: Vec<Paragraph>,
+///
+/// Borrowed from the course or the edit buffer: the ribbon reads this every
+/// frame, so it must not deep-copy the text.
+struct Parts<'a> {
+    style: std::borrow::Cow<'a, TextStyle>,
+    runs: &'a [TextRun],
+    text: &'a str,
+    paragraphs: &'a [Paragraph],
 }
 
-fn stored_text(
-    course: &Course,
+fn stored_text<'a>(
+    course: &'a Course,
     slide: &str,
     object: &str,
     cell: Option<(usize, usize)>,
-) -> Option<Parts> {
+) -> Option<Parts<'a>> {
+    use std::borrow::Cow;
     let (obj, _) = course.slide(slide)?.object(object)?;
     match (&obj.kind, cell) {
         (
@@ -196,10 +200,10 @@ fn stored_text(
             },
             None,
         ) => Some(Parts {
-            style: style.clone(),
-            runs: runs.clone(),
-            text: text.clone(),
-            paragraphs: paragraphs.clone(),
+            style: Cow::Borrowed(style),
+            runs,
+            text,
+            paragraphs,
         }),
         (
             ObjectKind::Shape {
@@ -208,25 +212,25 @@ fn stored_text(
             None,
         ) if coursecraft_course::shape_allows_text(*shape) => Some(match text {
             Some(t) => Parts {
-                style: t.style.clone(),
-                runs: t.runs.clone(),
-                text: t.text.clone(),
-                paragraphs: t.paragraphs.clone(),
+                style: Cow::Borrowed(&t.style),
+                runs: &t.runs,
+                text: &t.text,
+                paragraphs: &t.paragraphs,
             },
             None => Parts {
-                style: default_shape_text_style(fill),
-                runs: Vec::new(),
-                text: String::new(),
-                paragraphs: Vec::new(),
+                style: Cow::Owned(default_shape_text_style(fill)),
+                runs: &[],
+                text: "",
+                paragraphs: &[],
             },
         }),
         (ObjectKind::Table { rows, .. }, Some((row, column))) => {
             let cell = rows.get(row)?.cells.get(column)?;
             Some(Parts {
-                style: cell.style.clone(),
-                runs: cell.runs.clone(),
-                text: cell.text.clone(),
-                paragraphs: cell.paragraphs.clone(),
+                style: Cow::Borrowed(&cell.style),
+                runs: &cell.runs,
+                text: &cell.text,
+                paragraphs: &cell.paragraphs,
             })
         }
         _ => None,
@@ -234,7 +238,7 @@ fn stored_text(
 }
 
 /// The target's text, with what is being typed in place of what is stored.
-fn parts(editor: &Editor, target: &Target) -> Option<Parts> {
+fn parts<'a>(editor: &'a Editor, target: &Target) -> Option<Parts<'a>> {
     let mut parts = stored_text(
         &editor.session.course,
         &target.slide,
@@ -246,13 +250,17 @@ fn parts(editor: &Editor, target: &Target) -> Option<Parts> {
             e.slide == target.slide && e.object == target.object && e.cell == target.cell
         })
     {
-        parts.text.clone_from(&edit.buffer);
-        let live: String = edit.live_runs.iter().map(|r| r.text.as_str()).collect();
-        if live == edit.buffer {
-            parts.runs.clone_from(&edit.live_runs);
+        parts.text = &edit.buffer;
+        let live_matches = edit
+            .live_runs
+            .iter()
+            .flat_map(|r| r.text.chars())
+            .eq(edit.buffer.chars());
+        if live_matches {
+            parts.runs = &edit.live_runs;
         }
         if !edit.live_paragraphs.is_empty() {
-            parts.paragraphs.clone_from(&edit.live_paragraphs);
+            parts.paragraphs = &edit.live_paragraphs;
         }
     }
     Some(parts)
@@ -286,13 +294,13 @@ fn merge<T: PartialEq>(acc: &mut Option<Option<T>>, value: Option<T>) {
 
 fn one_state(editor: &Editor, target: &Target) -> Option<TextState> {
     let parts = parts(editor, target)?;
-    let range = char_range(target.scope, &parts.text);
-    let (bold, italic, underline) = style_tri_for_range(&parts.runs, &parts.style, range);
-    let (strikethrough, _, _) = effects_tri_for_range(&parts.runs, &parts.style, range);
-    let (_, _, _, size, color) = style_for_range(&parts.runs, &parts.style, range);
-    let font = font_at_cursor(&parts.runs, range.0).unwrap_or_else(|| parts.style.font.clone());
-    let (first, end) = paragraph_range(target.scope, &parts.text);
-    let paragraphs = coursecraft_course::text::paragraphs_for(&parts.text, &parts.paragraphs);
+    let range = char_range(target.scope, parts.text);
+    let (bold, italic, underline) = style_tri_for_range(parts.runs, &parts.style, range);
+    let (strikethrough, _, _) = effects_tri_for_range(parts.runs, &parts.style, range);
+    let (_, _, _, size, color) = style_for_range(parts.runs, &parts.style, range);
+    let font = font_at_cursor(parts.runs, range.0).unwrap_or_else(|| parts.style.font.clone());
+    let (first, end) = paragraph_range(target.scope, parts.text);
+    let paragraphs = coursecraft_course::text::paragraphs_for(parts.text, parts.paragraphs);
     let covered: Vec<&Paragraph> = paragraphs
         .iter()
         .skip(first)
@@ -590,7 +598,7 @@ pub fn apply(editor: &mut Editor, change: &Change) -> bool {
             Change::VAlign(valign) => params["valign"] = json!(valign_name(*valign)),
             Change::Wrap => params["wrap"] = json!(now.wrap != Some(true)),
             Change::List(_) | Change::Indent(_) | Change::LineSpacing(_) => {
-                let (first, end) = paragraph_range(target.scope, &parts.text);
+                let (first, end) = paragraph_range(target.scope, parts.text);
                 if target.scope != Scope::Whole {
                     params["start"] = json!(first);
                     params["end"] = json!(end.max(first + 1));

@@ -65,7 +65,7 @@ pub fn show_tracking_controls(
 
                     let total_u32 = u32::try_from(total).unwrap_or(u32::MAX);
                     let default_count = total_u32.max(1);
-                    let mut count = match sv {
+                    let count = match sv {
                         SlidesViewedTracking::AtLeast { count } => count.max(1),
                         SlidesViewedTracking::All => default_count,
                     };
@@ -76,12 +76,14 @@ pub fn show_tracking_controls(
                                 Some(SlidesViewedTracking::AtLeast { count });
                         }
                         let max_val = total_u32.max(count).max(1);
-                        let dv = ui.add(
-                            egui::DragValue::new(&mut count)
-                                .range(1..=max_val)
-                                .speed(0.2),
+                        // One drag or one typed number is one undo step.
+                        let (_, committed) = crate::grid_panel::committed_drag(
+                            ui,
+                            ui.make_persistent_id((id_prefix, "slides_viewed_count")),
+                            count,
+                            |d| d.range(1..=max_val).speed(0.2),
                         );
-                        if dv.changed() {
+                        if let Some(count) = committed {
                             next_tracking.slides_viewed = Some(SlidesViewedTracking::AtLeast {
                                 count: count.max(1),
                             });

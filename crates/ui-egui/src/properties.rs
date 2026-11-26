@@ -4758,11 +4758,11 @@ fn show_accessibility_section(
             });
 
             inspector_row(ui, "Focus order", |ui| {
-                let mut order = props.focus_order.unwrap_or(0);
-                let r = ui.add(DragValue::new(&mut order).speed(1.0));
-                let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (r.drag_stopped() || r.lost_focus() || enter) && props.focus_order != Some(order)
-                {
+                let id = ui.make_persistent_id(("prop_focus_order", obj.id.as_str()));
+                let current = props.focus_order.unwrap_or(0);
+                let (_, committed) =
+                    crate::grid_panel::committed_drag(ui, id, current, |d| d.speed(1.0));
+                if let Some(order) = committed {
                     props.focus_order = Some(order);
                     action_to_run = Some((
                         "object.update",
@@ -5021,13 +5021,14 @@ fn show_slide_tab(
         }
         // The widget clamps the count to the bank's size.
         let max_count = bank_size.max(1) as u32;
-        let mut count = draw.count;
         let mut count_rect = None;
         inspector_row(ui, "Count", |ui| {
-            let resp = ui.add(DragValue::new(&mut count).speed(1.0).range(1..=max_count));
+            let id = ui.make_persistent_id("prop_draw_count");
+            let (resp, committed) = crate::grid_panel::committed_drag(ui, id, draw.count, |d| {
+                d.speed(1.0).range(1..=max_count)
+            });
             count_rect = Some(resp.rect);
-            let enter = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (resp.drag_stopped() || resp.lost_focus() || enter) && count != draw.count {
+            if let Some(count) = committed {
                 actions_to_run.push((
                     "draw.update",
                     serde_json::json!({ "slide": slide_id, "count": count }),
@@ -5268,14 +5269,17 @@ fn show_text_box_rows(
                 ui.horizontal(|ui| {
                     for (label, val) in pair {
                         ui.label(label);
-                        let r = ui.add(
-                            DragValue::new(val)
-                                .speed(0.5)
+                        // The insets come from the document every frame: edit a buffer and
+                        // commit once, so a drag or a typed number is one undo step.
+                        let id = ui.make_persistent_id(("prop_text_inset", obj_id, label));
+                        let (_, committed) = crate::grid_panel::committed_drag(ui, id, *val, |d| {
+                            d.speed(0.5)
                                 .range(0.0..=200.0)
                                 .max_decimals(1)
-                                .suffix(" px"),
-                        );
-                        if r.changed() {
+                                .suffix(" px")
+                        });
+                        if let Some(v) = committed {
+                            *val = v;
                             changed = true;
                         }
                     }
@@ -7527,7 +7531,7 @@ fn show_input_controls(
                         .speed(1.0)
                         .range(0..=coursecraft_course::MAX_INPUT_CHARS),
                 );
-                if r.changed() {
+                if crate::grid_panel::drag_committed(ui, &r) {
                     commit_input_patch(props, kind, slide_id, object_id, &mut action_to_run);
                 }
             });
@@ -7568,7 +7572,7 @@ fn show_input_controls(
                         .range(-360.0..=360.0)
                         .suffix("°"),
                 );
-                if r.changed() {
+                if crate::grid_panel::drag_committed(ui, &r) {
                     commit_input_patch(props, kind, slide_id, object_id, &mut action_to_run);
                 }
             });
@@ -7579,7 +7583,7 @@ fn show_input_controls(
                         .range(-360.0..=360.0)
                         .suffix("°"),
                 );
-                if r.changed() {
+                if crate::grid_panel::drag_committed(ui, &r) {
                     commit_input_patch(props, kind, slide_id, object_id, &mut action_to_run);
                 }
             });
@@ -8105,7 +8109,7 @@ fn show_scroll_panel_controls(
                 .suffix(" px"),
         );
         props.scroll_content_height_rect = Some(r.rect);
-        if r.changed() {
+        if crate::grid_panel::drag_committed(ui, &r) {
             actions.push((
                 "object.set_scroll_panel",
                 serde_json::json!({
@@ -8212,13 +8216,13 @@ fn show_number_range(
 ) {
     inspector_row(ui, "Min", |ui| {
         let r = ui.add(DragValue::new(&mut props.input_min).speed(0.1));
-        if r.changed() {
+        if crate::grid_panel::drag_committed(ui, &r) {
             commit_input_patch(props, kind, slide_id, object_id, action_to_run);
         }
     });
     inspector_row(ui, "Max", |ui| {
         let r = ui.add(DragValue::new(&mut props.input_max).speed(0.1));
-        if r.changed() {
+        if crate::grid_panel::drag_committed(ui, &r) {
             commit_input_patch(props, kind, slide_id, object_id, action_to_run);
         }
     });
@@ -8228,7 +8232,7 @@ fn show_number_range(
                 .speed(0.1)
                 .range(0.0..=1_000_000.0),
         );
-        if r.changed() {
+        if crate::grid_panel::drag_committed(ui, &r) {
             commit_input_patch(props, kind, slide_id, object_id, action_to_run);
         }
     });
@@ -8621,13 +8625,15 @@ fn show_object_properties(
                                 miter_limit: None,
                             });
                     if has_border {
-                        let r = ui.add(
-                            DragValue::new(&mut cur.width)
-                                .speed(0.25)
-                                .range(0.5..=50.0)
-                                .suffix(" px"),
-                        );
-                        if r.changed() {
+                        // The outline comes from the document every frame: edit a buffer and
+                        // commit once, so a drag or a typed number is one undo step.
+                        let id = ui.make_persistent_id(("prop_text_border_width", obj.id.as_str()));
+                        let (_, committed) =
+                            crate::grid_panel::committed_drag(ui, id, cur.width, |d| {
+                                d.speed(0.25).range(0.5..=50.0).suffix(" px")
+                            });
+                        if let Some(width) = committed {
+                            cur.width = width;
                             changed = true;
                         }
                         let mut hex = cur.color.0.clone();
@@ -9667,7 +9673,9 @@ fn show_object_properties(
                         )
                         .suffix("×"),
                 );
-                if r.changed() && (props.lottie_speed - speed).abs() > f32::EPSILON {
+                if crate::grid_panel::drag_committed(ui, &r)
+                    && (props.lottie_speed - speed).abs() > f32::EPSILON
+                {
                     action_to_run = Some((
                         "object.set_lottie",
                         serde_json::json!({
@@ -11718,17 +11726,22 @@ pub fn show_animations_section(
 
                 // Duration: drag value and easing combo on one row.
                 inspector_row(ui, "Duration", |ui| {
-                    let mut dur = path.duration_ms;
-                    let r = add_drag_left(
-                        ui,
-                        [64.0, coursecraft_render::CONTROL_COMPACT],
-                        DragValue::new(&mut dur)
-                            .speed(50.0)
-                            .range(1..=60000)
-                            .suffix(" ms"),
-                    );
-                    let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (r.drag_stopped() || r.lost_focus() || enter) && dur != path.duration_ms {
+                    let dur_id = ui.make_persistent_id(("mp_duration", path.id.as_str()));
+                    let (_, committed_dur) = ui
+                        .allocate_ui_with_layout(
+                            vec2(64.0, coursecraft_render::CONTROL_COMPACT),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                crate::grid_panel::committed_drag(
+                                    ui,
+                                    dur_id,
+                                    path.duration_ms,
+                                    |d| d.speed(50.0).range(1..=60000).suffix(" ms"),
+                                )
+                            },
+                        )
+                        .inner;
+                    if let Some(dur) = committed_dur {
                         action_to_run = Some((
                             "object.update_motion_path",
                             serde_json::json!({

@@ -96,7 +96,9 @@ pub fn follow_selection(editor: &mut Editor) {
         }
         _ => false,
     };
+    // A collapsed ribbon stays collapsed: the author chose to hide it.
     if inserted
+        && !editor.ui.ribbon.collapsed
         && let Some(context) = selected
             .first()
             .and_then(|id| slide.object(id))
@@ -104,7 +106,6 @@ pub fn follow_selection(editor: &mut Editor) {
         && let Some(tab) = CONTEXT_TABS.iter().find(|t| t.context == context)
     {
         editor.ui.ribbon.tab = tab.tab.id;
-        editor.ui.ribbon.collapsed = false;
     }
     editor.ui.ribbon.seen_objects = Some((slide.id.clone(), ids));
 }

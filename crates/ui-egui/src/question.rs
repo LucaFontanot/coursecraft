@@ -1608,11 +1608,13 @@ fn show_hotspot(
     // Markers get their own line: the warning above can fill the whole row.
     ui.horizontal(|ui| {
         ui.label(RichText::new("Markers").strong());
-        let mut markers = editor.ui.question.markers;
-        let mr = ui.add(DragValue::new(&mut markers).speed(1.0).range(1..=10));
-        let enter = mr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (mr.drag_stopped() || mr.lost_focus() || enter) && markers != editor.ui.question.markers
-        {
+        let (_, committed_markers) = crate::grid_panel::committed_drag(
+            ui,
+            ui.make_persistent_id("question_markers"),
+            editor.ui.question.markers,
+            |d| d.speed(1.0).range(1..=10),
+        );
+        if let Some(markers) = committed_markers {
             editor.ui.question.markers = markers;
             structural.push((
                 "question.set_markers",
@@ -1704,15 +1706,13 @@ fn show_hotspot(
         ui.horizontal(|ui| {
             ui.add_space(22.0);
             ui.label("X");
-            let mut x = r.x;
-            let xr = ui.add(
-                DragValue::new(&mut x)
-                    .speed(1.0)
-                    .range(-100_000.0..=100_000.0)
-                    .suffix(" px"),
+            let (_, committed_x) = crate::grid_panel::committed_drag(
+                ui,
+                ui.make_persistent_id(("question_region_x", r.id.as_str())),
+                r.x,
+                |d| d.speed(1.0).range(-100_000.0..=100_000.0).suffix(" px"),
             );
-            let enter_x = xr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (xr.drag_stopped() || xr.lost_focus() || enter_x) && (x - r.x).abs() > 1e-3 {
+            if let Some(x) = committed_x {
                 structural.push((
                     "question.update_region",
                     serde_json::json!({
@@ -1724,15 +1724,13 @@ fn show_hotspot(
             }
 
             ui.label("Y");
-            let mut y = r.y;
-            let yr = ui.add(
-                DragValue::new(&mut y)
-                    .speed(1.0)
-                    .range(-100_000.0..=100_000.0)
-                    .suffix(" px"),
+            let (_, committed_y) = crate::grid_panel::committed_drag(
+                ui,
+                ui.make_persistent_id(("question_region_y", r.id.as_str())),
+                r.y,
+                |d| d.speed(1.0).range(-100_000.0..=100_000.0).suffix(" px"),
             );
-            let enter_y = yr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (yr.drag_stopped() || yr.lost_focus() || enter_y) && (y - r.y).abs() > 1e-3 {
+            if let Some(y) = committed_y {
                 structural.push((
                     "question.update_region",
                     serde_json::json!({
@@ -1745,15 +1743,13 @@ fn show_hotspot(
 
             if !narrow_region {
                 ui.label("W");
-                let mut w = r.w;
-                let wr = ui.add(
-                    DragValue::new(&mut w)
-                        .speed(1.0)
-                        .range(1.0..=100_000.0)
-                        .suffix(" px"),
+                let (_, committed_w) = crate::grid_panel::committed_drag(
+                    ui,
+                    ui.make_persistent_id(("question_region_w", r.id.as_str())),
+                    r.w,
+                    |d| d.speed(1.0).range(1.0..=100_000.0).suffix(" px"),
                 );
-                let enter_w = wr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (wr.drag_stopped() || wr.lost_focus() || enter_w) && (w - r.w).abs() > 1e-3 {
+                if let Some(w) = committed_w {
                     structural.push((
                         "question.update_region",
                         serde_json::json!({
@@ -1765,15 +1761,13 @@ fn show_hotspot(
                 }
 
                 ui.label("H");
-                let mut h = r.h;
-                let hr = ui.add(
-                    DragValue::new(&mut h)
-                        .speed(1.0)
-                        .range(1.0..=100_000.0)
-                        .suffix(" px"),
+                let (_, committed_h) = crate::grid_panel::committed_drag(
+                    ui,
+                    ui.make_persistent_id(("question_region_h", r.id.as_str())),
+                    r.h,
+                    |d| d.speed(1.0).range(1.0..=100_000.0).suffix(" px"),
                 );
-                let enter_h = hr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (hr.drag_stopped() || hr.lost_focus() || enter_h) && (h - r.h).abs() > 1e-3 {
+                if let Some(h) = committed_h {
                     structural.push((
                         "question.update_region",
                         serde_json::json!({
@@ -1829,15 +1823,13 @@ fn show_hotspot(
             ui.horizontal(|ui| {
                 ui.add_space(22.0);
                 ui.label("W");
-                let mut w = r.w;
-                let wr = ui.add(
-                    DragValue::new(&mut w)
-                        .speed(1.0)
-                        .range(1.0..=100_000.0)
-                        .suffix(" px"),
+                let (_, committed_w) = crate::grid_panel::committed_drag(
+                    ui,
+                    ui.make_persistent_id(("question_region_w", r.id.as_str())),
+                    r.w,
+                    |d| d.speed(1.0).range(1.0..=100_000.0).suffix(" px"),
                 );
-                let enter_w = wr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (wr.drag_stopped() || wr.lost_focus() || enter_w) && (w - r.w).abs() > 1e-3 {
+                if let Some(w) = committed_w {
                     structural.push((
                         "question.update_region",
                         serde_json::json!({
@@ -1849,15 +1841,13 @@ fn show_hotspot(
                 }
 
                 ui.label("H");
-                let mut h = r.h;
-                let hr = ui.add(
-                    DragValue::new(&mut h)
-                        .speed(1.0)
-                        .range(1.0..=100_000.0)
-                        .suffix(" px"),
+                let (_, committed_h) = crate::grid_panel::committed_drag(
+                    ui,
+                    ui.make_persistent_id(("question_region_h", r.id.as_str())),
+                    r.h,
+                    |d| d.speed(1.0).range(1.0..=100_000.0).suffix(" px"),
                 );
-                let enter_h = hr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if (hr.drag_stopped() || hr.lost_focus() || enter_h) && (h - r.h).abs() > 1e-3 {
+                if let Some(h) = committed_h {
                     structural.push((
                         "question.update_region",
                         serde_json::json!({

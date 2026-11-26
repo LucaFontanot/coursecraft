@@ -1001,3 +1001,45 @@ fn glossary_entries_export_and_import() {
         "[xx]Time between request and response.[/xx]"
     );
 }
+
+fn placeholder_doc(source: &str, target: &str) -> (Course, XliffDocument) {
+    let mut course = showcase();
+    course.title = source.to_owned();
+    let text = |t: &str| ParsedText {
+        segments: vec![TextSegment {
+            text: t.to_owned(),
+            run: None,
+        }],
+    };
+    let doc = XliffDocument {
+        source_language: "en".to_owned(),
+        target_language: "fr".to_owned(),
+        units: vec![XliffUnit {
+            id: "course/title".to_owned(),
+            source: text(source),
+            target: Some(text(target)),
+        }],
+    };
+    (course, doc)
+}
+
+#[test]
+fn a_repeated_placeholder_must_keep_its_count() {
+    let (course, doc) = placeholder_doc("%a% and %a%", "%a% et rien");
+    let (_, report) = apply_xliff(&course, &doc);
+    assert_eq!(report.placeholder_mismatch, vec!["course/title"]);
+    let (course, doc) = placeholder_doc("%a% and %a%", "%a% et %a%");
+    let (_, report) = apply_xliff(&course, &doc);
+    assert!(report.placeholder_mismatch.is_empty());
+}
+
+#[test]
+fn a_percent_sign_before_a_placeholder_does_not_hide_it() {
+    // The old scan paired the sign in "100%" with the first `%` of `%name%`.
+    let (course, doc) = placeholder_doc("100% of %name%", "100% de nada");
+    let (_, report) = apply_xliff(&course, &doc);
+    assert_eq!(report.placeholder_mismatch, vec!["course/title"]);
+    let (course, doc) = placeholder_doc("100% of %name%", "100% de %name%");
+    let (_, report) = apply_xliff(&course, &doc);
+    assert!(report.placeholder_mismatch.is_empty());
+}

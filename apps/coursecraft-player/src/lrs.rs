@@ -236,7 +236,9 @@ pub fn after_input(handle: &XapiHandle, course: &Course, state: &PlayerState, ef
         state: last_state,
         start_ms,
     } = &mut *guard;
-    *last_state = state.clone();
+    if *last_state != *state {
+        last_state.clone_from(state);
+    }
     let session_ms = crate::app::compute_session_ms(*start_ms, crate::lms::now_ms());
     let warnings = bridge.after_input(api, course, state, effects, session_ms, now_ms_u64());
     for warning in warnings {

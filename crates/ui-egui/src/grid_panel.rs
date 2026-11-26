@@ -189,3 +189,51 @@ pub(crate) fn committed_number(
     ui.data_mut(|d| d.remove::<f32>(id));
     (done && value.is_finite() && (value - current).abs() > f32::EPSILON).then_some(value)
 }
+
+/// A [`DragValue`] of any number type whose value comes from the document every
+/// frame. While the author drags or types, the value lives in a temp buffer, so
+/// egui keeps the typed text. It comes back once, when the drag ends, the field
+/// loses focus or Enter is pressed. `configure` sets range, speed and suffix.
+/// Returns the response and the committed value, if any.
+pub(crate) fn committed_drag<N>(
+    ui: &mut Ui,
+    id: egui::Id,
+    current: N,
+    configure: impl for<'a> FnOnce(DragValue<'a>) -> DragValue<'a>,
+) -> (Response, Option<N>)
+where
+    N: egui::emath::Numeric + Send + Sync,
+{
+    let mut value = ui.data(|d| d.get_temp::<N>(id)).unwrap_or(current);
+    let resp: Response = ui.add(configure(DragValue::new(&mut value)));
+    let editing = resp.dragged() || resp.has_focus();
+    let done = resp.drag_stopped()
+        || resp.lost_focus()
+        || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+    if editing && !done {
+        ui.data_mut(|d| d.insert_temp(id, value));
+        return (resp, None);
+    }
+    ui.data_mut(|d| d.remove::<N>(id));
+    let commit = done && value != current;
+    (resp, commit.then_some(value))
+}
+
+/// For a [`DragValue`] bound to a value that lives across frames: true once,
+/// when an edit ends (drag stopped, focus lost or Enter) and the value changed
+/// during that edit. One drag or one typed number is one commit, so one undo
+/// step, and an edit that changed nothing commits nothing.
+pub(crate) fn drag_committed(ui: &Ui, resp: &Response) -> bool {
+    let dirty_id = resp.id.with("drag_dirty");
+    if resp.changed() {
+        ui.data_mut(|d| d.insert_temp(dirty_id, true));
+    }
+    let done = resp.drag_stopped()
+        || resp.lost_focus()
+        || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+    if !done {
+        return false;
+    }
+    ui.data_mut(|d| d.remove_temp::<bool>(dirty_id))
+        .unwrap_or(false)
+}

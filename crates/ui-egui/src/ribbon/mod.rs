@@ -53,7 +53,13 @@ pub struct RibbonState {
     /// The current slide's object ids last frame: a selected id missing there
     /// was just inserted, and opens its contextual tab.
     pub seen_objects: Option<(String, Vec<String>)>,
+    /// The tab whose single click just opened it (or expanded the ribbon), and
+    /// when: the second click of that double-click must not collapse it again.
+    pub tab_opened: Option<(&'static str, f64)>,
 }
+
+/// Longest gap between the two clicks of a double-click on a tab.
+const DOUBLE_CLICK_SECS: f64 = 0.6;
 
 impl Default for RibbonState {
     fn default() -> Self {
@@ -65,6 +71,7 @@ impl Default for RibbonState {
             rect: Rect::NOTHING,
             text: Err(""),
             seen_objects: None,
+            tab_opened: None,
             in_master: false,
         }
     }
@@ -427,8 +434,8 @@ fn run_ui(
             }
         }
         UiAction::ZoomFit => editor.ui.zoom = crate::ZoomLevel::Fit,
-        UiAction::ZoomIn => editor.ui.zoom = editor.ui.zoom.zoom_in(),
-        UiAction::ZoomOut => editor.ui.zoom = editor.ui.zoom.zoom_out(),
+        UiAction::ZoomIn => editor.zoom_in(),
+        UiAction::ZoomOut => editor.zoom_out(),
         UiAction::Zoom100 => editor.ui.zoom = crate::ZoomLevel::Percent100,
         UiAction::Rulers => view_toggle(
             editor,
@@ -567,7 +574,9 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
         editor.ui.ribbon.tab = "home";
     }
     follow_master_view(editor);
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F1)) {
+    if !collapse_shortcut_blocked(editor, ui.ctx())
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F1))
+    {
         editor.ui.ribbon.collapsed = !editor.ui.ribbon.collapsed;
     }
     contextual::follow_selection(editor);
@@ -596,6 +605,17 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
                 show_tab(editor, ui, tab, available, requests);
             });
         });
+}
+
+/// Ctrl+F1 leaves the ribbon alone while a text field has focus, a modal dialog
+/// or the File page is open, like the other file shortcuts.
+fn collapse_shortcut_blocked(editor: &Editor, ctx: &egui::Context) -> bool {
+    ctx.egui_wants_keyboard_input()
+        || editor.ui.inline_edit.is_some()
+        || editor.ui.show_welcome
+        || editor.ui.file_page.open
+        || editor.ui.show_shortcuts_dialog
+        || crate::dialog::any_open(ctx)
 }
 
 /// Master View opens on the Slide Master tab and shows only the tabs that
@@ -834,11 +854,24 @@ fn strip_tab(editor: &mut Editor, ui: &mut Ui, r: Rect, tab: &'static Tab, capti
     } else {
         resp
     };
-    if resp.double_clicked() || (resp.clicked() && active) {
-        editor.ui.ribbon.collapsed = !editor.ui.ribbon.collapsed;
-    } else if resp.clicked() {
-        editor.ui.ribbon.tab = tab.id;
-        editor.ui.ribbon.collapsed = false;
+    tab_clicked(editor, ui.input(|i| i.time), tab.id, &resp);
+}
+
+/// A click opens the tab and expands the ribbon, never collapses it. Only a
+/// double-click on a tab that was already open and expanded collapses it, once.
+fn tab_clicked(editor: &mut Editor, now: f64, id: &'static str, resp: &egui::Response) {
+    let state = &mut editor.ui.ribbon;
+    let just_opened = state
+        .tab_opened
+        .is_some_and(|(tab, at)| tab == id && now - at < DOUBLE_CLICK_SECS);
+    if resp.double_clicked() && !just_opened {
+        state.collapsed = !state.collapsed;
+        state.tab = id;
+        state.tab_opened = None;
+    } else if resp.clicked() && !just_opened && (state.tab != id || state.collapsed) {
+        state.tab = id;
+        state.collapsed = false;
+        state.tab_opened = Some((id, now));
     }
 }
 
@@ -1081,7 +1114,44 @@ fn show_group(
     r.width() + 8.0 + ui.spacing().item_spacing.x
 }
 
-fn tooltip(label: &str, help: &'static str, state: &Result<(), String>) -> String {
+/// The keyboard shortcut of a control, from the command registry or the shell
+/// shortcuts, if it has one.
+fn shortcut_of(action: Action) -> Option<&'static str> {
+    use crate::shortcuts::{ShortcutAction as S, shortcut_for_action, shortcut_for_command};
+    let shell = match action {
+        Action::Command(id) => return shortcut_for_command(id),
+        Action::Text(spec::TextOp::Bold) => S::Bold,
+        Action::Text(spec::TextOp::Italic) => S::Italic,
+        Action::Text(spec::TextOp::Underline) => S::Underline,
+        Action::Ui(ui) => match ui {
+            UiAction::Paste => S::Paste,
+            UiAction::Cut => S::Cut,
+            UiAction::Copy => S::Copy,
+            UiAction::SelectAll => S::SelectAll,
+            UiAction::FormatPainter => S::FormatPainter,
+            UiAction::Spelling => S::CheckSpelling,
+            UiAction::Publish => S::Publish,
+            UiAction::Preview => S::PreviewThisSlide,
+            UiAction::CourseMap => S::CourseMap,
+            UiAction::ZoomFit => S::ZoomFit,
+            UiAction::ZoomIn => S::ZoomIn,
+            UiAction::ZoomOut => S::ZoomOut,
+            UiAction::Shortcuts => S::KeyboardShortcuts,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(shortcut_for_action(shell))
+}
+
+fn tooltip(
+    ctx: &egui::Context,
+    label: &str,
+    shortcut: Option<&str>,
+    help: &'static str,
+    state: &Result<(), String>,
+) -> String {
+    let label = &crate::menu::tooltip_with_shortcut(ctx, label, shortcut);
     match state {
         Err(reason) => format!("{label}\n{reason}"),
         Ok(()) if help.is_empty() => label.to_owned(),
@@ -1165,7 +1235,7 @@ fn control(
             return;
         }
     };
-    let tip = tooltip(label, item.help, &state);
+    let tip = tooltip(ui.ctx(), label, shortcut_of(item.action), item.help, &state);
     let main = main.on_hover_text(&tip);
     // These open their ▾ menu from the whole control.
     let menu_only = matches!(
@@ -1515,6 +1585,14 @@ fn shapes_menu_category(
     }
 }
 
+/// The first "Style N" that no text style uses yet.
+pub(crate) fn free_style_name(styles: &[coursecraft_course::NamedTextStyle]) -> String {
+    (1..)
+        .map(|n| format!("Style {n}"))
+        .find(|name| !styles.iter().any(|s| s.name == *name))
+        .unwrap_or_else(|| "Style".to_owned())
+}
+
 /// Text Styles ▾: apply a course style to the selected text boxes, make one
 /// from the first, or manage them.
 fn text_styles_menu(editor: &mut Editor, ui: &mut Ui) {
@@ -1551,16 +1629,22 @@ fn text_styles_menu(editor: &mut Editor, ui: &mut Ui) {
     }
     ui.separator();
     let full = course.text_styles.len() >= coursecraft_course::MAX_TEXT_STYLES;
+    // Only the reason that applies.
+    let why_not = if boxes.is_empty() {
+        tl!("Select a text box")
+    } else {
+        tl!("A course holds at most 50 styles")
+    };
     let resp = ui
         .add_enabled(
             !full && !boxes.is_empty(),
             egui::Button::new(tl!("New Style from Selection")),
         )
-        .on_disabled_hover_text(tl!("Select a text box; a course holds at most 50 styles"));
+        .on_disabled_hover_text(why_not);
     if resp.clicked()
         && let Some(object) = boxes.first()
     {
-        let name = format!("Style {}", course.text_styles.len() + 1);
+        let name = free_style_name(&course.text_styles);
         action = Some((
             "text_style.create",
             json!({ "name": name, "from_object": { "slide": slide, "object": object } }),

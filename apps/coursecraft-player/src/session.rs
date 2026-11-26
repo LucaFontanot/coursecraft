@@ -90,7 +90,11 @@ impl ReportingHost {
                 api,
                 last_state,
             } => {
-                *last_state = Some(state.clone());
+                match last_state {
+                    Some(last) if *last == *state => {}
+                    Some(last) => last.clone_from(state),
+                    None => *last_state = Some(state.clone()),
+                }
                 bridge.after_input(api, course, state, effects, session_ms, now_ms)
             }
             Self::Lti {

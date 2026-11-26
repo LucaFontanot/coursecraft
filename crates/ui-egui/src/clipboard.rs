@@ -28,7 +28,8 @@ pub struct Clipboard {
     pub source_layer: Option<String>,
     pub objects: Vec<Object>,
     pub triggers: Vec<Trigger>,
-    pub slide: Option<Slide>,
+    /// The copied slides, in slide-list order (empty for an object payload).
+    pub slides: Vec<Slide>,
 }
 
 impl Clipboard {
@@ -60,10 +61,16 @@ impl Clipboard {
         {
             map.insert("triggers".to_owned(), value);
         }
-        if let Some(ref slide) = self.slide
+        // `slide` is the first slide, as older builds wrote it; `slides` holds all.
+        if let Some(slide) = self.slides.first()
             && let Ok(value) = serde_json::to_value(slide)
         {
             map.insert("slide".to_owned(), value);
+        }
+        if self.slides.len() > 1
+            && let Ok(value) = serde_json::to_value(&self.slides)
+        {
+            map.insert("slides".to_owned(), value);
         }
         serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_default()
     }
@@ -100,14 +107,15 @@ impl Clipboard {
             Some(value) => serde_json::from_value(value.clone()).ok()?,
             None => Vec::new(),
         };
-        let slide: Option<Slide> = match map.get("slide") {
-            Some(value) => Some(serde_json::from_value(value.clone()).ok()?),
-            None => None,
+        let slides: Vec<Slide> = match (map.get("slides"), map.get("slide")) {
+            (Some(value), _) => serde_json::from_value(value.clone()).ok()?,
+            (None, Some(value)) => vec![serde_json::from_value(value.clone()).ok()?],
+            (None, None) => Vec::new(),
         };
         if kind == ClipboardKind::Objects && objects.is_empty() {
             return None;
         }
-        if kind == ClipboardKind::Slides && slide.is_none() {
+        if kind == ClipboardKind::Slides && slides.is_empty() {
             return None;
         }
         Some(Self {
@@ -116,7 +124,7 @@ impl Clipboard {
             source_layer,
             objects,
             triggers,
-            slide,
+            slides,
         })
     }
 }
@@ -261,23 +269,29 @@ pub fn copy_objects(editor: &Editor) -> Option<(Clipboard, usize)> {
             source_layer: editor.selection.layer.clone(),
             objects,
             triggers,
-            slide: None,
+            slides: Vec::new(),
         },
         skipped,
     ))
 }
 
-/// Copy the selected slide.
+/// Copy every selected slide, in slide-list order.
 #[must_use]
 pub fn copy_slide(editor: &Editor) -> Option<Clipboard> {
-    let slide = editor.session.course.slide(&editor.selection.slide)?;
+    let slides: Vec<Slide> = editor
+        .selected_slides_in_order()
+        .iter()
+        .filter_map(|id| editor.session.course.slide(id))
+        .cloned()
+        .collect();
+    let first = slides.first()?;
     Some(Clipboard {
         kind: ClipboardKind::Slides,
-        source_slide: Some(slide.id.clone()),
+        source_slide: Some(first.id.clone()),
         source_layer: None,
         objects: Vec::new(),
         triggers: Vec::new(),
-        slide: Some(slide.clone()),
+        slides,
     })
 }
 
@@ -323,7 +337,12 @@ fn copy_slide_action(editor: &mut Editor) {
         editor.set_status("Select a slide to copy");
         return;
     };
-    write(editor, clipboard, "Copied slide".to_owned());
+    let message = if clipboard.slides.len() > 1 {
+        format!("Copied {} slides", clipboard.slides.len())
+    } else {
+        "Copied slide".to_owned()
+    };
+    write(editor, clipboard, message);
 }
 
 /// Cut the current selection. Cut is copy then delete; the delete is one undo.
@@ -363,9 +382,19 @@ fn cut_slide_action(editor: &mut Editor) {
         editor.set_status("Select a slide to cut");
         return;
     };
-    write(editor, clipboard, "Cut slide".to_owned());
-    let slide_id = editor.selection.slide.clone();
-    editor.run("slide.delete", serde_json::json!({ "slide": slide_id }));
+    // A course keeps at least one slide: cutting all of them would leave none.
+    if clipboard.slides.len() >= editor.session.course.slides().count() {
+        editor.set_status("A course needs at least one slide");
+        return;
+    }
+    let message = if clipboard.slides.len() > 1 {
+        format!("Cut {} slides", clipboard.slides.len())
+    } else {
+        "Cut slide".to_owned()
+    };
+    write(editor, clipboard, message);
+    // Deletes every selected slide as one undo step.
+    editor.delete_selected_slides();
 }
 
 /// Paste from the private clipboard. Used by the Edit menu.
@@ -571,7 +600,11 @@ fn paste_objects(editor: &mut Editor, clipboard: &Clipboard, centre: Option<egui
 }
 
 fn paste_slide(editor: &mut Editor, clipboard: &Clipboard) {
-    let Some(slide) = clipboard.slide.clone() else {
+    if clipboard.slides.len() > 1 {
+        paste_slides(editor, clipboard);
+        return;
+    }
+    let Some(slide) = clipboard.slides.first().cloned() else {
         editor.set_status("That clipboard payload has no slide");
         return;
     };
@@ -609,6 +642,57 @@ fn paste_slide(editor: &mut Editor, clipboard: &Clipboard) {
         editor.set_status("Pasted slide");
     } else {
         editor.set_status(format!("Pasted slide; skipped {skipped} trigger(s)"));
+    }
+}
+
+/// Paste several slides after the current one, in their copied order, as one undo step.
+///
+/// Each is inserted right after the current slide, last first, so they end up in order.
+fn paste_slides(editor: &mut Editor, clipboard: &Clipboard) {
+    let after = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .map(|slide| slide.id.clone());
+    let mut steps: Vec<(String, serde_json::Value)> = Vec::new();
+    for slide in clipboard.slides.iter().rev() {
+        let Ok(slide_value) = serde_json::to_value(slide) else {
+            editor.set_status("That clipboard payload can't be pasted");
+            return;
+        };
+        let mut params = serde_json::json!({ "slide": slide_value });
+        if let Some(ref after) = after {
+            params["after"] = serde_json::json!(after);
+        }
+        steps.push(("slide.paste".to_owned(), params));
+    }
+    let Some(results) = editor.run_batch(&steps) else {
+        return;
+    };
+    // Results come back last slide first.
+    let ids: Vec<String> = results
+        .iter()
+        .rev()
+        .filter_map(|result| result.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    let skipped: u64 = results
+        .iter()
+        .filter_map(|result| result.get("skipped").and_then(serde_json::Value::as_u64))
+        .sum();
+    if let Some((first, rest)) = ids.split_first() {
+        editor.selection.slide = first.clone();
+        editor.selection.also_slides = rest.to_vec();
+        editor.selection.layer = None;
+        editor.selection.clear_objects();
+    }
+    if skipped == 0 {
+        editor.set_status(format!("Pasted {} slides", clipboard.slides.len()));
+    } else {
+        editor.set_status(format!(
+            "Pasted {} slides; skipped {skipped} trigger(s)",
+            clipboard.slides.len()
+        ));
     }
 }
 

@@ -65,7 +65,6 @@ const COLUMN_W: f32 = 240.0;
 enum Pick {
     Request(EditorRequest),
     Run(fn(&mut Editor)),
-    Command(&'static str),
     Back,
 }
 
@@ -94,12 +93,37 @@ fn loads_course(request: &EditorRequest) -> bool {
     )
 }
 
+/// Esc acts as Back: it closes the File page, and the start page when a course is
+/// open behind it. A menu, a popup or a dialog that is open takes the Esc first.
+/// Returns whether the page was left.
+pub fn esc_back(editor: &mut Editor, ctx: &egui::Context) -> bool {
+    let can_go_back = if editor.ui.show_welcome {
+        editor.ui.has_loaded_course
+    } else {
+        editor.ui.file_page.open
+    };
+    if !can_go_back || egui::Popup::is_any_open(ctx) || editor.modal_dialog_open() {
+        return false;
+    }
+    if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        return false;
+    }
+    editor.ui.file_page.open = false;
+    editor.ui.show_welcome = false;
+    true
+}
+
+/// Check Course: run the check and show its problems.
+fn check_course(editor: &mut Editor) {
+    editor.refresh_validation();
+    editor.ui.show_validation_window = true;
+}
+
 /// Draw the page over the editor's work area.
 pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) {
     let welcome = editor.ui.show_welcome;
-    // On the welcome screen there is no editor to go back to with Esc.
-    if !welcome && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-        editor.ui.file_page.open = false;
+    // Esc goes back to the editor; on the welcome screen with no course there is none.
+    if esc_back(editor, ui.ctx()) {
         return;
     }
     let p = coursecraft_render::palette(ui.ctx());
@@ -138,32 +162,31 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
             section_detail(editor, ui, &mut pick, requests);
         });
     ui.allocate_rect(rect, egui::Sense::hover());
-    // The start page acts by itself (a new course, an example, a template).
-    if requests.len() > asked {
+    // The start page acts by itself (a new course, an example, a template). A request
+    // that loads a course keeps the page open: the page closes when the course has
+    // really loaded, so a cancelled file dialog leaves it where it was.
+    if requests.len() > asked && !requests[asked..].iter().any(loads_course) {
         editor.ui.file_page.open = false;
+        // Anything but a load leaves the start page for the editor (a dialog it opens
+        // is drawn there), as long as there is a course to go back to.
+        if welcome && editor.ui.has_loaded_course {
+            editor.ui.show_welcome = false;
+        }
     }
 
     if let Some(pick) = pick {
-        editor.ui.file_page.open = false;
-        if welcome {
-            let leaves = match &pick {
-                Pick::Request(r) => loads_course(r),
-                Pick::Back => true,
-                Pick::Run(_) | Pick::Command(_) => false,
-            };
-            if leaves {
+        let loads = matches!(&pick, Pick::Request(r) if loads_course(r));
+        if !loads {
+            editor.ui.file_page.open = false;
+            // Course Info, Version History and the like need the editor: leave the
+            // start page first, then open the dialog.
+            if welcome && (matches!(pick, Pick::Back) || editor.ui.has_loaded_course) {
                 editor.ui.show_welcome = false;
-                editor.ui.has_loaded_course = true;
             }
         }
         match pick {
             Pick::Request(r) => requests.push(r),
             Pick::Run(f) => f(editor),
-            Pick::Command(id) => {
-                if let Some(params) = crate::menu::adapter(editor, id) {
-                    editor.run(id, params);
-                }
-            }
             Pick::Back => {}
         }
     }
@@ -374,7 +397,7 @@ fn column_entries(editor: &mut Editor, ui: &mut Ui, ink: egui::Color32, pick: &m
         "Check Course",
         !no_course,
         needs,
-        Pick::Command("course.validate"),
+        Pick::Run(check_course),
     );
     act(
         ui,

@@ -22,7 +22,7 @@ Top to bottom:
 | Title `name* - App` | window title | 🟡 | add the `*` |
 | Menu bar | drawn only when Preferences › Interface › Ribbon is off; with the ribbon, File is the File page and every other item has a ribbon home (ribbon.md › Where the menu bar went) | — | delete the code with the flat toolbar (step 4) |
 | Flat toolbar | `toolbar.rs`, drawn only when Preferences › Interface › Ribbon is off | — | its buttons are on Home, Insert, Slides and View; Format, Animate, Slide and Course are dock panels (a tab row in the fixed Inspector when docking is off); delete the code with the menu bar (step 4) |
-| Collapse ribbon (Ctrl+F1, double-click a tab) | click or double-click the open tab, Ctrl+F1 | ✅ | |
+| Collapse ribbon (Ctrl+F1, double-click a tab) | double-click the open tab, Ctrl+F1 (not while a dialog or text field has focus); a click opens a tab and never collapses | ✅ | |
 | File page = start screen (left action column, Recent with thumbnails, news) | `file_page.rs` from the File tab and on launch (accent column, Start with the welcome screen's content, Recent with first-slide thumbnails, Import, Export, Translation, Fonts) | 🟡 | news |
 | Tooltips: name, shortcut, one sentence | partial | 🟡 | every ribbon control, from the registry |
 | View tabs row with open slides | `doc_tabs.rs`: Course Map tab, then each opened slide (× closes; closing the shown one shows its neighbour, the last one the map) | ✅ | breadcrumb tabs for sub-editors |
@@ -145,7 +145,7 @@ New Slide ▸, New Scene, Apply Layout ▸, Duplicate, Delete, Rename, Move to S
 
 ## Keyboard
 
-Keep the existing shortcuts (`shortcuts.rs`). Add: Ctrl+F1 collapse ribbon ⛔, Alt key tips on
+Keep the existing shortcuts (`shortcuts.rs`). Add: Ctrl+F1 collapse ribbon ✅, Alt key tips on
 Windows ⛔, **C** add cue point while the timeline plays (verify), F12 preview slide ✅,
 Ctrl+F12 preview course (verify), Ctrl+wheel zoom in Course Map and canvas, Shift+wheel zoom
 canvas ⛔.

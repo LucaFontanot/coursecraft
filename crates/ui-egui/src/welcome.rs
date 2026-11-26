@@ -334,6 +334,10 @@ pub fn example_course_and_media(id: ExampleId) -> Result<LoadedExample, String> 
 
 /// Render the welcome screen on `ui`.
 pub fn show_welcome_screen(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) {
+    // Esc is Back when a course is open behind the start page.
+    if crate::file_page::esc_back(editor, ui.ctx()) {
+        return;
+    }
     let p = palette(ui.ctx());
     let mode = theme_mode(ui.ctx());
 
@@ -445,8 +449,6 @@ pub fn start_content(
         .clicked()
         {
             requests.push(EditorRequest::New);
-            editor.ui.show_welcome = false;
-            editor.ui.has_loaded_course = true;
         }
 
         // Tile 2: Open…
@@ -467,8 +469,6 @@ pub fn start_content(
         .clicked()
         {
             requests.push(EditorRequest::Open);
-            editor.ui.show_welcome = false;
-            editor.ui.has_loaded_course = true;
         }
     });
 
@@ -490,8 +490,6 @@ pub fn start_content(
         .clicked()
         {
             requests.push(EditorRequest::PickPptx);
-            editor.ui.show_welcome = false;
-            editor.ui.has_loaded_course = true;
         }
 
         // Tile 4: Explore an example
@@ -674,8 +672,6 @@ pub fn start_content(
 
             if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                 requests.push(EditorRequest::OpenRecent(idx));
-                editor.ui.show_welcome = false;
-                editor.ui.has_loaded_course = true;
             }
         }
         ui.add_space(8.0);

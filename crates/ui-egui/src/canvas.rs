@@ -67,6 +67,56 @@ impl ZoomLevel {
         }
     }
 
+    /// One step in. From `Fit` the step starts at the scale `Fit` shows now
+    /// (`fit_scale`): the next preset above it, so zooming in never zooms out.
+    #[must_use]
+    pub fn zoom_in_at(&self, fit_scale: Option<f32>) -> Self {
+        match (self, fit_scale) {
+            (Self::Fit, Some(fit)) if fit.is_finite() && fit > 0.0 => Self::ALL
+                .into_iter()
+                .find(|level| {
+                    level
+                        .fixed_scale()
+                        .is_some_and(|preset| preset > fit + 0.001)
+                })
+                .unwrap_or_else(|| {
+                    // Past the largest preset: step by a half, up to the pinch limit.
+                    let next = (fit * 1.5).min(PINCH_ZOOM_RANGE.1);
+                    if next > fit + 0.001 {
+                        Self::Custom(next)
+                    } else {
+                        Self::Fit
+                    }
+                }),
+            _ => self.zoom_in(),
+        }
+    }
+
+    /// One step out. From `Fit` the next preset below the scale `Fit` shows now.
+    #[must_use]
+    pub fn zoom_out_at(&self, fit_scale: Option<f32>) -> Self {
+        match (self, fit_scale) {
+            (Self::Fit, Some(fit)) if fit.is_finite() && fit > 0.0 => Self::ALL
+                .into_iter()
+                .rev()
+                .find(|level| {
+                    level
+                        .fixed_scale()
+                        .is_some_and(|preset| preset < fit - 0.001)
+                })
+                .unwrap_or_else(|| {
+                    // Below the smallest preset: step by a third, down to the pinch limit.
+                    let next = (fit / 1.5).max(PINCH_ZOOM_RANGE.0);
+                    if next < fit - 0.001 {
+                        Self::Custom(next)
+                    } else {
+                        Self::Fit
+                    }
+                }),
+            _ => self.zoom_out(),
+        }
+    }
+
     #[must_use]
     pub fn zoom_in(&self) -> Self {
         match self {
@@ -1309,6 +1359,48 @@ fn compute_drag_frame(drag: &CanvasDrag, curr_screen: Pos2, shift: bool, scale: 
     }
 }
 
+/// Hit area of a resize handle in screen pixels. The drawn square stays 8 px.
+pub(crate) const HANDLE_HIT_PX: f32 = 12.0;
+
+/// Whether `handle` sits on the line of a straight line frame (under 2 slide px high or
+/// wide; the line tool makes 1 px frames). Such handles are hidden and cannot be grabbed, so a drag of the
+/// middle of the line moves it.
+fn handle_on_line(handle: ResizeHandle, frame: Rect) -> bool {
+    let flat_h = frame.height() < 2.0;
+    let flat_w = frame.width() < 2.0;
+    (flat_h && matches!(handle, ResizeHandle::Top | ResizeHandle::Bottom))
+        || (flat_w && matches!(handle, ResizeHandle::Left | ResizeHandle::Right))
+}
+
+/// The resize cursor for `handle` on a frame turned by `rotation` degrees: the
+/// handle angle plus the rotation, snapped to the nearest of the four cursors.
+pub(crate) fn handle_cursor(handle: ResizeHandle, rotation: f32) -> CursorIcon {
+    let base = match handle {
+        ResizeHandle::Right => 0.0_f32,
+        ResizeHandle::BottomRight => 45.0,
+        ResizeHandle::Bottom => 90.0,
+        ResizeHandle::BottomLeft => 135.0,
+        ResizeHandle::Left => 180.0,
+        ResizeHandle::TopLeft => 225.0,
+        ResizeHandle::Top => 270.0,
+        ResizeHandle::TopRight => 315.0,
+    };
+    let rotation = if rotation.is_finite() { rotation } else { 0.0 };
+    cursor_for_angle(base + rotation)
+}
+
+/// The resize cursor along a direction of `angle` degrees (0 is rightwards,
+/// clockwise on screen), snapped to the nearest of the four resize cursors.
+fn cursor_for_angle(angle: f32) -> CursorIcon {
+    let angle = angle.rem_euclid(180.0);
+    match ((angle / 45.0).round() as i32).rem_euclid(4) {
+        0 => CursorIcon::ResizeHorizontal,
+        1 => CursorIcon::ResizeNwSe,
+        2 => CursorIcon::ResizeVertical,
+        _ => CursorIcon::ResizeNeSw,
+    }
+}
+
 fn get_handle_centers(screen_rect: Rect) -> [(ResizeHandle, Pos2); 8] {
     [
         (ResizeHandle::TopLeft, screen_rect.left_top()),
@@ -1790,6 +1882,29 @@ fn pinch_canvas_zoom(
     let (content, _) = canvas_content_size(available, slide, scale);
     let origin = (content - slide * scale) * 0.5;
     Some(origin + in_slide * scale - (pointer - viewport.min))
+}
+
+/// The scroll offset that keeps the slide point under the viewport centre in place
+/// after the zoom level changed (a zoom button or key). Fit has no scroll, so
+/// zooming back to Fit resets it.
+fn keep_centre_on_zoom(
+    editor: &Editor,
+    viewport: Rect,
+    available: egui::Vec2,
+    slide: egui::Vec2,
+) -> Option<egui::Vec2> {
+    let Some(scale) = editor.ui.zoom.fixed_scale() else {
+        return Some(egui::Vec2::ZERO);
+    };
+    let slide_rect = editor.ui.last_slide_rect?;
+    let before = slide_rect.width() / slide.x;
+    if !before.is_finite() || before <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let in_slide = (viewport.center() - slide_rect.min) / before;
+    let (content, _) = canvas_content_size(available, slide, scale);
+    let origin = (content - slide * scale) * 0.5;
+    Some(origin + in_slide * scale - viewport.size() * 0.5)
 }
 
 /// The scrollable size of the canvas at `scale`, and that scale's slide size.
@@ -2628,6 +2743,135 @@ fn anchor_grow_text_rect(base: Rect, new_h: f32, valign: coursecraft_course::VAl
 /// boxes, shapes, buttons, and table cells.
 #[allow(clippy::too_many_arguments)]
 fn inline_edit_live_bounds_for(
+    ctx: &egui::Context,
+    base_slide_rect: Rect,
+    text: &str,
+    original: &str,
+    style: &coursecraft_course::TextStyle,
+    runs: &[coursecraft_course::TextRun],
+    paragraphs: &[coursecraft_course::Paragraph],
+    theme_font: &str,
+    point_text: bool,
+    grow_text: bool,
+) -> Option<(Rect, (f32, f32))> {
+    if !point_text && !grow_text {
+        return None;
+    }
+    // Measuring lays the text out; the same inputs come in on every frame, so
+    // measure only when the text, its style or the box changes.
+    let key = inline_bounds_key(
+        ctx.pixels_per_point(),
+        base_slide_rect,
+        text,
+        text == original,
+        style,
+        runs,
+        paragraphs,
+        theme_font,
+        point_text,
+        grow_text,
+    );
+    let cache_id = egui::Id::unique("coursecraft_inline_bounds_cache");
+    let hit = ctx.data(|d| {
+        d.get_temp::<InlineBoundsCache>(cache_id)
+            .and_then(|cache| cache.0.iter().find(|(k, _)| *k == key).map(|(_, v)| *v))
+    });
+    if let Some(hit) = hit {
+        return Some(hit);
+    }
+    INLINE_MEASURES.with(|count| count.set(count.get() + 1));
+    let value = measure_inline_edit_live_bounds(
+        ctx,
+        base_slide_rect,
+        text,
+        original,
+        style,
+        runs,
+        paragraphs,
+        theme_font,
+        point_text,
+        grow_text,
+    )?;
+    ctx.data_mut(|d| {
+        let cache = d.get_temp_mut_or_default::<InlineBoundsCache>(cache_id);
+        cache.0.retain(|(k, _)| *k != key);
+        cache.0.push((key, value));
+        // The frame measures the box at most a few ways (stored text, typed
+        // text), so a short list is enough.
+        if cache.0.len() > 6 {
+            cache.0.remove(0);
+        }
+    });
+    Some(value)
+}
+
+/// Recent in-place text box measurements, keyed by [`inline_bounds_key`].
+#[derive(Clone, Default)]
+struct InlineBoundsCache(Vec<(u64, InlineBounds)>);
+
+/// The live frame of an in-place text box and its measured size.
+type InlineBounds = (Rect, (f32, f32));
+
+thread_local! {
+    /// How many times the in-place text box was really measured (not served
+    /// from the cache) on this thread. Tests read it.
+    static INLINE_MEASURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Number of real in-place text box measurements on this thread so far.
+#[cfg(test)]
+pub(crate) fn inline_measure_count() -> usize {
+    INLINE_MEASURES.with(std::cell::Cell::get)
+}
+
+/// A `fmt::Write` that feeds a hasher, to hash a value through `Debug`
+/// without building the string.
+struct HashWriter(std::collections::hash_map::DefaultHasher);
+
+impl std::fmt::Write for HashWriter {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        std::hash::Hasher::write(&mut self.0, text.as_bytes());
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inline_bounds_key(
+    pixels_per_point: f32,
+    base_slide_rect: Rect,
+    text: &str,
+    unchanged: bool,
+    style: &coursecraft_course::TextStyle,
+    runs: &[coursecraft_course::TextRun],
+    paragraphs: &[coursecraft_course::Paragraph],
+    theme_font: &str,
+    point_text: bool,
+    grow_text: bool,
+) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::{Hash, Hasher};
+    let mut writer = HashWriter(std::collections::hash_map::DefaultHasher::new());
+    pixels_per_point.to_bits().hash(&mut writer.0);
+    text.hash(&mut writer.0);
+    unchanged.hash(&mut writer.0);
+    theme_font.hash(&mut writer.0);
+    point_text.hash(&mut writer.0);
+    grow_text.hash(&mut writer.0);
+    for value in [
+        base_slide_rect.min.x,
+        base_slide_rect.min.y,
+        base_slide_rect.max.x,
+        base_slide_rect.max.y,
+    ] {
+        value.to_bits().hash(&mut writer.0);
+    }
+    // Writing into a hasher cannot fail.
+    let _ = write!(writer, "{style:?}|{runs:?}|{paragraphs:?}");
+    writer.0.finish()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn measure_inline_edit_live_bounds(
     ctx: &egui::Context,
     base_slide_rect: Rect,
     text: &str,
@@ -3881,6 +4125,7 @@ fn pick_object(
     selection: &crate::Selection,
     slide_pos: Pos2,
     items: &[DrawItem],
+    scale: f32,
 ) -> Option<(String, Rect)> {
     let slide = course.slide(&selection.slide)?;
     for item in items.iter().rev() {
@@ -3895,7 +4140,7 @@ fn pick_object(
         }
         if let Hit::Object(ref id) = item.hit
             && !slide.object(id).is_some_and(|(o, _)| o.locked)
-            && coursecraft_render::item_hit_test(item, slide_pos)
+            && coursecraft_render::item_hit_test_scaled(item, slide_pos, scale)
         {
             return Some((id.clone(), item.rect));
         }
@@ -3996,7 +4241,8 @@ fn start_drag_if_pressed(
                 return;
             }
             for (h, c) in rotated_handle_centers(screen_rect, world_rot) {
-                if Rect::from_center_size(c, vec2(8.0, 8.0)).contains(start_pos) {
+                if Rect::from_center_size(c, vec2(HANDLE_HIT_PX, HANDLE_HIT_PX)).contains(start_pos)
+                {
                     editor.ui.canvas_drag = Some(CanvasDrag {
                         op: DragOp::StateExtraResize {
                             handle: h,
@@ -4285,7 +4531,10 @@ fn start_drag_if_pressed(
             None => (get_handle_centers(t.to_screen_rect(bbox)), bbox),
         };
         for (h, c) in centers {
-            let h_rect = Rect::from_center_size(c, vec2(8.0, 8.0));
+            if handle_on_line(h, orig) {
+                continue;
+            }
+            let h_rect = Rect::from_center_size(c, vec2(HANDLE_HIT_PX, HANDLE_HIT_PX));
             if h_rect.contains(start_pos) {
                 handle_hit = Some((h, orig));
                 break;
@@ -4308,7 +4557,7 @@ fn start_drag_if_pressed(
             let r_rect = Rect::from_min_size(pos2(region.x, region.y), vec2(region.w, region.h));
             let screen_rect = t.to_screen_rect(r_rect);
             for (h, c) in get_handle_centers(screen_rect) {
-                let h_rect = Rect::from_center_size(c, vec2(8.0, 8.0));
+                let h_rect = Rect::from_center_size(c, vec2(HANDLE_HIT_PX, HANDLE_HIT_PX));
                 if h_rect.contains(start_pos) {
                     region_handle_hit = Some((h, sel_r_id.clone(), r_rect));
                     break;
@@ -4426,13 +4675,20 @@ fn start_drag_if_pressed(
         });
     } else if t.slide_rect().contains(start_pos) {
         let slide_pos = t.to_slide_pos(start_pos);
-        if let Some((id, orig_frame)) =
-            pick_object(&editor.session.course, &editor.selection, slide_pos, items)
-        {
-            if modifiers.shift {
-                // Toggle on release, so a click does not also start a drag.
+        if let Some((id, orig_frame)) = pick_object(
+            &editor.session.course,
+            &editor.selection,
+            slide_pos,
+            items,
+            t.scale(),
+        ) {
+            let additive = modifiers.shift || modifiers.command;
+            if additive && !editor.selection.contains(&id) {
+                // Add on release (a click), so the press does not replace the selection.
                 return;
             }
+            // A modifier press on a selected object starts a move of the selection.
+            // A click without a drag toggles it on release instead.
             if !editor.selection.contains(&id) {
                 editor.select_object_group(&id);
             }
@@ -5265,7 +5521,47 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
                 }
             }
         }
+    } else if is_move && matches!(drag.op, DragOp::Move) {
+        // Alt+drag: the originals stay; outline where the copies will land.
+        let accent = coursecraft_render::palette(ui.ctx()).accent;
+        let mut painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::unique("canvas_duplicate_ghost"),
+        ));
+        painter.set_clip_rect(ui.clip_rect());
+        for shape in duplicate_ghost_shapes(t, &preview_frames, accent) {
+            painter.add(shape);
+        }
     }
+}
+
+/// Dashed outlines, in screen space, of the frames the Alt+drag copies will get.
+fn duplicate_ghost_shapes(
+    t: &SlideTransform,
+    frames: &[(String, Rect)],
+    color: Color32,
+) -> Vec<egui::Shape> {
+    let mut shapes = Vec::new();
+    for (_, frame) in frames {
+        let rect = t.to_screen_rect(*frame);
+        if !rect.min.x.is_finite() || !rect.max.x.is_finite() {
+            continue;
+        }
+        let corners = [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+            rect.left_top(),
+        ];
+        shapes.extend(egui::Shape::dashed_line(
+            &corners,
+            Stroke::new(1.5, color),
+            6.0,
+            4.0,
+        ));
+    }
+    shapes
 }
 
 fn handle_canvas_secondary_click(
@@ -5280,7 +5576,14 @@ fn handle_canvas_secondary_click(
     editor.ui.canvas_context_pos =
         (slide_pos.x.is_finite() && slide_pos.y.is_finite()).then_some(slide_pos);
     let picked = if inside && editor.ui.canvas_context_pos.is_some() {
-        pick_object(&editor.session.course, &editor.selection, slide_pos, items).map(|(id, _)| id)
+        pick_object(
+            &editor.session.course,
+            &editor.selection,
+            slide_pos,
+            items,
+            t.scale(),
+        )
+        .map(|(id, _)| id)
     } else {
         None
     };
@@ -5342,8 +5645,14 @@ fn handle_canvas_click(
                 }
                 return;
             }
-            let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
-                .map(|(id, _)| id);
+            let picked = pick_object(
+                &editor.session.course,
+                &editor.selection,
+                slide_pos,
+                items,
+                t.scale(),
+            )
+            .map(|(id, _)| id);
             if picked.as_deref() == Some(session.object_id.as_str())
                 && let Some(active) = editor.ui.editing_state.as_mut()
             {
@@ -5369,8 +5678,14 @@ fn handle_canvas_click(
                 }
             }
         }
-        let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
-            .map(|(id, _)| id);
+        let picked = pick_object(
+            &editor.session.course,
+            &editor.selection,
+            slide_pos,
+            items,
+            t.scale(),
+        )
+        .map(|(id, _)| id);
         if let Some(ref session) = editor.ui.editing_state
             && picked.as_deref() != Some(session.object_id.as_str())
         {
@@ -5406,6 +5721,18 @@ fn handle_canvas_click(
         match picked {
             Some(id) if additive => editor.toggle_object_group(&id),
             Some(id) if editor.selection.contains(&id) => {
+                if editor.selection.is_multi() {
+                    // A click without a drag on one object of a multi-selection
+                    // narrows the selection to that object (or its group).
+                    let members = editor.selection.group_members(&editor.session.course, &id);
+                    let ids = editor.selection.ids();
+                    let same = members.len() == ids.len()
+                        && ids.iter().all(|other| members.contains(other));
+                    if !same {
+                        editor.select_object_group(&id);
+                        return;
+                    }
+                }
                 if editor.ui.group_focus.as_deref() != Some(id.as_str()) {
                     editor.ui.group_focus = None;
                 }
@@ -5457,8 +5784,14 @@ fn handle_canvas_double_click(
             );
             return;
         }
-        let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
-            .map(|(id, _)| id);
+        let picked = pick_object(
+            &editor.session.course,
+            &editor.selection,
+            slide_pos,
+            items,
+            t.scale(),
+        )
+        .map(|(id, _)| id);
         if let Some(ref session) = editor.ui.editing_state
             && picked.as_deref() != Some(session.object_id.as_str())
         {
@@ -5556,6 +5889,89 @@ pub(crate) struct CropDrag {
 const CROP_HANDLE_HIT_PX: f32 = 7.0;
 const CROP_HANDLE_SIZE_PX: f32 = 8.0;
 
+/// How the picture being cropped is turned on the slide: rotation, then flips,
+/// both about the centre of its frame. Crop mode edits the picture in its own
+/// upright frame, so pointer positions go through [`Self::local_point`] and the
+/// overlay is drawn through [`Self::world_point`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CropXform {
+    pub(crate) pivot: Pos2,
+    pub(crate) rotation: f32,
+    pub(crate) flip_h: bool,
+    pub(crate) flip_v: bool,
+}
+
+impl CropXform {
+    fn is_identity(&self) -> bool {
+        self.rotation == 0.0 && !self.flip_h && !self.flip_v
+    }
+
+    /// Upright picture frame position to its place on the slide.
+    pub(crate) fn world_point(&self, point: Pos2) -> Pos2 {
+        if self.is_identity() {
+            return point;
+        }
+        let turned = coursecraft_render::rotate_point(point, self.pivot, self.rotation);
+        coursecraft_render::flip_point(turned, self.pivot, self.flip_h, self.flip_v)
+    }
+
+    /// Slide position to the upright picture frame.
+    pub(crate) fn local_point(&self, point: Pos2) -> Pos2 {
+        if self.is_identity() {
+            return point;
+        }
+        let flipped = coursecraft_render::flip_point(point, self.pivot, self.flip_h, self.flip_v);
+        coursecraft_render::rotate_point(flipped, self.pivot, -self.rotation)
+    }
+
+    /// The slide frame of an upright `frame`: same size, centre moved to its
+    /// place on the slide.
+    pub(crate) fn world_frame(&self, frame: Rect) -> Rect {
+        Rect::from_center_size(self.world_point(frame.center()), frame.size())
+    }
+}
+
+/// The transform of the object in the crop session. Identity when the object is gone.
+fn crop_xform(editor: &Editor) -> CropXform {
+    let identity = CropXform {
+        pivot: Pos2::ZERO,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+    };
+    let Some(session) = editor.ui.crop_edit.as_ref() else {
+        return identity;
+    };
+    editor
+        .session
+        .course
+        .slide(&session.slide)
+        .and_then(|slide| slide.object(&session.object))
+        .map_or(identity, |(object, _)| CropXform {
+            pivot: pos2(
+                object.frame.x + object.frame.w * 0.5,
+                object.frame.y + object.frame.h * 0.5,
+            ),
+            rotation: if object.rotation.is_finite() {
+                object.rotation
+            } else {
+                0.0
+            },
+            flip_h: object.flip_h,
+            flip_v: object.flip_v,
+        })
+}
+
+/// A screen position on the slide, as the matching screen position in the
+/// upright picture frame that crop mode edits in.
+fn crop_local_screen(editor: &Editor, t: &SlideTransform, screen: Pos2) -> Pos2 {
+    let xform = crop_xform(editor);
+    if xform.is_identity() {
+        return screen;
+    }
+    t.to_screen_pos(xform.local_point(t.to_slide_pos(screen)))
+}
+
 /// The kept window's screen rect for the crop session, if it still applies.
 fn crop_screen_rect(editor: &Editor, t: &SlideTransform) -> Option<(crate::CropSession, Rect)> {
     let session = editor.ui.crop_edit.clone()?;
@@ -5574,6 +5990,7 @@ fn update_crop_drag(
     pointer: Pos2,
     shift: bool,
 ) {
+    let pointer = crop_local_screen(editor, t, pointer);
     let Some(session) = editor.ui.crop_edit.as_mut() else {
         return;
     };
@@ -5598,6 +6015,7 @@ fn crop_press(editor: &mut Editor, pos: Pos2, t: &SlideTransform) -> bool {
     let Some((session, kept)) = crop_screen_rect(editor, t) else {
         return false;
     };
+    let pos = crop_local_screen(editor, t, pos);
     if let Some(handle) = crate::crop::CropHandle::at(kept, pos, CROP_HANDLE_HIT_PX) {
         editor.ui.canvas_drag = None;
         let drag = CropDrag {
@@ -5677,8 +6095,19 @@ fn draw_crop_overlay(editor: &Editor, painter: &Painter, t: &SlideTransform, ui:
         return;
     };
     let p = coursecraft_render::palette(ui.ctx());
+    let xform = crop_xform(editor);
     let full = session.edit.source_overlay();
     let whole = t.to_screen_rect(full);
+    // Corners of an upright screen rect, turned to where the picture is drawn.
+    let world_corners = |rect: Rect| -> [Pos2; 4] {
+        [
+            rect.left_top(),
+            rect.right_top(),
+            rect.right_bottom(),
+            rect.left_bottom(),
+        ]
+        .map(|corner| t.to_screen_pos(xform.world_point(t.to_slide_pos(corner))))
+    };
 
     // The part outside the kept frame is what Apply will hide, so show it
     // dimmed behind the full-strength kept window.
@@ -5699,48 +6128,70 @@ fn draw_crop_overlay(editor: &Editor, painter: &Painter, t: &SlideTransform, ui:
         pos2(session.edit.crop.x, session.edit.crop.y),
         vec2(session.edit.crop.w, session.edit.crop.h),
     );
+    let dim = Color32::from_rgba_unmultiplied(0, 0, 0, 150);
+    let whole_quad = world_corners(whole);
+    let kept_quad = world_corners(kept);
     if let Some(texture) = texture {
-        painter.image(texture, whole, full_uv, Color32::WHITE);
-        painter.rect_filled(
-            whole,
-            CornerRadius::ZERO,
-            Color32::from_rgba_unmultiplied(0, 0, 0, 150),
-        );
-        painter.image(texture, kept, kept_uv, Color32::WHITE);
+        paint_quad_image(painter, texture, whole_quad, full_uv);
+        painter.add(egui::Shape::convex_polygon(
+            whole_quad.to_vec(),
+            dim,
+            Stroke::NONE,
+        ));
+        paint_quad_image(painter, texture, kept_quad, kept_uv);
     } else {
-        painter.rect_filled(
-            whole,
-            CornerRadius::ZERO,
-            Color32::from_rgba_unmultiplied(0, 0, 0, 150),
-        );
+        painter.add(egui::Shape::convex_polygon(
+            whole_quad.to_vec(),
+            dim,
+            Stroke::NONE,
+        ));
     }
 
-    draw_dashed_rect(painter, whole, Stroke::new(1.0, p.text_tertiary));
-    painter.rect_stroke(
-        kept,
-        CornerRadius::ZERO,
+    let dashed_corners = [
+        whole_quad[0],
+        whole_quad[1],
+        whole_quad[2],
+        whole_quad[3],
+        whole_quad[0],
+    ];
+    painter.extend(egui::Shape::dashed_line(
+        &dashed_corners,
+        Stroke::new(1.0, p.text_tertiary),
+        6.0,
+        4.0,
+    ));
+    painter.add(egui::Shape::closed_line(
+        kept_quad.to_vec(),
         Stroke::new(2.0, p.accent),
-        StrokeKind::Outside,
-    );
+    ));
 
-    let pointer = ui.input(|i| i.pointer.interact_pos());
+    let pointer = ui
+        .input(|i| i.pointer.interact_pos())
+        .map(|pos| crop_local_screen(editor, t, pos));
     if editor.ui.crop_drag.is_none()
         && let Some(pos) = pointer
         && let Some(handle) = crate::crop::CropHandle::at(kept, pos, CROP_HANDLE_HIT_PX)
     {
-        let cursor = match (
-            handle.moves_left() || handle.moves_right(),
-            handle.is_corner(),
-        ) {
-            (true, true) if handle.moves_left() == handle.moves_top() => CursorIcon::ResizeNwSe,
-            (true, true) => CursorIcon::ResizeNeSw,
-            (false, _) => CursorIcon::ResizeVertical,
-            (true, false) => CursorIcon::ResizeHorizontal,
+        let horizontal = handle.moves_left() || handle.moves_right();
+        let vertical = handle.moves_top() || handle.moves_bottom();
+        let base = if horizontal && !vertical {
+            0.0_f32
+        } else if vertical && !horizontal {
+            90.0
+        } else if handle.moves_left() == handle.moves_top() {
+            45.0
+        } else {
+            135.0
         };
-        ui.ctx().set_cursor_icon(cursor);
+        let mut angle = base + xform.rotation;
+        if xform.flip_h != xform.flip_v {
+            angle = -angle;
+        }
+        ui.ctx().set_cursor_icon(cursor_for_angle(angle));
     }
 
     for (_, center) in crate::crop::CropHandle::positions(kept) {
+        let center = t.to_screen_pos(xform.world_point(t.to_slide_pos(center)));
         let handle_rect =
             Rect::from_center_size(center, vec2(CROP_HANDLE_SIZE_PX, CROP_HANDLE_SIZE_PX));
         painter.rect_filled(handle_rect, CornerRadius::ZERO, Color32::WHITE);
@@ -5751,6 +6202,27 @@ fn draw_crop_overlay(editor: &Editor, painter: &Painter, t: &SlideTransform, ui:
             StrokeKind::Middle,
         );
     }
+}
+
+/// Paint `uv` of a texture onto a (possibly turned or mirrored) screen quad,
+/// corners in the order top-left, top-right, bottom-right, bottom-left.
+fn paint_quad_image(painter: &Painter, texture: egui::TextureId, quad: [Pos2; 4], uv: Rect) {
+    let uvs = [
+        uv.left_top(),
+        uv.right_top(),
+        uv.right_bottom(),
+        uv.left_bottom(),
+    ];
+    let mut mesh = egui::Mesh::with_texture(texture);
+    for (pos, uv) in quad.into_iter().zip(uvs) {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos,
+            uv,
+            color: Color32::WHITE,
+        });
+    }
+    mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 fn align_for(align: coursecraft_course::Align) -> egui::Align {
@@ -7288,20 +7760,8 @@ fn draw_handles_and_outline(
                 ui.ctx().set_cursor_icon(CursorIcon::Grab);
             } else {
                 for (h, c) in centers {
-                    if Rect::from_center_size(c, vec2(8.0, 8.0)).contains(pos) {
-                        let cursor = match h {
-                            ResizeHandle::TopLeft | ResizeHandle::BottomRight => {
-                                CursorIcon::ResizeNwSe
-                            }
-                            ResizeHandle::TopRight | ResizeHandle::BottomLeft => {
-                                CursorIcon::ResizeNeSw
-                            }
-                            ResizeHandle::Top | ResizeHandle::Bottom => CursorIcon::ResizeVertical,
-                            ResizeHandle::Left | ResizeHandle::Right => {
-                                CursorIcon::ResizeHorizontal
-                            }
-                        };
-                        ui.ctx().set_cursor_icon(cursor);
+                    if Rect::from_center_size(c, vec2(HANDLE_HIT_PX, HANDLE_HIT_PX)).contains(pos) {
+                        ui.ctx().set_cursor_icon(handle_cursor(h, world_rot));
                         break;
                     }
                 }
@@ -7338,6 +7798,8 @@ fn draw_handles_and_outline(
     };
     let rotate_handle =
         single_item.map(|item| rotate_handle_center(t.to_screen_rect(item.rect), item.rotation));
+    let handle_frame = single_item.map_or(bbox, |item| item.rect);
+    let handle_rotation = single_item.map_or(0.0, |item| item.rotation);
 
     let path_visual = if !editor.selection.is_multi() {
         editor
@@ -7403,22 +7865,22 @@ fn draw_handles_and_outline(
             && let Some(pos) = current_pointer
         {
             for (h, c) in centers {
-                let handle_rect = Rect::from_center_size(c, vec2(handle_size, handle_size));
+                if handle_on_line(h, handle_frame) {
+                    continue;
+                }
+                let handle_rect = Rect::from_center_size(c, vec2(HANDLE_HIT_PX, HANDLE_HIT_PX));
                 if handle_rect.contains(pos) {
-                    let cursor = match h {
-                        ResizeHandle::TopLeft | ResizeHandle::BottomRight => CursorIcon::ResizeNwSe,
-                        ResizeHandle::TopRight | ResizeHandle::BottomLeft => CursorIcon::ResizeNeSw,
-                        ResizeHandle::Top | ResizeHandle::Bottom => CursorIcon::ResizeVertical,
-                        ResizeHandle::Left | ResizeHandle::Right => CursorIcon::ResizeHorizontal,
-                    };
-                    ui.ctx().set_cursor_icon(cursor);
+                    ui.ctx().set_cursor_icon(handle_cursor(h, handle_rotation));
                     break;
                 }
             }
         }
 
         if editor.ui.editing_state.is_none() {
-            for (_, c) in centers {
+            for (h, c) in centers {
+                if handle_on_line(h, handle_frame) {
+                    continue;
+                }
                 let handle_rect = Rect::from_center_size(c, vec2(handle_size, handle_size));
                 painter.rect_filled(handle_rect, CornerRadius::ZERO, Color32::WHITE);
                 painter.rect_stroke(
@@ -7768,6 +8230,19 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
     let (sw, sh) = (slide_size.w as f32, slide_size.h as f32);
 
     let pinch_scroll = pinch_canvas_zoom(editor, ui, viewport_rect, available_size, vec2(sw, sh));
+    // A zoom step from a button or key keeps the slide point at the view centre in place.
+    let pinch_scroll = pinch_scroll.or_else(|| {
+        let changed = editor
+            .ui
+            .zoom_drawn
+            .is_some_and(|drawn| drawn != editor.ui.zoom);
+        editor.ui.zoom_drawn = Some(editor.ui.zoom);
+        if !changed {
+            return None;
+        }
+        keep_centre_on_zoom(editor, viewport_rect, available_size, vec2(sw, sh))
+    });
+    editor.ui.zoom_drawn = Some(editor.ui.zoom);
 
     let (content_size, scale_override) = match editor.ui.zoom.fixed_scale() {
         None => {
@@ -7918,10 +8393,25 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 dim_base,
                 !hide_base_view,
             );
-            composed.retain(|item| {
-                !matches!(&item.hit, Hit::Object(id)
-                    if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))
-            });
+            // One pass over the slide's objects, not a lookup per composed item.
+            // The first object with an id wins, like `Slide::object`.
+            let mut hidden_by_id: std::collections::HashMap<&str, bool> =
+                std::collections::HashMap::new();
+            for object in slide
+                .objects
+                .iter()
+                .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
+            {
+                hidden_by_id
+                    .entry(object.id.as_str())
+                    .or_insert(object.editor_hidden);
+            }
+            if hidden_by_id.values().any(|hidden| *hidden) {
+                composed.retain(|item| {
+                    !matches!(&item.hit, Hit::Object(id)
+                        if hidden_by_id.get(id.as_str()).copied().unwrap_or(false))
+                });
+            }
             if let Some(selected) = selected_marker_id {
                 for item in &mut composed {
                     if matches!(&item.hit, Hit::Object(id) if id == selected)
@@ -8340,17 +8830,18 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
 
-                        let minus_enabled = editor.ui.zoom.zoom_out() != editor.ui.zoom;
-                        if crate::widgets::icon_button_enabled(
+                        let minus_enabled = editor.zoom_out_level() != editor.ui.zoom;
+                        if crate::widgets::icon_button_enabled_reason(
                             ui,
                             coursecraft_render::Icon::MagnifyingGlassMinus,
                             minus_enabled,
                             "Zoom out",
+                            "Already at the smallest zoom",
                         )
                         .clicked()
                             && minus_enabled
                         {
-                            editor.ui.zoom = editor.ui.zoom.zoom_out();
+                            editor.zoom_out();
                         }
 
                         let zoom_resp = zoom_value_button(ui, &editor.ui.zoom.label());
@@ -8363,17 +8854,18 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                             }
                         });
 
-                        let plus_enabled = editor.ui.zoom.zoom_in() != editor.ui.zoom;
-                        if crate::widgets::icon_button_enabled(
+                        let plus_enabled = editor.zoom_in_level() != editor.ui.zoom;
+                        if crate::widgets::icon_button_enabled_reason(
                             ui,
                             coursecraft_render::Icon::MagnifyingGlassPlus,
                             plus_enabled,
                             "Zoom in",
+                            "Already at the largest zoom",
                         )
                         .clicked()
                             && plus_enabled
                         {
-                            editor.ui.zoom = editor.ui.zoom.zoom_in();
+                            editor.zoom_in();
                         }
                     });
                 });
