@@ -431,6 +431,7 @@ fn render_ui_at(
         screen_rect: Some(screen_rect),
         time: Some(0.0),
         predicted_dt: 1.0 / 60.0,
+        max_texture_side: Some(8192),
         ..Default::default()
     };
 
