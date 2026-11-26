@@ -2,6 +2,46 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.5.3
+
+Everyday-use fixes for the keyboard, the slide list, the stage, number fields and the ribbon.
+
+**Keyboard and slide list**
+- After clicking a slide in the slide list, Up/Down select the previous or next slide (across scenes) and Home/End the first or last. Shift extends the range, and the list scrolls to the slide.
+- Delete, the arrow keys, Undo/Redo, Ctrl+A and Ctrl+D no longer act on the course behind the start page, the File page or a dialog.
+- Ctrl+A skips locked and hidden objects, and the arrow keys and Delete leave locked objects alone.
+- Holding an arrow key to nudge an object is now one undo step.
+- Zooming in or out keeps the centre of the view.
+- Ctrl+S in a text field now keeps what you typed and saves.
+- Cancelling Open… on the start page or File page keeps the page open instead of showing an empty course.
+- Help › Welcome with a course open: Course Info, Version History and Manage Fonts work, and Esc goes back.
+- File › Check Course opens the problems window with the result.
+- Cut, Copy, Duplicate, Move and Paste in the slide list use all selected slides, as one undo step.
+
+**Stage**
+- Ctrl+click adds an object to the selection or removes it, and Shift/Ctrl+drag on a selected object moves the selection.
+- Clicking one object of a multi-selection selects just that object; dragging still moves them all.
+- Dragging the middle of a straight line moves it, and thin lines are easy to click at any zoom.
+- Alt+drag shows an outline of the copy, resize handles are easier to hit, and the resize cursor follows the object's rotation.
+- Crop works on rotated and flipped pictures.
+- Less typing lag in point text and auto-size text boxes, and less lag after edits on busy slides.
+
+**Number fields**
+- Typed numbers are kept and drags no longer jump back in Focus order, Draw-from-bank Count, motion path Duration, hotspot markers and region position and size.
+- One drag or one typed number is one undo step in text insets, border width, Input max characters, Dial and Slider settings, Scroll panel height, Lottie speed and "Slides viewed – at least N".
+
+**Ribbon, timeline and player**
+- Clicking the open ribbon tab no longer collapses the ribbon; double-click it (or Ctrl+F1) instead. Inserting an object no longer expands a collapsed ribbon.
+- Ribbon tooltips show the keyboard shortcut, and New Style from Selection always makes a unique name.
+- Timeline Show all and Unlock all cover every layer of the slide, as one undo step.
+- Smoother slide list, waveforms and state cards, and the web player saves its progress only when it changed.
+
+**Files and translation**
+- A failed open of a `.json` course no longer drops the pictures and sounds of the course that was open.
+- Saving a `.json` course from the CLI or MCP writes its media to the `media/` folder beside it, and reports an error instead of marking it saved if a file can't be written.
+- The translation check counts repeated `%var%` and `{var}` placeholders and finds a placeholder after a lone `%`.
+- Changing the slide size with content scaling also scales tiled picture fills.
+
 ## 0.5.2
 
 Quick fixes for everyday authoring, an Intel Mac download, and two fixes from user feedback.
