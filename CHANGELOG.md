@@ -2,9 +2,9 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## Unreleased
+## 0.6.1
 
-Text and formatting gaps (M39), two fixes from GitHub issues, and working links on the desktop.
+The Download and What's new buttons in the update window now work, plus text and formatting gaps (M39) and two fixes from GitHub issues.
 
 **Text formatting**
 - Highlight colour and text shadow for any part of the text, from Home › Font and the Text panel. PowerPoint import brings in highlights and text shadows.
@@ -30,7 +30,7 @@ Text and formatting gaps (M39), two fixes from GitHub issues, and working links 
 **Fixes**
 - Triggers panel (issue #11): rows for the selected object are highlighted, and the list scrolls to the first one only while the Triggers tab is open.
 - Layers (issue #12): a focused layer now shows only itself and the base slide. Turn on another layer's eye to show it as well.
-- Links open in the browser again on the desktop: Download and What's new in the update window, Open URL in Preview, and help links.
+- Links open in the browser on the desktop: Download and What's new in the update window, Open URL in Preview, and help links.
 
 ## 0.6.0
 
