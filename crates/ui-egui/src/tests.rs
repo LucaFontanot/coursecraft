@@ -2751,6 +2751,7 @@ fn describe_covers_all_action_and_event_variants() {
                 entrance: None,
                 exit: None,
                 motion_paths: Vec::new(),
+                emphasis: Vec::new(),
                 states: Vec::new(),
                 initial_state: "normal".to_owned(),
                 focus_order: None,
@@ -2786,6 +2787,7 @@ fn describe_covers_all_action_and_event_variants() {
                 entrance: None,
                 exit: None,
                 motion_paths: Vec::new(),
+                emphasis: Vec::new(),
                 states: Vec::new(),
                 initial_state: "normal".to_owned(),
                 focus_order: None,
@@ -8432,6 +8434,7 @@ fn image_object(src: &str) -> Object {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -8478,6 +8481,7 @@ fn accessibility_section_renders_and_a_click_selects_the_object() {
             entrance: None,
             exit: None,
             motion_paths: Vec::new(),
+            emphasis: Vec::new(),
             focus_order: None,
             decorative: false,
             description: None,
@@ -18465,32 +18469,20 @@ fn animation_panel_settings_are_stored_for_every_effect() {
     let mut harness = TestHarness::new(timeline_media_course());
     harness.editor.selection.slide = "s1".into();
     for (effect, expected) in [
-        ("fade", AnimEffect::Fade),
-        (
-            "fly_in",
-            AnimEffect::FlyIn {
-                from: Direction::Top,
-            },
-        ),
-        ("zoom", AnimEffect::Zoom),
-        (
-            "wipe",
-            AnimEffect::Wipe {
-                from: Direction::Top,
-            },
-        ),
-        (
-            "float",
-            AnimEffect::Float {
-                from: Direction::Top,
-            },
-        ),
+        ("fade", AnimEffect::new("fade")),
+        ("fly_in", AnimEffect::with_from("fly_in", Direction::Top)),
+        ("zoom", AnimEffect::new("zoom")),
+        ("wipe", AnimEffect::with_from("wipe", Direction::Top)),
+        ("float", AnimEffect::with_from("float", Direction::Top)),
     ] {
         for which in ["entrance", "exit"] {
             let (cmd, params) = crate::properties::animation_command(
                 which,
                 effect,
-                Direction::Top,
+                &coursecraft_course::AnimEffect {
+                    from: Some(Direction::Top),
+                    ..coursecraft_course::AnimEffect::default()
+                },
                 700,
                 Easing::EaseIn,
                 "s1",
@@ -18518,7 +18510,10 @@ fn animation_panel_settings_are_stored_for_every_effect() {
     let (cmd, params) = crate::properties::animation_command(
         "entrance",
         "none",
-        Direction::Bottom,
+        &coursecraft_course::AnimEffect {
+            from: Some(Direction::Bottom),
+            ..coursecraft_course::AnimEffect::default()
+        },
         500,
         Easing::EaseOut,
         "s1",
@@ -18538,7 +18533,10 @@ fn moving_an_object_on_the_timeline_keeps_its_animation() {
     let (cmd, params) = crate::properties::animation_command(
         "entrance",
         "fly_in",
-        Direction::Left,
+        &coursecraft_course::AnimEffect {
+            from: Some(Direction::Left),
+            ..coursecraft_course::AnimEffect::default()
+        },
         800,
         Easing::EaseOut,
         "s1",
@@ -18566,8 +18564,8 @@ fn moving_an_object_on_the_timeline_keeps_its_animation() {
         "the inspector still shows it"
     );
     assert_eq!(
-        harness.editor.ui.properties.entrance_direction,
-        Direction::Left
+        harness.editor.ui.properties.entrance_fx.direction(),
+        Some(Direction::Left)
     );
 }
 
@@ -18639,16 +18637,16 @@ fn timeline_play_shows_entrance_and_exit_on_the_canvas() {
         end_ms: Some(5000),
     };
     obj.entrance = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Left,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Left),
         duration_ms: 1000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 1000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     let Some(slide) = course.slide("s1") else {
         panic!("slide s1");
@@ -18727,7 +18725,10 @@ fn reselecting_the_same_animation_adds_no_undo_step() {
         crate::properties::animation_command(
             "entrance",
             effect,
-            Direction::Left,
+            &coursecraft_course::AnimEffect {
+                from: Some(Direction::Left),
+                ..coursecraft_course::AnimEffect::default()
+            },
             ms,
             Easing::EaseOut,
             "s1",
@@ -18881,7 +18882,10 @@ fn exit_animations_play_in_preview_with_slide_transition() {
     let (cmd1, params1) = crate::properties::animation_command(
         "exit",
         "fly_in",
-        coursecraft_course::Direction::Left,
+        &coursecraft_course::AnimEffect {
+            from: Some(coursecraft_course::Direction::Left),
+            ..coursecraft_course::AnimEffect::default()
+        },
         1000,
         coursecraft_course::Easing::Linear,
         "s1",
@@ -18892,7 +18896,10 @@ fn exit_animations_play_in_preview_with_slide_transition() {
     let (cmd2, params2) = crate::properties::animation_command(
         "exit",
         "fade",
-        coursecraft_course::Direction::Bottom,
+        &coursecraft_course::AnimEffect {
+            from: Some(coursecraft_course::Direction::Bottom),
+            ..coursecraft_course::AnimEffect::default()
+        },
         1000,
         coursecraft_course::Easing::Linear,
         "s1",

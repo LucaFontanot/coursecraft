@@ -443,76 +443,42 @@ fn assert_slide20_structure(slide20: &coursecraft_course::Slide) {
 
     let blue = by_name("Blue Rect");
     assert_eq!(blue.timing.start_ms, 0);
-    assert!(matches!(
-        blue.entrance,
-        Some(Animation {
-            effect: AnimEffect::Fade,
-            duration_ms: 600,
-            ..
-        })
-    ));
+    assert_anim(&blue.entrance, &AnimEffect::new("fade"), 600);
 
     let green = by_name("Green Rounded Rect");
     assert_eq!(green.timing.start_ms, 800);
-    assert!(matches!(
-        green.entrance,
-        Some(Animation {
-            effect: AnimEffect::FlyIn {
-                from: Direction::Left
-            },
-            duration_ms: 500,
-            ..
-        })
-    ));
+    assert_anim(
+        &green.entrance,
+        &AnimEffect::with_from("fly_in", Direction::Left),
+        500,
+    );
 
     let orange = by_name("Orange Shape");
     assert_eq!(orange.timing.start_ms, 900);
     assert_eq!(orange.timing.end_ms, Some(2500));
-    assert!(matches!(
-        orange.entrance,
-        Some(Animation {
-            effect: AnimEffect::Wipe {
-                from: Direction::Bottom
-            },
-            duration_ms: 400,
-            ..
-        })
-    ));
-    assert!(matches!(
-        orange.exit,
-        Some(Animation {
-            effect: AnimEffect::FlyIn {
-                from: Direction::Right
-            },
-            duration_ms: 500,
-            ..
-        })
-    ));
+    assert_anim(
+        &orange.entrance,
+        &AnimEffect::with_from("wipe", Direction::Bottom),
+        400,
+    );
+    assert_anim(
+        &orange.exit,
+        &AnimEffect::with_from("fly_in", Direction::Right),
+        500,
+    );
 
     let purple = by_name("Purple Circle");
     assert_eq!(purple.timing.start_ms, 3000);
-    assert!(matches!(
-        purple.entrance,
-        Some(Animation {
-            effect: AnimEffect::Zoom,
-            duration_ms: 500,
-            ..
-        })
-    ));
+    assert_anim(&purple.entrance, &AnimEffect::new("zoom"), 500);
     assert_slide20_motion_path(slide20, purple);
 
     let red = by_name("Red Star");
     assert_eq!(red.timing.start_ms, 4500);
-    assert!(matches!(
-        red.entrance,
-        Some(Animation {
-            effect: AnimEffect::Float {
-                from: Direction::Bottom
-            },
-            duration_ms: 500,
-            ..
-        })
-    ));
+    assert_anim(
+        &red.entrance,
+        &AnimEffect::with_from("float", Direction::Bottom),
+        500,
+    );
     assert!(red.exit.is_none());
 }
 
@@ -766,4 +732,10 @@ fn c1_14_slide_20_animations_and_motion_paths() {
         .collect();
     let media = InMemoryMedia(media_map);
     assert_slide20_rendered_frames(&imported.course, slide20, &player, &media);
+}
+
+fn assert_anim(anim: &Option<Animation>, effect: &AnimEffect, duration_ms: u32) {
+    let a = anim.as_ref().expect("animation");
+    assert_eq!(&a.effect, effect);
+    assert_eq!(a.duration_ms, duration_ms);
 }

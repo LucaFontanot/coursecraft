@@ -709,7 +709,7 @@ fn render_player_rgba_with(
 }
 
 /// Apply the still-frame marker and timer fixes, then rasterise `items`.
-fn render_items_rgba(
+pub(crate) fn render_items_rgba(
     course: &Course,
     slide: &Slide,
     width: u32,

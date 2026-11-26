@@ -2970,9 +2970,10 @@ fn sampling_fade_and_fly_in() {
 
     // 1. Fade
     let fade = Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let f_in_0 = sample_animation(&fade, AnimationPhase::Entering, 0.0, frame, slide_size);
     let f_in_mid = sample_animation(&fade, AnimationPhase::Entering, 0.5, frame, slide_size);
@@ -2990,11 +2991,10 @@ fn sampling_fade_and_fly_in() {
 
     // 2. FlyIn
     let fly_bottom = Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Bottom,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Bottom),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     // Bottom: slide_size.h - frame.y = 720 - 100 = 620
     let fly_in_0 = sample_animation(
@@ -3046,28 +3046,29 @@ fn sampling_zoom() {
 
     // 3. Zoom
     let zoom = Animation {
-        effect: AnimEffect::Zoom,
+        effect: AnimEffect::new("zoom"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let z_in_0 = sample_animation(&zoom, AnimationPhase::Entering, 0.0, frame, slide_size);
     let z_in_mid = sample_animation(&zoom, AnimationPhase::Entering, 0.5, frame, slide_size);
     let z_in_1 = sample_animation(&zoom, AnimationPhase::Entering, 1.0, frame, slide_size);
-    assert_eq!(z_in_0.scale, 0.0);
+    assert_eq!(z_in_0.scale, (0.0, 0.0));
     assert_eq!(z_in_0.opacity, 0.0);
-    assert_eq!(z_in_mid.scale, 0.5);
+    assert_eq!(z_in_mid.scale, (0.5, 0.5));
     assert_eq!(z_in_mid.opacity, 0.5);
-    assert_eq!(z_in_1.scale, 1.0);
+    assert_eq!(z_in_1.scale, (1.0, 1.0));
     assert_eq!(z_in_1.opacity, 1.0);
 
     let z_out_0 = sample_animation(&zoom, AnimationPhase::Exiting, 0.0, frame, slide_size);
     let z_out_mid = sample_animation(&zoom, AnimationPhase::Exiting, 0.5, frame, slide_size);
     let z_out_1 = sample_animation(&zoom, AnimationPhase::Exiting, 1.0, frame, slide_size);
-    assert_eq!(z_out_0.scale, 1.0);
+    assert_eq!(z_out_0.scale, (1.0, 1.0));
     assert_eq!(z_out_0.opacity, 1.0);
-    assert_eq!(z_out_mid.scale, 0.5);
+    assert_eq!(z_out_mid.scale, (0.5, 0.5));
     assert_eq!(z_out_mid.opacity, 0.5);
-    assert_eq!(z_out_1.scale, 0.0);
+    assert_eq!(z_out_1.scale, (0.0, 0.0));
     assert_eq!(z_out_1.opacity, 0.0);
 }
 
@@ -3086,11 +3087,10 @@ fn sampling_wipe_and_float() {
 
     // 4. Wipe
     let wipe = Animation {
-        effect: AnimEffect::Wipe {
-            from: Direction::Left,
-        },
+        effect: AnimEffect::with_from("wipe", Direction::Left),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let w_in_0 = sample_animation(&wipe, AnimationPhase::Entering, 0.0, frame, slide_size);
     let w_in_mid = sample_animation(&wipe, AnimationPhase::Entering, 0.5, frame, slide_size);
@@ -3140,11 +3140,10 @@ fn sampling_wipe_and_float() {
 
     // 5. Float
     let float = Animation {
-        effect: AnimEffect::Float {
-            from: Direction::Bottom,
-        },
+        effect: AnimEffect::with_from("float", Direction::Bottom),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
     let fl_in_0 = sample_animation(&float, AnimationPhase::Entering, 0.0, frame, slide_size);
     let fl_in_mid = sample_animation(&float, AnimationPhase::Entering, 0.5, frame, slide_size);
@@ -3178,9 +3177,10 @@ fn exit_with_none_end_ms_makes_object_not_live() {
     obj.timing.start_ms = 0;
     obj.timing.end_ms = None;
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
 
     let mut p = Player::new(&c).expect("player");
@@ -3439,9 +3439,10 @@ fn entrance_animation_completes_event_fires_once_at_right_tick() {
     let obj = s.objects.iter_mut().find(|o| o.id == "btn-start").unwrap();
     obj.timing.start_ms = 1000;
     obj.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     // Add trigger on AnimationCompletes
     s.triggers.push(Trigger {
@@ -3500,9 +3501,10 @@ fn entrance_trigger_ignores_path_and_exit_completions() {
     obj.timing.start_ms = 0;
     obj.timing.end_ms = Some(3000);
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     obj.motion_paths.push(MotionPath {
         id: "path1".into(),
@@ -3672,6 +3674,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                     entrance: None,
                     exit: None,
                     motion_paths: Vec::new(),
+                    emphasis: Vec::new(),
                     focus_order: None,
                     decorative: false,
                     description: None,
@@ -5930,6 +5933,7 @@ fn input_course(kind: coursecraft_course::ObjectKind) -> Course {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -6611,6 +6615,7 @@ fn opening_a_lightbox_on_the_current_slide_is_a_warning() {
             entrance: None,
             exit: None,
             motion_paths: Vec::new(),
+            emphasis: Vec::new(),
             states: Vec::new(),
             initial_state: "normal".into(),
             focus_order: None,
@@ -10094,16 +10099,16 @@ fn timed_animation_follows_entrance_timing_and_exit() {
         panic!("valid object");
     };
     obj.entrance = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Left,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Left),
         duration_ms: 1000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     let size = Size { w: 1280, h: 720 };
     let sample = |ms| crate::sample_timed_animation(&obj, ms, 10_000, size);
@@ -10149,6 +10154,7 @@ fn hello_with_try_again() -> Course {
             entrance: None,
             exit: None,
             motion_paths: Vec::new(),
+            emphasis: Vec::new(),
             focus_order: None,
             decorative: false,
             description: None,
@@ -11095,9 +11101,10 @@ fn exit_animations_with_slide_transition_fly_out_and_disappear() {
 
     // Silence unused import warning if needed by using Animation/AnimEffect directly.
     let _ = Animation {
-        effect: AnimEffect::Zoom,
+        effect: AnimEffect::new("zoom"),
         duration_ms: 500,
         easing: Easing::Linear,
+        sequence: Default::default(),
     };
 }
 
@@ -11109,26 +11116,14 @@ fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
     };
 
     let effects = [
-        AnimEffect::Fade,
-        AnimEffect::FlyIn {
-            from: Direction::Left,
-        },
-        AnimEffect::FlyIn {
-            from: Direction::Right,
-        },
-        AnimEffect::FlyIn {
-            from: Direction::Top,
-        },
-        AnimEffect::FlyIn {
-            from: Direction::Bottom,
-        },
-        AnimEffect::Zoom,
-        AnimEffect::Wipe {
-            from: Direction::Left,
-        },
-        AnimEffect::Float {
-            from: Direction::Bottom,
-        },
+        AnimEffect::new("fade"),
+        AnimEffect::with_from("fly_in", Direction::Left),
+        AnimEffect::with_from("fly_in", Direction::Right),
+        AnimEffect::with_from("fly_in", Direction::Top),
+        AnimEffect::with_from("fly_in", Direction::Bottom),
+        AnimEffect::new("zoom"),
+        AnimEffect::with_from("wipe", Direction::Left),
+        AnimEffect::with_from("float", Direction::Bottom),
     ];
 
     for with_transition in [false, true] {
@@ -11150,14 +11145,16 @@ fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
                 .expect("obj"),
             ];
             s.objects[0].entrance = Some(Animation {
-                effect: AnimEffect::Fade,
+                effect: AnimEffect::new("fade"),
                 duration_ms: 1000,
                 easing: Easing::Linear,
+                sequence: Default::default(),
             });
             s.objects[0].exit = Some(Animation {
                 effect: effect.clone(),
                 duration_ms: 1000,
                 easing: Easing::Linear,
+                sequence: Default::default(),
             });
             s.triggers.clear();
 
@@ -11517,14 +11514,16 @@ fn w01_next_wake_ms_immediate_during_entrance_exit_and_motion_path() {
         .find(|o| o.id == "box1")
         .expect("box1");
     box1.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 400,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     box1.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 300,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     let btn = slide
         .objects
@@ -11892,6 +11891,7 @@ fn gb_03_course() -> Course {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -12314,6 +12314,7 @@ fn gb_04_interactive_group_keyboard_objects_and_focus() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -12688,6 +12689,7 @@ fn gb_05_suspend_data_interactive_groups_and_golden_compat() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,

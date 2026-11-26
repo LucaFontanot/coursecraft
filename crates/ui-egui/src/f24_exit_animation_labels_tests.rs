@@ -23,7 +23,7 @@ fn select_button_animate(harness: &mut TestHarness) {
     harness.idle_frame();
 }
 
-/// Find the "None" (or current label) combo button in the Exit Animation section
+/// Find the "None" (or current label) effect picker in the Exit Animation section
 /// by looking below the "Exit Animation" header inside the right panel.
 fn find_text_below_in_inspector(
     harness: &mut TestHarness,
@@ -48,14 +48,12 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     let ent_header = harness
         .find_text_in("Entrance animation", harness.right_panel_rect())
         .expect("Entrance animation header");
-    let exit_header = harness
-        .find_text_in("Exit animation", harness.right_panel_rect())
-        .expect("Exit animation header");
 
     // Open Entrance Effect dropdown.
     let ent_combo = find_text_below_in_inspector(&mut harness, "None", ent_header.y)
         .expect("entrance effect combo");
     harness.click_at(ent_combo);
+    harness.idle_frame();
     harness.idle_frame();
 
     for expected in [
@@ -72,10 +70,20 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     harness.click_at(fly_in);
     harness.idle_frame();
 
+    // The Entrance and Emphasis cards push Exit down: scroll the inspector to it.
+    let panel = harness.right_panel_rect();
+    harness.scroll_over(panel.center(), -300.0);
+    harness.idle_frame();
+    let exit_header = harness
+        .find_text_in("Exit animation", harness.right_panel_rect())
+        .expect("Exit animation header after scrolling");
+
     // Now open Exit Effect dropdown.
     let exit_combo = find_text_below_in_inspector(&mut harness, "None", exit_header.y)
         .expect("exit effect combo");
     harness.click_at(exit_combo);
+    // The effect gallery lays out its scroll area on its first frame.
+    harness.idle_frame();
     harness.idle_frame();
 
     for expected in [
@@ -92,7 +100,7 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
         );
     }
 
-    // Select "Fly out" for exit and verify stored AnimEffect::FlyIn is unchanged.
+    // Select "Fly out" for exit and verify stored fly_in is unchanged.
     let fly_out = harness.find_text_last("Fly out").expect("Fly out option");
     harness.click_at(fly_out);
     harness.idle_frame();
@@ -108,9 +116,9 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     assert!(
         matches!(
             obj.exit.as_ref().map(|a| &a.effect),
-            Some(AnimEffect::FlyIn { .. })
+            Some(e) if e.id == "fly_in"
         ),
-        "selecting 'Fly out' stores AnimEffect::FlyIn: {:?}",
+        "selecting 'Fly out' stores fly_in: {:?}",
         obj.exit
     );
 
@@ -131,16 +139,16 @@ fn existing_course_with_fly_in_exit_loads_and_shows_fly_out() {
         .find(|o| o.id == "btn-start")
         .expect("btn-start");
     obj.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::EaseOut,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Right,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Right),
         duration_ms: 600,
         easing: Easing::EaseOut,
+        sequence: Default::default(),
     });
 
     // Round-trip through JSON to verify no file format change.
@@ -194,6 +202,8 @@ fn multi_selection_shows_entrance_and_exit_names_and_undo_redo() {
     let exit_combo = find_text_below_in_inspector(&mut harness, "None", exit_header.y)
         .expect("exit effect combo");
     harness.click_at(exit_combo);
+    // The effect gallery lays out its scroll area on its first frame.
+    harness.idle_frame();
     harness.idle_frame();
 
     let zoom_out = harness.find_text_last("Zoom out").expect("Zoom out option");
@@ -211,7 +221,7 @@ fn multi_selection_shows_entrance_and_exit_names_and_undo_redo() {
             .0;
         assert_eq!(
             obj.exit.as_ref().map(|a| &a.effect),
-            Some(&AnimEffect::Zoom),
+            Some(&AnimEffect::new("zoom")),
             "object {id} should have Zoom exit"
         );
     }
@@ -242,5 +252,35 @@ fn multi_selection_shows_entrance_and_exit_names_and_undo_redo() {
     assert!(
         find_text_below_in_inspector(&mut harness, "Zoom out", exit_header.y).is_some(),
         "after redo exit combo should display 'Zoom out'"
+    );
+}
+
+#[test]
+fn the_emphasis_card_adds_and_lists_an_emphasis() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 900.0));
+    select_button_animate(&mut harness);
+    let add = harness
+        .find_text_in("+ Add emphasis", harness.right_panel_rect())
+        .expect("Add emphasis button");
+    harness.click_at(add);
+    harness.idle_frame();
+    let tile = harness.find_text_last("Heartbeat").expect("Heartbeat tile");
+    harness.click_at(tile);
+    harness.idle_frame();
+    let emphasis = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .and_then(|s| s.object("btn-start"))
+        .map(|(o, _)| o.emphasis.clone())
+        .expect("btn-start");
+    assert_eq!(emphasis.len(), 1);
+    assert_eq!(emphasis[0].effect.id, "heartbeat");
+    assert!(
+        harness
+            .find_text_in("Heartbeat", harness.right_panel_rect())
+            .is_some(),
+        "the card lists it"
     );
 }

@@ -5,6 +5,7 @@
 //! one whose feature is missing is drawn disabled with its reason in the tooltip.
 
 pub mod contextual;
+pub mod effect_art;
 pub mod gallery;
 pub mod spec;
 pub mod widgets;
@@ -148,6 +149,29 @@ pub(crate) const STATE: &str = "Not available inside a state";
 /// The user documentation, on the project's site.
 const GUIDE_URL: &str = "https://github.com/ad1-kamath/coursecraft/tree/main/docs";
 
+/// Whether the Format or Animation Painter can be clicked now.
+fn painter_available(
+    editor: &Editor,
+    kind: crate::format_painter::PainterKind,
+) -> Result<(), &'static str> {
+    let armed = editor
+        .ui
+        .format_painter
+        .as_ref()
+        .is_some_and(|p| p.kind == kind);
+    if editor.ui.editing_state.is_some() {
+        Err(crate::STATE_LOCK_TOOLTIP)
+    } else if editor.ui.master_view {
+        Err(MASTER)
+    } else if armed || editor.can_arm_format_painter() {
+        Ok(())
+    } else if kind == crate::format_painter::PainterKind::Animation {
+        Err("Select one object to copy its animations")
+    } else {
+        Err("Select an object to copy its format")
+    }
+}
+
 fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
     let master = editor.ui.master_view;
     let state = editor.ui.editing_state.is_some();
@@ -156,16 +180,11 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         UiAction::SelectAll => select_all_available(editor),
         UiAction::Cut => crate::menu::clipboard_rules(editor).cut,
         UiAction::Copy => crate::menu::clipboard_rules(editor).copy,
+        UiAction::AnimationPainter => {
+            painter_available(editor, crate::format_painter::PainterKind::Animation)
+        }
         UiAction::FormatPainter => {
-            if editor.ui.editing_state.is_some() {
-                Err(crate::STATE_LOCK_TOOLTIP)
-            } else if master {
-                Err(MASTER)
-            } else if editor.ui.format_painter.is_some() || editor.can_arm_format_painter() {
-                Ok(())
-            } else {
-                Err("Select an object to copy its format")
-            }
+            painter_available(editor, crate::format_painter::PainterKind::Format)
         }
         UiAction::NewSlide | UiAction::NewScene | UiAction::Preview => {
             if master {
@@ -369,6 +388,11 @@ fn run_ui(
         UiAction::Cut => crate::clipboard::cut(editor),
         UiAction::Copy => crate::clipboard::copy(editor),
         UiAction::FormatPainter => crate::toolbar::format_painter_clicked(editor, resp),
+        UiAction::AnimationPainter => crate::toolbar::painter_clicked(
+            editor,
+            resp,
+            crate::format_painter::PainterKind::Animation,
+        ),
         UiAction::NewSlide => crate::toolbar::add_new_slide(editor),
         UiAction::NewScene => crate::toolbar::add_new_scene(editor),
         UiAction::DuplicateSlide => {
@@ -533,7 +557,12 @@ fn set_theme(editor: &mut Editor, pref: ThemePref, requests: &mut Vec<EditorRequ
 fn ui_selected(editor: &Editor, action: UiAction) -> bool {
     let view = &editor.session.course.editor;
     match action {
-        UiAction::FormatPainter => editor.ui.format_painter.is_some(),
+        UiAction::FormatPainter => editor
+            .ui
+            .format_painter
+            .as_ref()
+            .is_some_and(|p| p.kind == crate::format_painter::PainterKind::Format),
+        UiAction::AnimationPainter => editor.animation_painter_armed(),
         UiAction::TextBox => editor.ui.placement_tool == Some(crate::PlacementTool::TextBox),
         UiAction::Button => editor.ui.placement_tool == Some(crate::PlacementTool::Button),
         UiAction::Shape => matches!(
@@ -1251,7 +1280,10 @@ fn control(
     if enabled && !menu_only && (main.clicked() || main.double_clicked()) {
         // A double click reaches the Format Painter (it keeps it on); other
         // actions run once, on the first click.
-        if main.clicked() || item.action == Action::Ui(UiAction::FormatPainter) {
+        if main.clicked()
+            || item.action == Action::Ui(UiAction::FormatPainter)
+            || item.action == Action::Ui(UiAction::AnimationPainter)
+        {
             run(editor, item.action, &main, requests);
         }
     }
@@ -1538,6 +1570,9 @@ fn menu(
                     ui.close();
                 }
             }
+        }
+        Menu::Ui(UiMenu::EffectOptions(motion)) => {
+            gallery::effect_options_menu(editor, ui, motion);
         }
         Menu::Ui(UiMenu::Arrange) => {
             let mut action = None;

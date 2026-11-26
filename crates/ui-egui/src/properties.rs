@@ -2,9 +2,9 @@
 
 use crate::Editor;
 use coursecraft_course::{
-    Align, AnimEffect, Autofit, Color, Course, Direction, Easing, Glow, ListKind, ObjectKind,
-    Paragraph, RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing,
-    TransitionEffect, Trim, VAlign, paragraphs_for,
+    Align, AnimEffect, Autofit, Color, Course, Easing, Glow, ListKind, ObjectKind, Paragraph,
+    RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing, Trim, VAlign,
+    paragraphs_for,
 };
 use coursecraft_render::parse_color;
 use egui::{
@@ -390,18 +390,23 @@ pub struct PropertiesState {
 
     // Animation buffers
     pub entrance_effect: String,
-    pub entrance_direction: Direction,
+    /// Options of the entrance effect (direction, shape, …); its id follows `entrance_effect`.
+    pub entrance_fx: AnimEffect,
     pub entrance_duration_ms: u32,
     pub entrance_easing: Easing,
+    pub entrance_sequence: coursecraft_course::Sequence,
 
     pub exit_effect: String,
-    pub exit_direction: Direction,
+    /// Options of the exit effect; its id follows `exit_effect`.
+    pub exit_fx: AnimEffect,
     pub exit_duration_ms: u32,
     pub exit_easing: Easing,
+    pub exit_sequence: coursecraft_course::Sequence,
 
     // Slide transition buffers
     pub slide_transition_effect: String,
-    pub slide_transition_direction: Direction,
+    /// The transition's options, in their entrance-effect form (`TransitionEffect::as_effect`).
+    pub slide_transition_fx: AnimEffect,
     pub slide_transition_duration_ms: u32,
 }
 
@@ -630,15 +635,17 @@ impl Default for PropertiesState {
             slide_revisit: RevisitMode::Auto,
             draw_count_rect: None,
             entrance_effect: "none".into(),
-            entrance_direction: Direction::Bottom,
+            entrance_fx: AnimEffect::default(),
             entrance_duration_ms: 500,
             entrance_easing: Easing::EaseOut,
+            entrance_sequence: coursecraft_course::Sequence::AsOne,
             exit_effect: "none".into(),
-            exit_direction: Direction::Bottom,
+            exit_fx: AnimEffect::default(),
             exit_duration_ms: 500,
             exit_easing: Easing::EaseOut,
+            exit_sequence: coursecraft_course::Sequence::AsOne,
             slide_transition_effect: "none".into(),
-            slide_transition_direction: Direction::Bottom,
+            slide_transition_fx: AnimEffect::default(),
             slide_transition_duration_ms: 500,
             remembered_fills: std::collections::HashMap::new(),
         }
@@ -776,19 +783,12 @@ impl PropertiesState {
         self.slide_revisit = slide.revisit;
 
         if let Some(ref t) = slide.transition {
-            self.slide_transition_effect = match t.effect {
-                TransitionEffect::Fade => "fade".to_owned(),
-                TransitionEffect::Push { .. } => "push".to_owned(),
-                TransitionEffect::Cover { .. } => "cover".to_owned(),
-            };
-            self.slide_transition_direction = match t.effect {
-                TransitionEffect::Push { from } | TransitionEffect::Cover { from } => from,
-                _ => Direction::Bottom,
-            };
+            self.slide_transition_effect = t.effect.id().to_owned();
+            self.slide_transition_fx = t.effect.as_effect().unwrap_or_default();
             self.slide_transition_duration_ms = t.duration_ms;
         } else {
             self.slide_transition_effect = "none".to_owned();
-            self.slide_transition_direction = Direction::Bottom;
+            self.slide_transition_fx = AnimEffect::default();
             self.slide_transition_duration_ms = 500;
         }
 
@@ -832,49 +832,31 @@ impl PropertiesState {
             self.focus_order = obj.focus_order;
 
             if let Some(ref a) = obj.entrance {
-                self.entrance_effect = match a.effect {
-                    AnimEffect::Fade => "fade".to_owned(),
-                    AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                    AnimEffect::Zoom => "zoom".to_owned(),
-                    AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                    AnimEffect::Float { .. } => "float".to_owned(),
-                };
-                self.entrance_direction = match a.effect {
-                    AnimEffect::FlyIn { from }
-                    | AnimEffect::Wipe { from }
-                    | AnimEffect::Float { from } => from,
-                    _ => Direction::Bottom,
-                };
+                self.entrance_effect = a.effect.id.clone();
+                self.entrance_fx = a.effect.clone();
                 self.entrance_duration_ms = a.duration_ms;
                 self.entrance_easing = a.easing;
+                self.entrance_sequence = a.sequence;
             } else {
                 self.entrance_effect = "none".to_owned();
-                self.entrance_direction = Direction::Bottom;
+                self.entrance_fx = AnimEffect::default();
                 self.entrance_duration_ms = 500;
                 self.entrance_easing = Easing::EaseOut;
+                self.entrance_sequence = coursecraft_course::Sequence::AsOne;
             }
 
             if let Some(ref a) = obj.exit {
-                self.exit_effect = match a.effect {
-                    AnimEffect::Fade => "fade".to_owned(),
-                    AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                    AnimEffect::Zoom => "zoom".to_owned(),
-                    AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                    AnimEffect::Float { .. } => "float".to_owned(),
-                };
-                self.exit_direction = match a.effect {
-                    AnimEffect::FlyIn { from }
-                    | AnimEffect::Wipe { from }
-                    | AnimEffect::Float { from } => from,
-                    _ => Direction::Bottom,
-                };
+                self.exit_effect = a.effect.id.clone();
+                self.exit_fx = a.effect.clone();
                 self.exit_duration_ms = a.duration_ms;
                 self.exit_easing = a.easing;
+                self.exit_sequence = a.sequence;
             } else {
                 self.exit_effect = "none".to_owned();
-                self.exit_direction = Direction::Bottom;
+                self.exit_fx = AnimEffect::default();
                 self.exit_duration_ms = 500;
                 self.exit_easing = Easing::EaseOut;
+                self.exit_sequence = coursecraft_course::Sequence::AsOne;
             }
 
             match &obj.kind {
@@ -1221,52 +1203,34 @@ impl PropertiesState {
             .first()
             .is_some_and(|first| objects.iter().all(|o| o.entrance == first.entrance));
         if same_entrance && let Some(a) = objects.first().and_then(|o| o.entrance.as_ref()) {
-            self.entrance_effect = match a.effect {
-                AnimEffect::Fade => "fade".to_owned(),
-                AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                AnimEffect::Zoom => "zoom".to_owned(),
-                AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                AnimEffect::Float { .. } => "float".to_owned(),
-            };
-            self.entrance_direction = match a.effect {
-                AnimEffect::FlyIn { from }
-                | AnimEffect::Wipe { from }
-                | AnimEffect::Float { from } => from,
-                _ => Direction::Bottom,
-            };
+            self.entrance_effect = a.effect.id.clone();
+            self.entrance_fx = a.effect.clone();
             self.entrance_duration_ms = a.duration_ms;
             self.entrance_easing = a.easing;
+            self.entrance_sequence = a.sequence;
         } else {
             self.entrance_effect = "none".to_owned();
-            self.entrance_direction = Direction::Bottom;
+            self.entrance_fx = AnimEffect::default();
             self.entrance_duration_ms = 500;
             self.entrance_easing = Easing::EaseOut;
+            self.entrance_sequence = coursecraft_course::Sequence::AsOne;
         }
 
         let same_exit = objects
             .first()
             .is_some_and(|first| objects.iter().all(|o| o.exit == first.exit));
         if same_exit && let Some(a) = objects.first().and_then(|o| o.exit.as_ref()) {
-            self.exit_effect = match a.effect {
-                AnimEffect::Fade => "fade".to_owned(),
-                AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                AnimEffect::Zoom => "zoom".to_owned(),
-                AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                AnimEffect::Float { .. } => "float".to_owned(),
-            };
-            self.exit_direction = match a.effect {
-                AnimEffect::FlyIn { from }
-                | AnimEffect::Wipe { from }
-                | AnimEffect::Float { from } => from,
-                _ => Direction::Bottom,
-            };
+            self.exit_effect = a.effect.id.clone();
+            self.exit_fx = a.effect.clone();
             self.exit_duration_ms = a.duration_ms;
             self.exit_easing = a.easing;
+            self.exit_sequence = a.sequence;
         } else {
             self.exit_effect = "none".to_owned();
-            self.exit_direction = Direction::Bottom;
+            self.exit_fx = AnimEffect::default();
             self.exit_duration_ms = 500;
             self.exit_easing = Easing::EaseOut;
+            self.exit_sequence = coursecraft_course::Sequence::AsOne;
         }
 
         self.multi_text = objects
@@ -2004,175 +1968,163 @@ pub(crate) fn show_paired_numeric_row(
     })
 }
 
-/// Human-readable label for an animation effect id (`"none"`, `"fade"`,
-/// `"fly_in"`, `"zoom"`, `"wipe"`, `"float"`), phrased as an entrance or exit
-/// depending on `which` (`"entrance"` or `"exit"`).
-fn anim_effect_label(which: &str, effect: &str) -> &'static str {
-    let is_exit = which == "exit";
-    match effect {
-        "fade" => {
-            if is_exit {
-                "Fade out"
-            } else {
-                "Fade in"
-            }
-        }
-        "fly_in" => {
-            if is_exit {
-                "Fly out"
-            } else {
-                "Fly in"
-            }
-        }
-        "zoom" => {
-            if is_exit {
-                "Zoom out"
-            } else {
-                "Zoom in"
-            }
-        }
-        "wipe" => {
-            if is_exit {
-                "Wipe out"
-            } else {
-                "Wipe in"
-            }
-        }
-        "float" => {
-            if is_exit {
-                "Float out"
-            } else {
-                "Float in"
-            }
-        }
-        _ => "None",
-    }
-}
-
+/// One Entrance or Exit card of the Animate panel (`anim_panel`): a change sets
+/// `action_to_run` to the `object.set_animation` call for `obj_id`.
 #[allow(clippy::too_many_arguments)]
 fn show_anim_row(
     ui: &mut Ui,
     title: &str,
     which: &'static str,
     effect_str: &mut String,
-    direction: &mut Direction,
+    fx: &mut AnimEffect,
     duration_ms: &mut u32,
     easing: &mut Easing,
+    (sequence, has_text): (&mut coursecraft_course::Sequence, bool),
     slide_id: &str,
     obj_id: &str,
     action_to_run: &mut Option<(&'static str, Json)>,
+    pv: &mut crate::anim_preview::PreviewState,
+    preview: &mut Option<crate::anim_panel::PanelPreview>,
 ) {
     inspector_section_header(ui, title);
-    let mut changed = false;
-
-    let effect_label = anim_effect_label(which, effect_str.as_str());
-
-    inspector_row(ui, "Effect", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        crate::widgets::styled_combo(ui, format!("anim_effect_{which}"), rem_w)
-            .selected_text(effect_label)
-            .show_ui(ui, |ui| {
-                for id in ["none", "fade", "fly_in", "zoom", "wipe", "float"] {
-                    if ui
-                        .selectable_value(effect_str, id.to_owned(), anim_effect_label(which, id))
-                        .clicked()
-                    {
-                        changed = true;
-                    }
-                }
-            });
-    });
-
-    if effect_str.as_str() != "none" {
-        inspector_row(ui, "Duration", |ui| {
-            let rem_w = ui.available_width().max(30.0);
-            let r = add_drag_left(
-                ui,
-                [rem_w, coursecraft_render::CONTROL_COMPACT],
-                DragValue::new(duration_ms)
-                    .speed(50.0)
-                    .range(1..=60000)
-                    .suffix(" ms"),
-            );
-            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if r.drag_stopped() || r.lost_focus() || enter {
-                changed = true;
-            }
-        });
-
-        if matches!(effect_str.as_str(), "fly_in" | "wipe" | "float") {
-            let dir_label = match direction {
-                Direction::Left => "Left",
-                Direction::Right => "Right",
-                Direction::Top => "Top",
-                Direction::Bottom => "Bottom",
-            };
-            inspector_row(ui, "Direction", |ui| {
-                let rem_w = ui.available_width().max(30.0);
-                crate::widgets::styled_combo(ui, format!("anim_dir_{which}"), rem_w)
-                    .selected_text(dir_label)
-                    .show_ui(ui, |ui| {
-                        for (val, l) in [
-                            (Direction::Bottom, "Bottom"),
-                            (Direction::Left, "Left"),
-                            (Direction::Right, "Right"),
-                            (Direction::Top, "Top"),
-                        ] {
-                            if ui.selectable_value(direction, val, l).clicked() {
-                                changed = true;
-                            }
-                        }
-                    });
-            });
-        }
-
-        let ease_label = match easing {
-            Easing::Linear => "Linear",
-            Easing::EaseIn => "EaseIn",
-            Easing::EaseOut => "EaseOut",
-            Easing::EaseInOut => "EaseInOut",
-        };
-        inspector_row(ui, "Easing", |ui| {
-            let rem_w = ui.available_width().max(30.0);
-            crate::widgets::styled_combo(ui, format!("anim_ease_{which}"), rem_w)
-                .selected_text(ease_label)
-                .show_ui(ui, |ui| {
-                    for (val, l) in [
-                        (Easing::EaseOut, "EaseOut"),
-                        (Easing::Linear, "Linear"),
-                        (Easing::EaseIn, "EaseIn"),
-                        (Easing::EaseInOut, "EaseInOut"),
-                    ] {
-                        if ui.selectable_value(easing, val, l).clicked() {
-                            changed = true;
-                        }
-                    }
-                });
-        });
-    }
-
+    let changed = crate::anim_panel::show_card(
+        ui,
+        which,
+        crate::anim_panel::CardState {
+            effect: effect_str,
+            fx,
+            duration_ms,
+            easing,
+            sequence: has_text.then_some(&mut *sequence),
+        },
+        pv,
+        preview,
+    );
     if changed {
-        *action_to_run = Some(animation_command(
-            which,
-            effect_str,
-            *direction,
-            *duration_ms,
-            *easing,
-            slide_id,
-            obj_id,
+        *action_to_run = Some(with_sequence(
+            animation_command(
+                which,
+                effect_str,
+                fx,
+                *duration_ms,
+                *easing,
+                slide_id,
+                obj_id,
+            ),
+            *sequence,
         ));
+        if pv.auto && effect_str.as_str() != "none" {
+            *preview = Some(crate::anim_panel::PanelPreview::Play);
+        }
     }
+}
+
+/// Start the canvas preview a card asked for, on the selected objects.
+fn run_card_preview(
+    editor: &mut Editor,
+    ctx: &egui::Context,
+    exit: bool,
+    preview: Option<crate::anim_panel::PanelPreview>,
+) {
+    let slide = editor.selection.slide.clone();
+    let ids = editor.selection.ids();
+    apply_card_preview(
+        &mut editor.ui.anim_preview,
+        &editor.ui.properties,
+        (&slide, ids),
+        ctx,
+        exit,
+        preview,
+    );
+}
+
+/// [`run_card_preview`] on borrowed parts of the editor.
+fn apply_card_preview(
+    pv: &mut crate::anim_preview::PreviewState,
+    props: &PropertiesState,
+    (slide, ids): (&str, Vec<String>),
+    ctx: &egui::Context,
+    exit: bool,
+    preview: Option<crate::anim_panel::PanelPreview>,
+) {
+    let Some(preview) = preview else {
+        return;
+    };
+    let (effect, fx, duration_ms, easing) = if exit {
+        (
+            &props.exit_effect,
+            &props.exit_fx,
+            props.exit_duration_ms,
+            props.exit_easing,
+        )
+    } else {
+        (
+            &props.entrance_effect,
+            &props.entrance_fx,
+            props.entrance_duration_ms,
+            props.entrance_easing,
+        )
+    };
+    let slot = crate::anim_preview::Slot::of_exit(exit);
+    match preview {
+        crate::anim_panel::PanelPreview::Play => {
+            if effect.as_str() == "none" {
+                return;
+            }
+            let sequence = if exit {
+                props.exit_sequence
+            } else {
+                props.entrance_sequence
+            };
+            let animation = coursecraft_course::Animation {
+                effect: fx.switched_to(effect),
+                duration_ms,
+                easing,
+                sequence,
+            };
+            pv.play(slide, ids, slot, animation);
+        }
+        crate::anim_panel::PanelPreview::Hover(hovered) => {
+            let duration = if effect.as_str() == "none" {
+                hovered.def().map_or(500, |d| d.default_duration_ms)
+            } else {
+                duration_ms
+            };
+            pv.hover(
+                slide,
+                ids,
+                slot,
+                hovered,
+                duration,
+                easing,
+                ctx.cumulative_pass_nr(),
+            );
+        }
+    }
+}
+
+/// `cmd` (an `object.set_animation` call) with the animation's text `sequence` set.
+pub(crate) fn with_sequence(
+    mut cmd: (&'static str, Json),
+    sequence: coursecraft_course::Sequence,
+) -> (&'static str, Json) {
+    if !sequence.is_as_one()
+        && let Some(anim) = cmd.1.get_mut("animation").and_then(Json::as_object_mut)
+    {
+        anim.insert("sequence".to_owned(), serde_json::json!(sequence));
+    }
+    cmd
 }
 
 /// The `object.set_animation` call for one row of the Animations section.
 ///
 /// The engine stores an [`coursecraft_course::Animation`]: the effect (with
-/// its direction) nested under `effect`, plus duration and easing. `none`
+/// its options) nested under `effect`, plus duration and easing. `none`
 /// clears the animation.
 pub(crate) fn animation_command(
     which: &'static str,
     effect: &str,
-    direction: Direction,
+    options: &AnimEffect,
     duration_ms: u32,
     easing: Easing,
     slide_id: &str,
@@ -2181,12 +2133,9 @@ pub(crate) fn animation_command(
     let animation = if effect == "none" {
         Json::Null
     } else {
-        let mut effect_json = serde_json::json!({ "type": effect });
-        if matches!(effect, "fly_in" | "wipe" | "float") {
-            effect_json["from"] = serde_json::json!(direction);
-        }
+        // The chosen effect with every option of `options` it also takes.
         serde_json::json!({
-            "effect": effect_json,
+            "effect": options.switched_to(effect),
             "duration_ms": duration_ms.clamp(1, 60_000),
             "easing": easing,
         })
@@ -4812,20 +4761,26 @@ fn show_animate_tab(
         if editor.selection.is_multi() {
             let slide_id = editor.selection.slide.clone();
             let ids = editor.selection.ids();
+            auto_preview_toggle(ui, &mut editor.ui.anim_preview.auto);
             let props = &mut editor.ui.properties;
+            let pv = &mut editor.ui.anim_preview;
             let mut entrance_action: Option<(&'static str, Json)> = None;
             let mut exit_action: Option<(&'static str, Json)> = None;
+            let (mut entrance_preview, mut exit_preview) = (None, None);
             show_anim_row(
                 ui,
                 "Entrance animation",
                 "entrance",
                 &mut props.entrance_effect,
-                &mut props.entrance_direction,
+                &mut props.entrance_fx,
                 &mut props.entrance_duration_ms,
                 &mut props.entrance_easing,
+                (&mut props.entrance_sequence, true),
                 &slide_id,
                 "",
                 &mut entrance_action,
+                pv,
+                &mut entrance_preview,
             );
             inspector_separator(ui);
             show_anim_row(
@@ -4833,36 +4788,48 @@ fn show_animate_tab(
                 "Exit animation",
                 "exit",
                 &mut props.exit_effect,
-                &mut props.exit_direction,
+                &mut props.exit_fx,
                 &mut props.exit_duration_ms,
                 &mut props.exit_easing,
+                (&mut props.exit_sequence, true),
                 &slide_id,
                 "",
                 &mut exit_action,
+                pv,
+                &mut exit_preview,
             );
+            run_card_preview(editor, ui.ctx(), false, entrance_preview);
+            run_card_preview(editor, ui.ctx(), true, exit_preview);
+            let props = &mut editor.ui.properties;
             if entrance_action.is_some() {
                 for id in &ids {
-                    actions_to_run.push(animation_command(
-                        "entrance",
-                        &props.entrance_effect,
-                        props.entrance_direction,
-                        props.entrance_duration_ms,
-                        props.entrance_easing,
-                        &slide_id,
-                        id,
+                    actions_to_run.push(with_sequence(
+                        animation_command(
+                            "entrance",
+                            &props.entrance_effect,
+                            &props.entrance_fx,
+                            props.entrance_duration_ms,
+                            props.entrance_easing,
+                            &slide_id,
+                            id,
+                        ),
+                        props.entrance_sequence,
                     ));
                 }
             }
             if exit_action.is_some() {
                 for id in &ids {
-                    actions_to_run.push(animation_command(
-                        "exit",
-                        &props.exit_effect,
-                        props.exit_direction,
-                        props.exit_duration_ms,
-                        props.exit_easing,
-                        &slide_id,
-                        id,
+                    actions_to_run.push(with_sequence(
+                        animation_command(
+                            "exit",
+                            &props.exit_effect,
+                            &props.exit_fx,
+                            props.exit_duration_ms,
+                            props.exit_easing,
+                            &slide_id,
+                            id,
+                        ),
+                        props.exit_sequence,
                     ));
                 }
             }
@@ -10989,62 +10956,47 @@ fn show_transition_section(
     action_to_run: &mut Option<(&'static str, Json)>,
 ) {
     let mut trans_changed = false;
-    let trans_label = match props.slide_transition_effect.as_str() {
-        "fade" => "Fade",
-        "push" => "Push",
-        "cover" => "Cover",
-        _ => "None",
-    };
-
+    let label = coursecraft_course::transition_def(&props.slide_transition_effect)
+        .map_or("None", |d| d.label);
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
         crate::widgets::styled_combo(ui, "slide_transition_combo", rem_w)
-            .selected_text(trans_label)
+            .selected_text(crate::tl!(label))
             .show_ui(ui, |ui| {
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "none".to_string(),
-                        "None",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
-                }
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "fade".to_string(),
-                        "Fade",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
-                }
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "push".to_string(),
-                        "Push",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
-                }
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "cover".to_string(),
-                        "Cover",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
+                let ids = std::iter::once(("none", "None")).chain(
+                    coursecraft_course::TRANSITIONS
+                        .iter()
+                        .map(|d| (d.id, d.label)),
+                );
+                for (id, name) in ids {
+                    if ui
+                        .selectable_value(
+                            &mut props.slide_transition_effect,
+                            id.to_owned(),
+                            crate::tl!(name),
+                        )
+                        .clicked()
+                    {
+                        trans_changed = true;
+                    }
                 }
             });
     });
 
-    if props.slide_transition_effect.as_str() != "none" {
+    let def = coursecraft_course::transition_def(&props.slide_transition_effect);
+    if let Some(def) = def {
+        // Options follow the effect: keep the ones the new one also takes.
+        match def.options_like {
+            Some(like) if props.slide_transition_fx.id != like => {
+                props.slide_transition_fx = if props.slide_transition_fx.id.is_empty() {
+                    AnimEffect::new(like)
+                } else {
+                    props.slide_transition_fx.switched_to(like)
+                };
+            }
+            None => props.slide_transition_fx = AnimEffect::default(),
+            _ => {}
+        }
         inspector_row(ui, "Duration", |ui| {
             let rem_w = ui.available_width().max(30.0);
             let r = add_drag_left(
@@ -11060,59 +11012,25 @@ fn show_transition_section(
                 trans_changed = true;
             }
         });
-
-        if matches!(props.slide_transition_effect.as_str(), "push" | "cover") {
-            let dir_label = match props.slide_transition_direction {
-                Direction::Left => "Left",
-                Direction::Right => "Right",
-                Direction::Top => "Top",
-                Direction::Bottom => "Bottom",
-            };
-            inspector_row(ui, "Direction", |ui| {
-                let rem_w = ui.available_width().max(30.0);
-                crate::widgets::styled_combo(ui, "slide_transition_dir_combo", rem_w)
-                    .selected_text(dir_label)
-                    .show_ui(ui, |ui| {
-                        for (val, l) in [
-                            (Direction::Bottom, "Bottom"),
-                            (Direction::Left, "Left"),
-                            (Direction::Right, "Right"),
-                            (Direction::Top, "Top"),
-                        ] {
-                            if ui
-                                .selectable_value(&mut props.slide_transition_direction, val, l)
-                                .clicked()
-                            {
-                                trans_changed = true;
-                            }
-                        }
-                    });
-            });
+        if def.options_like.is_some() {
+            trans_changed |=
+                crate::anim_panel::option_rows(ui, false, &mut props.slide_transition_fx);
         }
     }
 
     if trans_changed {
-        let trans_json = if props.slide_transition_effect.as_str() == "none" {
-            serde_json::Value::Null
-        } else {
-            match props.slide_transition_effect.as_str() {
-                "fade" => serde_json::json!({
-                    "type": "fade",
-                    "duration_ms": props.slide_transition_duration_ms,
-                }),
-                "push" => serde_json::json!({
-                    "type": "push",
-                    "from": props.slide_transition_direction,
-                    "duration_ms": props.slide_transition_duration_ms,
-                }),
-                "cover" => serde_json::json!({
-                    "type": "cover",
-                    "from": props.slide_transition_direction,
-                    "duration_ms": props.slide_transition_duration_ms,
-                }),
-                _ => serde_json::Value::Null,
-            }
-        };
+        let trans_json = def
+            .and_then(|d| {
+                let fx = d.options_like.map(|_| &props.slide_transition_fx);
+                coursecraft_course::TransitionEffect::from_parts(d.id, fx)
+            })
+            .map_or(Json::Null, |effect| {
+                serde_json::to_value(coursecraft_course::Transition {
+                    effect,
+                    duration_ms: props.slide_transition_duration_ms,
+                })
+                .unwrap_or(Json::Null)
+            });
         *action_to_run = Some((
             "slide.set_transition",
             serde_json::json!({
@@ -11616,6 +11534,15 @@ fn handle_image_actions(
     }
 }
 
+/// The Auto-preview switch at the top of the Animate panel.
+fn auto_preview_toggle(ui: &mut Ui, auto: &mut bool) {
+    ui.checkbox(auto, crate::tl!("Auto-preview"))
+        .on_hover_text(crate::tl!(
+            "Play an animation on the canvas when you pick it or hover over an effect"
+        ));
+    ui.add_space(6.0);
+}
+
 pub fn show_animations_section(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -11631,20 +11558,50 @@ pub fn show_animations_section(
         return;
     };
 
+    auto_preview_toggle(ui, &mut editor.ui.anim_preview.auto);
+    let editor_playhead = editor.ui.timeline.playhead_ms;
+    // By paragraph and by letter only mean something for objects with text.
+    let has_text = match &obj.kind {
+        coursecraft_course::ObjectKind::Text { .. } => true,
+        coursecraft_course::ObjectKind::Shape { text, .. } => text.is_some(),
+        _ => false,
+    };
+    let selected_ids = editor.selection.ids();
     let props = &mut editor.ui.properties;
+    let pv = &mut editor.ui.anim_preview;
     let mut action_to_run: Option<(&'static str, Json)> = None;
+    let (mut entrance_preview, mut exit_preview) = (None, None);
 
     show_anim_row(
         ui,
         "Entrance animation",
         "entrance",
         &mut props.entrance_effect,
-        &mut props.entrance_direction,
+        &mut props.entrance_fx,
         &mut props.entrance_duration_ms,
         &mut props.entrance_easing,
+        (&mut props.entrance_sequence, has_text),
         &slide.id,
         &obj.id,
         &mut action_to_run,
+        pv,
+        &mut entrance_preview,
+    );
+    inspector_separator(ui);
+    inspector_section_header(ui, "Emphasis");
+    let playhead = editor_playhead;
+    let emphasis_start =
+        if playhead >= obj.timing.start_ms && obj.timing.end_ms.is_none_or(|end| playhead < end) {
+            playhead
+        } else {
+            obj.timing.start_ms
+        };
+    let mut emphasis_requests = Vec::new();
+    crate::anim_panel::show_emphasis_card(
+        ui,
+        &obj.emphasis,
+        emphasis_start,
+        &mut emphasis_requests,
     );
     inspector_separator(ui);
     show_anim_row(
@@ -11652,12 +11609,15 @@ pub fn show_animations_section(
         "Exit animation",
         "exit",
         &mut props.exit_effect,
-        &mut props.exit_direction,
+        &mut props.exit_fx,
         &mut props.exit_duration_ms,
         &mut props.exit_easing,
+        (&mut props.exit_sequence, has_text),
         &slide.id,
         &obj.id,
         &mut action_to_run,
+        pv,
+        &mut exit_preview,
     );
     inspector_separator(ui);
     inspector_section_header(ui, "Motion paths");
@@ -11754,22 +11714,13 @@ pub fn show_animations_section(
                     }
 
                     let mut ease = path.easing;
-                    let ease_label = match ease {
-                        Easing::Linear => "Linear",
-                        Easing::EaseIn => "EaseIn",
-                        Easing::EaseOut => "EaseOut",
-                        Easing::EaseInOut => "EaseInOut",
-                    };
+                    let ease_label = crate::tl!(ease.label());
                     let rem_w = ui.available_width().max(30.0);
                     crate::widgets::styled_combo(ui, format!("mp_easing_{}", path.id), rem_w)
                         .selected_text(ease_label)
                         .show_ui(ui, |ui| {
-                            for (val, l) in [
-                                (Easing::EaseOut, "EaseOut"),
-                                (Easing::Linear, "Linear"),
-                                (Easing::EaseIn, "EaseIn"),
-                                (Easing::EaseInOut, "EaseInOut"),
-                            ] {
+                            for val in Easing::ALL {
+                                let l = crate::tl!(val.label());
                                 if ui.selectable_value(&mut ease, val, l).clicked()
                                     && val != path.easing
                                 {
@@ -11823,6 +11774,69 @@ pub fn show_animations_section(
                     ));
                 }
             });
+    }
+
+    let ctx = ui.ctx().clone();
+    apply_card_preview(
+        pv,
+        props,
+        (&slide.id, selected_ids.clone()),
+        &ctx,
+        false,
+        entrance_preview,
+    );
+    apply_card_preview(
+        pv,
+        props,
+        (&slide.id, selected_ids.clone()),
+        &ctx,
+        true,
+        exit_preview,
+    );
+    for request in emphasis_requests {
+        use crate::anim_panel::EmphasisRequest as R;
+        match request {
+            R::Add(e) => {
+                if pv.auto {
+                    pv.play_emphasis(&slide.id, selected_ids.clone(), e.clone());
+                }
+                actions_to_run.push((
+                    "object.add_emphasis",
+                    serde_json::json!({
+                        "slide": slide.id, "object": obj.id, "effect": e.effect.id,
+                        "start_ms": e.start_ms,
+                    }),
+                ));
+            }
+            R::Set(index, e) => {
+                if pv.auto {
+                    pv.play_emphasis(&slide.id, selected_ids.clone(), e.clone());
+                }
+                actions_to_run.push((
+                    "object.set_emphasis",
+                    serde_json::json!({
+                        "slide": slide.id, "object": obj.id, "index": index, "emphasis": e,
+                    }),
+                ));
+            }
+            R::Remove(index) => actions_to_run.push((
+                "object.remove_emphasis",
+                serde_json::json!({ "slide": slide.id, "object": obj.id, "index": index }),
+            )),
+            R::Play(index) => {
+                if let Some(e) = obj.emphasis.get(index) {
+                    pv.play_emphasis(&slide.id, selected_ids.clone(), e.clone());
+                }
+            }
+            R::Hover(effect) => {
+                pv.hover_emphasis(
+                    &slide.id,
+                    selected_ids.clone(),
+                    &effect,
+                    ctx.cumulative_pass_nr(),
+                );
+            }
+        }
     }
 
     if let Some(act) = action_to_run

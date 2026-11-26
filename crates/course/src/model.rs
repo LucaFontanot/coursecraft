@@ -1051,6 +1051,62 @@ pub enum TransitionEffect {
         #[serde(default)]
         from: Direction,
     },
+    /// Fades to black, then up into the new slide (M46 phase 8).
+    FadeBlack,
+    /// The old slide slides away toward the far side, uncovering the new one.
+    Uncover {
+        #[serde(default)]
+        from: Direction,
+    },
+    /// The old slide drifts away and fades while the new one fades in.
+    Reveal {
+        #[serde(default)]
+        from: Direction,
+    },
+    /// A straight edge sweeps the new slide in from `from`.
+    Wipe {
+        #[serde(default)]
+        from: Direction,
+    },
+    /// Opens from the centre line (`out`) or closes from both edges (`in`).
+    Split {
+        #[serde(default)]
+        orientation: Orientation,
+        #[serde(default)]
+        inout: InOut,
+    },
+    /// The new slide grows from the centre while fading in.
+    Zoom,
+    /// The new slide shows through a growing circle, box, diamond or plus.
+    Shape {
+        #[serde(default)]
+        shape: RevealShape,
+        #[serde(default)]
+        inout: InOut,
+    },
+    /// Wedges sweep clockwise from 12 o'clock.
+    Clock {
+        #[serde(default = "one_spoke")]
+        spokes: u8,
+    },
+    /// Cells of the new slide appear in a fixed shuffled order.
+    Dissolve,
+    RandomBars {
+        #[serde(default)]
+        orientation: Orientation,
+    },
+    Blinds {
+        #[serde(default)]
+        orientation: Orientation,
+    },
+    Checker {
+        #[serde(default)]
+        orientation: Orientation,
+    },
+}
+
+fn one_spoke() -> u8 {
+    1
 }
 
 fn default_duration() -> u32 {
@@ -1155,6 +1211,9 @@ pub struct Object {
     pub exit: Option<Animation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub motion_paths: Vec<MotionPath>,
+    /// Emphasis animations on the timeline (M46 phase 6), in the order they were added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emphasis: Vec<Emphasis>,
     /// Author-set keyboard focus position. Lower runs first; ties keep the
     /// default reading order. Omitted when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1525,6 +1584,87 @@ pub struct Animation {
     pub duration_ms: u32,
     #[serde(default)]
     pub easing: Easing,
+    /// Text plays as one, by paragraph or by letter (M46 phase 7). Omitted when `as_one`.
+    #[serde(default, skip_serializing_if = "Sequence::is_as_one")]
+    pub sequence: Sequence,
+}
+
+/// How an entrance or exit plays over an object's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sequence {
+    /// The whole object at once.
+    #[default]
+    AsOne,
+    /// One paragraph after another (the shape comes with the first).
+    ByParagraph,
+    /// Letter by letter, overlapping.
+    ByLetter,
+}
+
+impl Sequence {
+    pub const ALL: [Self; 3] = [Self::AsOne, Self::ByParagraph, Self::ByLetter];
+
+    #[must_use]
+    pub fn is_as_one(&self) -> bool {
+        *self == Self::AsOne
+    }
+
+    /// English label (the editor passes it through `tl!`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AsOne => "As one object",
+            Self::ByParagraph => "By paragraph",
+            Self::ByLetter => "By letter",
+        }
+    }
+}
+
+/// An emphasis animation: the object stays on screen and pulses, turns, shakes or changes
+/// colour for a while, then returns to its resting look.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Emphasis {
+    pub effect: EmphasisEffect,
+    /// When it starts on the object's timeline (slide or layer), in ms.
+    #[serde(default)]
+    pub start_ms: u32,
+    /// One pass, in ms.
+    #[serde(default = "d1000")]
+    pub duration_ms: u32,
+    #[serde(default = "linear", skip_serializing_if = "is_linear")]
+    pub easing: Easing,
+    /// How many passes play back to back (1..=20).
+    #[serde(default = "one_u8", skip_serializing_if = "is_one_u8")]
+    pub repeat: u8,
+}
+
+/// An emphasis effect: a registry id (`coursecraft_course::EMPHASIS`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmphasisEffect {
+    #[serde(rename = "type")]
+    pub id: String,
+}
+
+impl Emphasis {
+    /// When the last pass ends, in ms.
+    #[must_use]
+    pub fn end_ms(&self) -> u32 {
+        self.start_ms.saturating_add(
+            self.duration_ms
+                .saturating_mul(u32::from(self.repeat.max(1))),
+        )
+    }
+}
+
+fn linear() -> Easing {
+    Easing::Linear
+}
+
+fn is_linear(e: &Easing) -> bool {
+    *e == Easing::Linear
 }
 
 pub fn d500() -> u32 {
@@ -1565,25 +1705,37 @@ pub fn d1000() -> u32 {
     1000
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AnimEffect {
-    Fade,
-    FlyIn {
-        #[serde(default)]
-        from: Direction,
-    },
-    Zoom,
-    Wipe {
-        #[serde(default)]
-        from: Direction,
-    },
-    Float {
-        #[serde(default)]
-        from: Direction,
-    },
+/// An entrance or exit effect: a registry id plus its options.
+///
+/// Stored as `{ "type": "fly_in", "from": "left" }`. The id is checked against
+/// [`crate::effects::EFFECTS`] by the validator, not by the parser, so a file with an effect
+/// from a newer version still opens (it plays as [`crate::effects::FALLBACK_EFFECT`]).
+/// Options are typed fields; unknown fields are refused, options the effect does not take are
+/// reported by the validator and ignored by the runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnimEffect {
+    /// Registry id (`"fade"`, `"fly_in"`, …).
+    #[serde(rename = "type")]
+    pub id: String,
+    /// Side or corner the object enters from, or leaves toward for exits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<Direction>,
+    /// Reveal shape (Shape).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<RevealShape>,
+    /// Whether the reveal opens out from the centre or closes in from the edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inout: Option<InOut>,
+    /// Number of spokes (Wheel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spokes: Option<u8>,
+    /// Horizontal or vertical (Split, Random bars, Blinds, Checkerboard, Swivel, Flip).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Orientation>,
 }
 
+/// A side or corner of the slide or object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
@@ -1592,6 +1744,113 @@ pub enum Direction {
     Top,
     #[default]
     Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Direction {
+    /// Every direction, sides first, then corners.
+    pub const ALL: [Self; 8] = [
+        Self::Left,
+        Self::Right,
+        Self::Top,
+        Self::Bottom,
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+
+    /// Unit-ish vector pointing toward this side or corner from the centre (y grows down):
+    /// left is `(-1, 0)`, top-right `(1, -1)`.
+    #[must_use]
+    pub const fn vector(self) -> (f32, f32) {
+        match self {
+            Self::Left => (-1.0, 0.0),
+            Self::Right => (1.0, 0.0),
+            Self::Top => (0.0, -1.0),
+            Self::Bottom => (0.0, 1.0),
+            Self::TopLeft => (-1.0, -1.0),
+            Self::TopRight => (1.0, -1.0),
+            Self::BottomLeft => (-1.0, 1.0),
+            Self::BottomRight => (1.0, 1.0),
+        }
+    }
+
+    /// English label (the editor passes it through `tl!`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Top => "Top",
+            Self::Bottom => "Bottom",
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+        }
+    }
+}
+
+/// The outline a Shape effect reveals through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealShape {
+    #[default]
+    Circle,
+    Box,
+    Diamond,
+    Plus,
+}
+
+impl RevealShape {
+    pub const ALL: [Self; 4] = [Self::Circle, Self::Box, Self::Diamond, Self::Plus];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Circle => "Circle",
+            Self::Box => "Box",
+            Self::Diamond => "Diamond",
+            Self::Plus => "Plus",
+        }
+    }
+}
+
+/// `out`: the reveal opens from the centre outward. `in`: it closes from the edges inward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InOut {
+    In,
+    #[default]
+    Out,
+}
+
+impl InOut {
+    pub const ALL: [Self; 2] = [Self::In, Self::Out];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::In => "In",
+            Self::Out => "Out",
+        }
+    }
+}
+
+impl Orientation {
+    pub const ALL: [Self; 2] = [Self::Horizontal, Self::Vertical];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1602,6 +1861,39 @@ pub enum Easing {
     #[default]
     EaseOut,
     EaseInOut,
+    /// Goes a little past the end and settles back (M46 phase 7).
+    Overshoot,
+    /// Lands and bounces three times.
+    Bounce,
+    /// Springs past the end and wobbles to rest.
+    Elastic,
+}
+
+impl Easing {
+    /// Every easing, in picker order.
+    pub const ALL: [Self; 7] = [
+        Self::EaseOut,
+        Self::Linear,
+        Self::EaseIn,
+        Self::EaseInOut,
+        Self::Overshoot,
+        Self::Bounce,
+        Self::Elastic,
+    ];
+
+    /// English label (the editor passes it through `tl!`).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Linear => "Linear",
+            Self::EaseIn => "Ease in",
+            Self::EaseOut => "Ease out",
+            Self::EaseInOut => "Ease in and out",
+            Self::Overshoot => "Overshoot",
+            Self::Bounce => "Bounce",
+            Self::Elastic => "Elastic",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1794,7 +2086,7 @@ pub const MIN_RADIO_OPTIONS: usize = 2;
 /// A radio group has at most this many options.
 pub const MAX_RADIO_OPTIONS: usize = 20;
 
-/// Direction of a slider's track.
+/// Horizontal or vertical: a slider's track, or an animation effect's orientation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Orientation {
@@ -4037,6 +4329,12 @@ pub struct Timing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_ms: Option<u32>,
 }
+
+/// Maximum number of emphasis animations on a single object.
+pub const MAX_EMPHASIS_PER_OBJECT: usize = 16;
+
+/// Maximum passes of one emphasis.
+pub const MAX_EMPHASIS_REPEAT: u8 = 20;
 
 /// Maximum number of custom states on a single object.
 pub const MAX_STATES_PER_OBJECT: usize = 32;

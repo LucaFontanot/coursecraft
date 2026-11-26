@@ -644,6 +644,7 @@ fn make_dummy_item(hit: Hit, rect: Rect) -> DrawItem {
         clip_rect: None,
         mark: None,
         is_state_extra: false,
+        anim: crate::compose::AnimLook::IDENTITY,
     }
 }
 
@@ -1227,6 +1228,7 @@ fn paint_button_hover_down_and_disabled_fills() {
         clip_rect: None,
         mark: None,
         is_state_extra: false,
+        anim: crate::compose::AnimLook::IDENTITY,
     };
     let item_btn_disabled = DrawItem {
         hit: Hit::Object("btn-dis".to_owned()),
@@ -1254,6 +1256,7 @@ fn paint_button_hover_down_and_disabled_fills() {
         clip_rect: None,
         mark: None,
         is_state_extra: false,
+        anim: crate::compose::AnimLook::IDENTITY,
     };
 
     let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0));
@@ -1741,6 +1744,7 @@ fn paint_smoke_dimmed_item_does_not_panic() {
         clip_rect: None,
         mark: None,
         is_state_extra: false,
+        anim: crate::compose::AnimLook::IDENTITY,
     };
     let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0));
     let t = SlideTransform::fit(screen, Size { w: 1280, h: 720 }).expect("fit");
@@ -2132,6 +2136,7 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
             clip_rect: None,
             mark: None,
             is_state_extra: false,
+            anim: crate::compose::AnimLook::IDENTITY,
         },
         DrawItem {
             hit: Hit::Object("img-missing".to_string()),
@@ -2157,6 +2162,7 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
             clip_rect: None,
             mark: None,
             is_state_extra: false,
+            anim: crate::compose::AnimLook::IDENTITY,
         },
     ];
 
@@ -2901,6 +2907,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             clip_rect: None,
             mark: None,
             is_state_extra: false,
+            anim: crate::compose::AnimLook::IDENTITY,
         },
         DrawItem {
             hit: Hit::None,
@@ -2928,6 +2935,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             clip_rect: None,
             mark: None,
             is_state_extra: false,
+            anim: crate::compose::AnimLook::IDENTITY,
         },
         DrawItem {
             hit: Hit::None,
@@ -2949,6 +2957,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             clip_rect: None,
             mark: None,
             is_state_extra: false,
+            anim: crate::compose::AnimLook::IDENTITY,
         },
         DrawItem {
             hit: Hit::None,
@@ -2973,6 +2982,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             clip_rect: None,
             mark: None,
             is_state_extra: false,
+            anim: crate::compose::AnimLook::IDENTITY,
         },
     ];
 
@@ -3570,6 +3580,7 @@ fn plain_text_renders_as_one_run() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         states: Vec::new(),
         initial_state: "normal".into(),
         focus_order: None,
@@ -3722,18 +3733,18 @@ fn transition_sampling_fade_and_push() {
         duration_ms: 500,
     };
     let s0 = sample_transition(&fade, 0.0, slide_size);
-    assert_eq!(s0.prev_alpha, 1.0);
-    assert_eq!(s0.next_alpha, 0.0);
-    assert_eq!(s0.prev_offset, (0.0, 0.0));
-    assert_eq!(s0.next_offset, (0.0, 0.0));
+    assert_eq!(s0.prev.alpha, 1.0);
+    assert_eq!(s0.next.alpha, 0.0);
+    assert_eq!(s0.prev.offset, (0.0, 0.0));
+    assert_eq!(s0.next.offset, (0.0, 0.0));
 
     let s_mid = sample_transition(&fade, 0.5, slide_size);
-    assert!((s_mid.prev_alpha - 0.5).abs() < 1e-4);
-    assert!((s_mid.next_alpha - 0.5).abs() < 1e-4);
+    assert!((s_mid.prev.alpha - 0.5).abs() < 1e-4);
+    assert!((s_mid.next.alpha - 0.5).abs() < 1e-4);
 
     let s1 = sample_transition(&fade, 1.0, slide_size);
-    assert_eq!(s1.prev_alpha, 0.0);
-    assert_eq!(s1.next_alpha, 1.0);
+    assert_eq!(s1.prev.alpha, 0.0);
+    assert_eq!(s1.next.alpha, 1.0);
 
     // Push from Left: enters from Left (moves from -w to 0), prev moves from 0 to +w
     let push_left = Transition {
@@ -3743,16 +3754,16 @@ fn transition_sampling_fade_and_push() {
         duration_ms: 500,
     };
     let p0 = sample_transition(&push_left, 0.0, slide_size);
-    assert_eq!(p0.prev_offset, (0.0, 0.0));
-    assert_eq!(p0.next_offset, (-1000.0, 0.0));
+    assert_eq!(p0.prev.offset, (0.0, 0.0));
+    assert_eq!(p0.next.offset, (-1000.0, 0.0));
 
     let p_mid = sample_transition(&push_left, 0.5, slide_size);
-    assert_eq!(p_mid.prev_offset, (500.0, 0.0));
-    assert_eq!(p_mid.next_offset, (-500.0, 0.0));
+    assert_eq!(p_mid.prev.offset, (500.0, 0.0));
+    assert_eq!(p_mid.next.offset, (-500.0, 0.0));
 
     let p1 = sample_transition(&push_left, 1.0, slide_size);
-    assert_eq!(p1.prev_offset, (1000.0, 0.0));
-    assert_eq!(p1.next_offset, (0.0, 0.0));
+    assert_eq!(p1.prev.offset, (1000.0, 0.0));
+    assert_eq!(p1.next.offset, (0.0, 0.0));
 
     // Push from Top: enters from Top (moves from -h to 0), prev moves from 0 to +h
     let push_top = Transition {
@@ -3762,16 +3773,16 @@ fn transition_sampling_fade_and_push() {
         duration_ms: 500,
     };
     let pt0 = sample_transition(&push_top, 0.0, slide_size);
-    assert_eq!(pt0.prev_offset, (0.0, 0.0));
-    assert_eq!(pt0.next_offset, (0.0, -500.0));
+    assert_eq!(pt0.prev.offset, (0.0, 0.0));
+    assert_eq!(pt0.next.offset, (0.0, -500.0));
 
     let pt_mid = sample_transition(&push_top, 0.5, slide_size);
-    assert_eq!(pt_mid.prev_offset, (0.0, 250.0));
-    assert_eq!(pt_mid.next_offset, (0.0, -250.0));
+    assert_eq!(pt_mid.prev.offset, (0.0, 250.0));
+    assert_eq!(pt_mid.next.offset, (0.0, -250.0));
 
     let pt1 = sample_transition(&push_top, 1.0, slide_size);
-    assert_eq!(pt1.prev_offset, (0.0, 500.0));
-    assert_eq!(pt1.next_offset, (0.0, 0.0));
+    assert_eq!(pt1.prev.offset, (0.0, 500.0));
+    assert_eq!(pt1.next.offset, (0.0, 0.0));
 }
 
 #[test]
@@ -3789,16 +3800,16 @@ fn transition_sampling_cover() {
         duration_ms: 500,
     };
     let c0 = sample_transition(&cover_right, 0.0, slide_size);
-    assert_eq!(c0.prev_offset, (0.0, 0.0));
-    assert_eq!(c0.next_offset, (1000.0, 0.0));
+    assert_eq!(c0.prev.offset, (0.0, 0.0));
+    assert_eq!(c0.next.offset, (1000.0, 0.0));
 
     let c_mid = sample_transition(&cover_right, 0.5, slide_size);
-    assert_eq!(c_mid.prev_offset, (0.0, 0.0));
-    assert_eq!(c_mid.next_offset, (500.0, 0.0));
+    assert_eq!(c_mid.prev.offset, (0.0, 0.0));
+    assert_eq!(c_mid.next.offset, (500.0, 0.0));
 
     let c1 = sample_transition(&cover_right, 1.0, slide_size);
-    assert_eq!(c1.prev_offset, (0.0, 0.0));
-    assert_eq!(c1.next_offset, (0.0, 0.0));
+    assert_eq!(c1.prev.offset, (0.0, 0.0));
+    assert_eq!(c1.next.offset, (0.0, 0.0));
 }
 
 #[test]
@@ -3812,9 +3823,10 @@ fn compose_with_animated_object_scales_and_translates() {
         .find(|o| o.id == "btn-start")
         .expect("btn");
     btn.entrance = Some(coursecraft_course::Animation {
-        effect: coursecraft_course::AnimEffect::Fade,
+        effect: coursecraft_course::AnimEffect::new("fade"),
         duration_ms: 1000,
         easing: coursecraft_course::Easing::Linear,
+        sequence: Default::default(),
     });
     btn.timing.start_ms = 0;
 
@@ -6441,6 +6453,7 @@ fn a_diagonal_path_hits_its_line_not_its_bounding_box() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -6518,6 +6531,7 @@ fn a_closed_filled_path_hits_inside_its_outline() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -7045,6 +7059,7 @@ fn paint_slider_checkbox_and_radio_use_the_accent() {
         clip_rect: None,
         mark: None,
         is_state_extra: false,
+        anim: crate::compose::AnimLook::IDENTITY,
     };
     let slider = make(
         Visual::Slider {
@@ -7952,6 +7967,7 @@ fn video_frame_draws_as_texture_instead_of_poster() {
             clip_rect: None,
             mark: None,
             is_state_extra: false,
+            anim: crate::compose::AnimLook::IDENTITY,
         }
     }
 
@@ -8321,16 +8337,16 @@ fn exit_animations_render_with_and_without_slide_transition() {
             .expect("fade-obj"),
         ];
         s2.objects[0].exit = Some(Animation {
-            effect: AnimEffect::FlyIn {
-                from: Direction::Left,
-            },
+            effect: AnimEffect::with_from("fly_in", Direction::Left),
             duration_ms: 1000,
             easing: Easing::Linear,
+            sequence: Default::default(),
         });
         s2.objects[1].exit = Some(Animation {
-            effect: AnimEffect::Fade,
+            effect: AnimEffect::new("fade"),
             duration_ms: 1000,
             easing: Easing::Linear,
+            sequence: Default::default(),
         });
         s2.triggers.clear();
     }

@@ -19,13 +19,13 @@
 | Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
-| Animation, transitions, timeline | 12 | 2 | 8 | 0 |
+| Animation, transitions, timeline | 19 | 1 | 5 | 0 |
 | Questions and quizzes | 8 | 4 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **110** | **39** | **58** | **12** |
+| **Total** | **117** | **38** | **55** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -182,7 +182,8 @@ Counted from the tables below; recount when a row changes.
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
 | Entrance and exit animations | `object.set_animation` | ✅ | — |
-| Animation duration and direction | `object.set_animation` | ✅ | — |
+| Animation duration and effect options (8 directions, shape, in/out, spokes, orientation) | `object.set_animation`; the Animate inspector's Entrance and Exit cards (`anim_panel.rs`) show one row of icon buttons per option the effect takes | ✅ | — |
+| Preview an animation on the canvas | `anim_preview.rs`: plays the selected objects' entrance or exit in place through the player's sampler, once on ▶ Preview or a pick, in a loop while an effect tile is hovered; Auto-preview turns the automatic ones off | ✅ | M46 |
 | Motion paths (add, duration, name, options) | `object.*motion_path` | ✅ | — |
 | Slide transitions and duration | `slide.set_transition` | ✅ | — |
 | Timeline: bars, drag timing, rename, restack | `timeline.rs` | ✅ | — |
@@ -191,12 +192,14 @@ Counted from the tables below; recount when a row changes.
 | Slide duration | `slide.set_duration` | ✅ | — |
 | Play / stop / zoom in timeline | `timeline_playback.rs` | ✅ | — |
 | Timeline shows current layer; group rows expand | `timeline.rs` | ✅ | — |
-| Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`) with the six effects the runtime has | 🟡 subset | M42 |
-| Transition effect options | Transitions › Effect Options ▾ (from left, right, top, bottom) | ✅ | — |
+| Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`): 25 effects from the registry, each also as an exit | ✅ | M46 |
+| Effect icons and Effect Options menu | Each gallery tile draws its effect with the effect's own sample function (entrance green, exit red, plays on hover); Effect Options ▾ has one section per option of the effect, with icons (`ribbon/effect_art.rs`) | ✅ | M46 |
+| Transition effect options | Transitions › Effect Options ▾ and the Slide inspector: direction (eight), orientation, in/out, shape, spokes | ✅ | M46 |
+| Transitions pack (15 transitions) | `TransitionEffect`: Fade, Fade through black, Push, Cover, Uncover, Reveal, Wipe, Split, Zoom, Shape, Clock, Dissolve, Random bars, Blinds, Checkerboard, with drawn gallery icons | ✅ | M46 |
 | Path options | | 🟡 | M42 |
-| Emphasis animations | — | ⛔ | M42 |
-| Animation painter | — | ⛔ | M42 |
-| Sequence by paragraph (build steps) | — | ⛔ | M42 |
+| Emphasis animations | 12 effects (`object.add_emphasis`, `set_emphasis`, `remove_emphasis`); Animations › Emphasis gallery, the Animate inspector's Emphasis card, amber strips on timeline bars | ✅ | M46 |
+| Animation painter | Animations › Animation Painter (`object.copy_animation`) | ✅ | M46 |
+| Sequence by paragraph (build steps) | `Animation.sequence`: as one, by paragraph, by letter (Effect Options ▾ and the Animate inspector's cards) | ✅ | M46 |
 | Transition: apply to all | `slide.set_transition_all`, Transitions › Apply To All | ✅ | — |
 | Timeline: fit to longest, reset, align to playhead/cue | — | ⛔ | M42 |
 | Timing dialog | — | ⛔ | M42 |

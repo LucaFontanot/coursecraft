@@ -307,7 +307,7 @@ fn inspector_and_states_combos_have_sufficient_width_and_tall_popup() {
     h.editor.ui.inspector_tab = InspectorTab::Animate;
     h.editor.selection.set_many(["obj_text"]);
     h.idle_frame();
-    for combo_label in ["Fade in", "EaseInOut"] {
+    for combo_label in ["Fade in", "Ease in and out"] {
         let findings = h.audit_combo(combo_label);
         assert!(
             findings.is_empty(),
@@ -466,11 +466,11 @@ fn animate_panel_empty_state_and_motion_path_undo() {
     // Populated state: obj_text has 1 motion path ("mp1"); deleting it is 1-step undoable.
     h.editor.selection.set_many(["obj_text"]);
     h.idle_frame();
-    for _ in 0..3 {
-        if h.last_widgets
-            .iter()
-            .any(|w| w.label.as_deref() == Some("Delete motion path"))
-        {
+    for _ in 0..4 {
+        let panel = h.right_panel_rect();
+        if h.last_widgets.iter().any(|w| {
+            w.label.as_deref() == Some("Delete motion path") && panel.contains(w.bounds.center())
+        }) {
             break;
         }
         h.scroll_over(pos2(1140.0, 400.0), -400.0);

@@ -781,16 +781,16 @@ fn animation_and_transition_serialization_and_validation() {
 
     let obj = s.objects.iter_mut().find(|o| o.id == "btn-start").unwrap();
     obj.entrance = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Bottom,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Bottom),
         duration_ms: 400,
         easing: Easing::EaseOut,
+        sequence: Default::default(),
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 300,
         easing: Easing::EaseIn,
+        sequence: Default::default(),
     });
     obj.motion_paths = vec![MotionPath {
         id: "path1".into(),
@@ -846,6 +846,7 @@ fn animation_and_transition_serialization_and_validation() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -890,9 +891,10 @@ fn animation_and_transition_serialization_and_validation() {
         .find(|o| o.id == "btn-start")
         .unwrap();
     bad_obj.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 70000,
         easing: Easing::Linear,
+        sequence: Default::default(),
     });
     assert!(
         errors(&bad_c2)
@@ -1526,6 +1528,7 @@ fn course_with_media(kind: crate::ObjectKind) -> Course {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -2304,6 +2307,7 @@ fn a_master_must_not_have_play_time_behaviour_or_media() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -2403,6 +2407,7 @@ fn shape_outline_and_text_round_trip() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -2492,6 +2497,7 @@ fn invalid_outline_and_shape_text_are_rejected() {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -3546,6 +3552,7 @@ fn panel_membership_and_nesting_are_validated() {
             entrance: None,
             exit: None,
             motion_paths: Vec::new(),
+            emphasis: Vec::new(),
             focus_order: None,
             decorative: false,
             description: None,

@@ -22,6 +22,8 @@ pub use coursecraft_render::SystemFontProvider;
 // First, so `tl!` reads as defined before every other module.
 pub mod ai_settings;
 pub mod alt_text;
+pub mod anim_panel;
+pub mod anim_preview;
 pub mod audio_ai;
 pub mod canvas;
 pub mod clipboard;
@@ -1128,6 +1130,8 @@ pub struct UiState {
     pub story_view: bool,
     /// The ribbon (M37), drawn above the toolbar when visible.
     pub ribbon: ribbon::RibbonState,
+    /// Live animation preview on the canvas (M46 phase 5).
+    pub anim_preview: anim_preview::PreviewState,
     /// The panels in a docking workspace (M37), when enabled.
     pub dock: dock::DockState,
     /// The Course Map and opened-slide tabs under the ribbon.
@@ -1761,6 +1765,7 @@ impl Editor {
                 pending_remove_font: None,
                 story_view: false,
                 ribbon: ribbon::RibbonState::default(),
+                anim_preview: anim_preview::PreviewState::default(),
                 dock: dock::DockState::default(),
                 doc_tabs: doc_tabs::DocTabs::default(),
                 panels: panels::PanelsState::default(),

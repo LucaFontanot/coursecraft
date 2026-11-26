@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 
 use coursecraft_course::{
-    Action, AnimEffect, Animation, Direction, Easing, Event, MotionPath, Object, Point, Trigger,
+    Action, AnimEffect, Animation, Direction, Easing, Event, InOut, MotionPath, Object,
+    Orientation, Point, RevealShape, Trigger,
 };
 
 use crate::{SlideLayout, SlideTracker, XmlNode};
@@ -368,6 +369,7 @@ fn schedule_main_sequence(
                         effect,
                         duration_ms: eff.duration_ms,
                         easing: eff.easing,
+                        sequence: Default::default(),
                     });
                 }
                 PresetClass::Exit => {
@@ -394,6 +396,7 @@ fn schedule_main_sequence(
                         effect,
                         duration_ms: eff.duration_ms,
                         easing: eff.easing,
+                        sequence: Default::default(),
                     });
                 }
                 PresetClass::Path => {
@@ -931,25 +934,55 @@ fn find_effect_target(ctn: &XmlNode) -> (Option<String>, bool) {
     (None, false)
 }
 
-fn map_direction(subtype: u32, obj_name: &str, tracker: &mut SlideTracker) -> Direction {
+/// PowerPoint direction subtype bits: 1 top, 2 right, 4 bottom, 8 left; corners combine them.
+fn map_direction(subtype: u32) -> Direction {
     match subtype {
         1 => Direction::Top,
         2 => Direction::Right,
-        4 | 0 => Direction::Bottom,
         8 => Direction::Left,
-        3 | 9 => {
-            tracker.report_animation(format!(
-                "Diagonal animation direction mapped to cardinal on {obj_name}"
-            ));
-            Direction::Top
-        }
-        6 | 12 => {
-            tracker.report_animation(format!(
-                "Diagonal animation direction mapped to cardinal on {obj_name}"
-            ));
-            Direction::Bottom
-        }
+        3 => Direction::TopRight,
+        6 => Direction::BottomRight,
+        12 => Direction::BottomLeft,
+        9 => Direction::TopLeft,
         _ => Direction::Bottom,
+    }
+}
+
+/// `effect` coming from the direction in `subtype`. A corner on an effect that only takes
+/// sides becomes the nearer side, and the report says so.
+fn directed(effect: &str, subtype: u32, obj_name: &str, tracker: &mut SlideTracker) -> AnimEffect {
+    let from = map_direction(subtype);
+    let allowed = coursecraft_course::effect_def(effect)
+        .and_then(coursecraft_course::EffectDef::direction)
+        .is_some_and(|(_, a)| a.contains(&from));
+    if allowed {
+        return AnimEffect::with_from(effect, from);
+    }
+    tracker.report_animation(format!(
+        "Diagonal animation direction mapped to a side on {obj_name}"
+    ));
+    let side = match from {
+        Direction::TopLeft | Direction::TopRight => Direction::Top,
+        _ => Direction::Bottom,
+    };
+    AnimEffect::with_from(effect, side)
+}
+
+/// PowerPoint's `horz` (10) and `vert` (5) subtypes.
+fn map_orientation(subtype: u32) -> Option<Orientation> {
+    match subtype {
+        10 => Some(Orientation::Horizontal),
+        5 => Some(Orientation::Vertical),
+        _ => None,
+    }
+}
+
+/// A Shape reveal: subtype 16 closes in, 32 opens out.
+fn shape_reveal(shape: RevealShape, subtype: u32) -> AnimEffect {
+    AnimEffect {
+        shape: Some(shape),
+        inout: Some(if subtype == 16 { InOut::In } else { InOut::Out }),
+        ..AnimEffect::new("shape")
     }
 }
 
@@ -959,52 +992,66 @@ fn map_entrance_exit_preset(
     obj_name: &str,
     tracker: &mut SlideTracker,
 ) -> Option<AnimEffect> {
+    let oriented = |id: &str| AnimEffect {
+        orientation: map_orientation(preset_subtype).or(AnimEffect::new(id).orientation),
+        ..AnimEffect::new(id)
+    };
     match preset_id {
         1 => None,
-        2 => {
-            let from = map_direction(preset_subtype, obj_name, tracker);
-            Some(AnimEffect::FlyIn { from })
-        }
-        10 => Some(AnimEffect::Fade),
-        22 => {
-            let from = map_direction(preset_subtype, obj_name, tracker);
-            Some(AnimEffect::Wipe { from })
-        }
-        23 => Some(AnimEffect::Zoom),
-        42 => {
-            let from = match preset_subtype {
-                1 | 2 | 4 | 8 => map_direction(preset_subtype, obj_name, tracker),
-                _ => Direction::Bottom,
-            };
-            Some(AnimEffect::Float { from })
-        }
-        47 => Some(AnimEffect::Float {
-            from: Direction::Top,
-        }),
-        12 => {
-            let from = map_direction(preset_subtype, obj_name, tracker);
-            tracker.report_animation(format!(
-                "Peek preset (id=12) approximated as Wipe on {obj_name}"
-            ));
-            Some(AnimEffect::Wipe { from })
-        }
-        53 => {
-            tracker.report_animation(format!(
-                "Grow & Turn preset (id=53) approximated as Zoom on {obj_name}"
-            ));
-            Some(AnimEffect::Zoom)
-        }
+        2 => Some(directed("fly_in", preset_subtype, obj_name, tracker)),
+        3 => Some(oriented("blinds")),
+        4 => Some(shape_reveal(RevealShape::Box, preset_subtype)),
+        5 => Some(oriented("checkerboard")),
+        6 => Some(shape_reveal(RevealShape::Circle, preset_subtype)),
+        8 => Some(shape_reveal(RevealShape::Diamond, preset_subtype)),
+        9 => Some(AnimEffect::new("dissolve")),
+        10 => Some(AnimEffect::new("fade")),
+        12 => Some(directed("peek", preset_subtype, obj_name, tracker)),
+        13 => Some(shape_reveal(RevealShape::Plus, preset_subtype)),
+        14 => Some(oriented("random_bars")),
         16 => {
             tracker.report_animation(format!(
-                "Animation preset Split (id=16) approximated as Fade on {obj_name}"
+                "Split direction approximated as vertical, opening out, on {obj_name}"
             ));
-            Some(AnimEffect::Fade)
+            Some(AnimEffect::new("split"))
         }
+        18 => {
+            let from = map_direction(preset_subtype);
+            let from = if matches!(
+                from,
+                Direction::TopLeft
+                    | Direction::TopRight
+                    | Direction::BottomLeft
+                    | Direction::BottomRight
+            ) {
+                from
+            } else {
+                Direction::BottomRight
+            };
+            Some(AnimEffect::with_from("strips", from))
+        }
+        21 => Some(AnimEffect {
+            spokes: Some(match preset_subtype {
+                2 | 3 | 4 | 8 => preset_subtype as u8,
+                _ => 1,
+            }),
+            ..AnimEffect::new("wheel")
+        }),
+        22 => Some(directed("wipe", preset_subtype, obj_name, tracker)),
+        23 | 53 => Some(AnimEffect::new("zoom")),
+        26 => Some(AnimEffect::new("bounce")),
+        31 => Some(AnimEffect::new("grow_turn")),
+        37 => Some(AnimEffect::new("rise")),
+        42 => Some(directed("float", preset_subtype, obj_name, tracker)),
+        45 => Some(AnimEffect::new("swivel")),
+        47 => Some(AnimEffect::with_from("float", Direction::Top)),
+        49 => Some(AnimEffect::new("spin")),
+        55 => Some(AnimEffect::new("expand")),
         other => {
             tracker.report_animation(format!(
                 "Unsupported animation preset (id={other}) approximated as Fade on {obj_name}"
             ));
-            Some(AnimEffect::Fade)
+            Some(AnimEffect::new("fade"))
         }
     }
 }
@@ -1062,6 +1109,7 @@ mod tests {
             entrance: None,
             exit: None,
             motion_paths: Vec::new(),
+            emphasis: Vec::new(),
             focus_order: None,
             decorative: false,
             description: None,
@@ -1136,20 +1184,20 @@ mod tests {
         assert_eq!(
             objects[0].entrance,
             Some(Animation {
-                effect: AnimEffect::Fade,
+                effect: AnimEffect::new("fade"),
                 duration_ms: 500,
                 easing: Easing::EaseOut,
+                sequence: Default::default(),
             })
         );
         assert_eq!(objects[1].timing.start_ms, 200);
         assert_eq!(
             objects[1].entrance,
             Some(Animation {
-                effect: AnimEffect::FlyIn {
-                    from: Direction::Left
-                },
+                effect: AnimEffect::with_from("fly_in", Direction::Left),
                 duration_ms: 400,
                 easing: Easing::EaseIn,
+                sequence: Default::default(),
             })
         );
         // Emphasis at 600 + 100 = 700..1300; clickEffect at 1300 + 500 = 1800..2300.
@@ -1157,11 +1205,10 @@ mod tests {
         assert_eq!(
             objects[0].exit,
             Some(Animation {
-                effect: AnimEffect::Wipe {
-                    from: Direction::Right
-                },
+                effect: AnimEffect::with_from("wipe", Direction::Right),
                 duration_ms: 500,
                 easing: Easing::EaseInOut,
+                sequence: Default::default(),
             })
         );
         assert_eq!(max_end, 2300);
@@ -1216,9 +1263,10 @@ mod tests {
             assert_eq!(
                 obj.entrance,
                 Some(Animation {
-                    effect: AnimEffect::Fade,
+                    effect: AnimEffect::new("fade"),
                     duration_ms: 500,
                     easing: Easing::EaseOut,
+                    sequence: Default::default(),
                 })
             );
         }
@@ -1240,7 +1288,7 @@ mod tests {
                     <p:stCondLst><p:cond delay="100"/></p:stCondLst>
                     <p:childTnLst><p:set><p:cBhvr><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr></p:set></p:childTnLst>
                   </p:cTn></p:par>
-                  <p:par><p:cTn id="6" presetID="26" presetClass="entr" presetSubtype="6" nodeType="withEffect" dur="999999999">
+                  <p:par><p:cTn id="6" presetID="99" presetClass="entr" presetSubtype="6" nodeType="withEffect" dur="999999999">
                     <p:stCondLst><p:cond delay="-500"/></p:stCondLst>
                     <p:childTnLst><p:animEffect><p:cBhvr><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst>
                   </p:cTn></p:par>
@@ -1280,9 +1328,10 @@ mod tests {
         assert_eq!(
             objects[1].entrance,
             Some(Animation {
-                effect: AnimEffect::Fade,
+                effect: AnimEffect::new("fade"),
                 duration_ms: 60_000,
                 easing: Easing::EaseOut,
+                sequence: Default::default(),
             })
         );
     }

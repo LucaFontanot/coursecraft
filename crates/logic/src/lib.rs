@@ -20,12 +20,14 @@
 
 pub mod animation;
 mod draw;
+pub mod effects;
 mod run;
 pub mod suspend;
 
 pub use animation::{
-    AnimationPhase, ClipFrac, ObjectSample, TransitionSample, ease, sample_animation,
-    sample_motion_path, sample_transition,
+    AnimationPhase, ClipFrac, ConvexPoly, MAX_MASK_POLYS, MAX_POLY_POINTS, Mask, ObjectSample,
+    SlideLook, Tint, TransitionSample, ease, sample_animation, sample_motion_path,
+    sample_transition,
 };
 pub use suspend::{SUSPEND_PREFIX, SuspendError, decode_suspend, encode_suspend};
 
@@ -43,6 +45,65 @@ pub fn sample_timed_animation(
     clock_ms: u32,
     duration_ms: u32,
     slide_size: coursecraft_course::Size,
+) -> Option<ObjectSample> {
+    sample_timed_part(obj, clock_ms, duration_ms, slide_size, (0, 1))
+}
+
+/// Whether `obj`'s entrance or exit plays its text in parts (by paragraph or letter).
+#[must_use]
+pub fn plays_in_parts(obj: &coursecraft_course::Object) -> Option<coursecraft_course::Sequence> {
+    [&obj.entrance, &obj.exit]
+        .into_iter()
+        .flatten()
+        .map(|a| a.sequence)
+        .find(|s| !s.is_as_one())
+}
+
+/// [`sample_timed_animation`] for each of `parts` parts of the object's text (paragraphs or
+/// letters, counted by the renderer): an entrance or exit with a `sequence` gives each part its
+/// own window inside the animation's duration. Emphasis applies to every part alike. `None`
+/// when the object is not on screen.
+#[must_use]
+pub fn sample_timed_parts(
+    obj: &coursecraft_course::Object,
+    clock_ms: u32,
+    duration_ms: u32,
+    slide_size: coursecraft_course::Size,
+    parts: usize,
+) -> Option<Vec<ObjectSample>> {
+    let n = parts.clamp(1, MAX_SEQUENCE_PARTS);
+    (0..n)
+        .map(|k| sample_timed_part(obj, clock_ms, duration_ms, slide_size, (k, n)))
+        .collect()
+}
+
+/// Most parts a sequenced animation plays; longer text plays in this many groups.
+pub const MAX_SEQUENCE_PARTS: usize = 200;
+
+/// Linear progress `raw` of a whole animation turned into the progress of part `k` of `n`.
+/// By paragraph the parts play one after another; by letter each letter takes a quarter of the
+/// time (or its share, if larger) and they overlap.
+#[must_use]
+pub fn part_progress(seq: coursecraft_course::Sequence, (k, n): (usize, usize), raw: f32) -> f32 {
+    use coursecraft_course::Sequence;
+    if n <= 1 || seq == Sequence::AsOne || !raw.is_finite() {
+        return raw;
+    }
+    let nf = n as f32;
+    let w = match seq {
+        Sequence::ByLetter => (1.0 / nf).max(0.25),
+        _ => 1.0 / nf,
+    };
+    let step = (1.0 - w) / (nf - 1.0);
+    ((raw - k as f32 * step) / w).clamp(0.0, 1.0)
+}
+
+fn sample_timed_part(
+    obj: &coursecraft_course::Object,
+    clock_ms: u32,
+    duration_ms: u32,
+    slide_size: coursecraft_course::Size,
+    part: (usize, usize),
 ) -> Option<ObjectSample> {
     if clock_ms < obj.timing.start_ms {
         return None;
@@ -72,7 +133,7 @@ pub fn sample_timed_animation(
             anim_sample = sample_animation(
                 exit_anim,
                 AnimationPhase::Exiting,
-                progress,
+                part_progress(exit_anim.sequence, part, progress),
                 obj.frame,
                 slide_size,
             );
@@ -97,11 +158,22 @@ pub fn sample_timed_animation(
             anim_sample = sample_animation(
                 ent_anim,
                 AnimationPhase::Entering,
-                progress,
+                part_progress(ent_anim.sequence, part, progress),
                 obj.frame,
                 slide_size,
             );
         }
+    }
+    // Emphasis plays over whatever the entrance or exit is doing.
+    for e in &obj.emphasis {
+        let dur = e.duration_ms.max(1);
+        if clock_ms < e.start_ms || clock_ms >= e.end_ms() {
+            continue;
+        }
+        let into_pass = clock_ms.saturating_sub(e.start_ms) % dur;
+        let t = ease(e.easing, into_pass as f32 / dur as f32);
+        let over = effects::sample_emphasis(&e.effect, t, obj.frame);
+        anim_sample = anim_sample.then(&over);
     }
     Some(anim_sample)
 }
@@ -2079,10 +2151,37 @@ impl<'c> Player<'c> {
                 anim_sample.offset.0 + motion_offset.0 + drag_pos.0,
                 anim_sample.offset.1 + motion_offset.1 + drag_pos.1,
             ),
-            scale: anim_sample.scale,
-            opacity: anim_sample.opacity,
-            clip: anim_sample.clip,
+            ..anim_sample
         })
+    }
+
+    /// [`Self::sample_object`] for each of `parts` parts of the object's text (see
+    /// [`sample_timed_parts`]).
+    #[must_use]
+    pub fn sample_object_parts(&self, object_id: &str, parts: usize) -> Option<Vec<ObjectSample>> {
+        let whole = self.sample_object(object_id)?;
+        let slide = self.current_slide()?;
+        let (obj, layer_id) = slide.object(object_id)?;
+        let (clock_ms, duration_ms) = match layer_id {
+            None => (self.st.base.ms, slide.duration_ms),
+            Some(l) => {
+                let c = self.st.layer_clocks.get(l)?;
+                (c.ms, slide.layer(l)?.duration_ms)
+            }
+        };
+        let own = sample_timed_animation(obj, clock_ms, duration_ms, self.course.slide_size)?;
+        // Motion paths and drags move every part alike.
+        let extra = (whole.offset.0 - own.offset.0, whole.offset.1 - own.offset.1);
+        let parts = sample_timed_parts(obj, clock_ms, duration_ms, self.course.slide_size, parts)?;
+        Some(
+            parts
+                .into_iter()
+                .map(|p| ObjectSample {
+                    offset: (p.offset.0 + extra.0, p.offset.1 + extra.1),
+                    ..p
+                })
+                .collect(),
+        )
     }
 
     /// Return the current resting position offset for `object_id`.
@@ -2110,11 +2209,10 @@ impl<'c> Player<'c> {
         if sample.opacity <= 0.0 {
             return None;
         }
-        let scale = sample.scale;
         let cx = obj.frame.x + sample.offset.0 + obj.frame.w * 0.5;
         let cy = obj.frame.y + sample.offset.1 + obj.frame.h * 0.5;
-        let w = (obj.frame.w * scale).abs();
-        let h = (obj.frame.h * scale).abs();
+        let w = (obj.frame.w * sample.scale.0).abs();
+        let h = (obj.frame.h * sample.scale.1).abs();
         Some(coursecraft_course::Rect {
             x: cx - w * 0.5,
             y: cy - h * 0.5,

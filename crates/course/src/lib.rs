@@ -19,6 +19,7 @@ mod audit;
 mod connector_route;
 mod course_map;
 mod diff;
+pub mod effects;
 mod media;
 mod model;
 mod named_styles;
@@ -31,6 +32,11 @@ mod validate;
 
 pub use connector_route::{
     CONNECTOR_MIN_LEAD, connector_site, connector_site_direction, route_connector,
+};
+pub use effects::{
+    EFFECTS, EMPHASIS, EffectCategory, EffectDef, EffectOptionDef, EmphasisDef, FALLBACK_EFFECT,
+    FALLBACK_EMPHASIS, OPTION_FIELDS, TRANSITIONS, TransitionDef, effect_def, emphasis_def,
+    transition_def,
 };
 
 pub use course_map::{
@@ -56,9 +62,10 @@ pub use model::{
     BUILTIN_VARIABLES, BackgroundAudio, BankDraw, BaseSlideView, Baseline, CHROME_STRINGS, Choice,
     CmpOp, Color, CompletionStatus, Condition, ConnectorStyle, Course, CropRect, Cue,
     DEFAULT_TIMER_DURATION_MS, DashStyle, Direction, DragItem, DragSpec, Easing, EditorSettings,
-    Event, FillStyle, FontFace, FontStyle, GlossaryEntry, Glow, Glue, GradientStop, Group, Guide,
-    HotspotRegion, HotspotShape, InputKind, LOTTIE_MAX_SPEED, LOTTIE_MIN_SPEED, Layer, LineEnd,
-    LineJoin, Link, ListKind, LmsStatus, MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS,
+    Emphasis, EmphasisEffect, Event, FillStyle, FontFace, FontStyle, GlossaryEntry, Glow, Glue,
+    GradientStop, Group, Guide, HotspotRegion, HotspotShape, InOut, InputKind, LOTTIE_MAX_SPEED,
+    LOTTIE_MIN_SPEED, Layer, LineEnd, LineJoin, Link, ListKind, LmsStatus, MAX_CUES,
+    MAX_EMPHASIS_PER_OBJECT, MAX_EMPHASIS_REPEAT, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS,
     MAX_GRADIENT_STOPS, MAX_INPUT_CHARS, MAX_JAVASCRIPT_BYTES, MAX_LETTER_SPACING,
     MAX_OBJECT_FRAME_SIZE, MAX_PALETTE_COLORS, MAX_RADIO_OPTIONS, MAX_SCROLL_CONTENT_HEIGHT,
     MAX_STATE_EXTRAS, MAX_STATE_NAME_CHARS, MAX_STATES_PER_OBJECT, MAX_TEXT_STYLES,
@@ -68,22 +75,23 @@ pub use model::{
     PATH_MIN_POINTS, PaletteColor, Paragraph, Path, PathPoint, PathStyle, PathSubpath,
     PictureFillMode, PlayerSettings, PlayerTheme, Point, PublishSettings, Question, QuestionBank,
     QuestionKind, QuizSettings, QuizTracking, RadioOption, Rect, Resource, ResourceTarget,
-    RevisitMode, SCHEMA_VERSION, Scene, Scoring, ScrollBar, SeekMode, SeekbarBehaviour, Shadow,
-    ShapeKind, ShapeText, Size, Slide, SlideCue, SlidePlayerOverrides, SlideTarget,
-    SlidesViewedTracking, StateDef, StateExtra, StateExtraKind, TABLE_MAX_AXIS, TABLE_MAX_CELLS,
-    TABLE_MIN_FRACTION, TableBorders, TableCell, TableRow, TextDirection, TextInsets, TextRun,
-    TextStyle, Theme, TimerFormat, Timing, TrackingSettings, Transition, TransitionEffect, Trigger,
-    Trim, VALID_TRIGGER_KEYS, VAlign, Value, ValueKind, ValueSource, VarOp, VariableDef,
-    WEB_DEFAULT_ENTRY, WEB_MAX_BYTES, WEB_MAX_FILES, WebSource, builtin_variable_kind,
-    clamp_letter_spacing, clamp_lottie_speed, clamp_opacity, clamp_panel_offset, d500, d1000,
-    default_accent_color, default_background_color, default_bar_color, default_bar_text_color,
-    default_theme_font, default_theme_text_color, fill, format_timer_text, is_image_src,
-    is_language_tag_valid, is_safe_media_path, is_timer_remaining_variable_on, is_valid_link_url,
-    is_valid_trigger_key, is_valid_web_entry, is_valid_web_folder_path, is_valid_web_url,
-    normalize_rotation, normalize_table_fractions, path_frame_and_points, safe_clamp,
-    safe_clamp_ord, script_unsupported, snap_to_step, sort_and_repair_cues, table_cell_is_visible,
-    table_cell_owners, table_fraction_offsets, timer_id_for_remaining_variable,
-    timer_remaining_seconds, timer_remaining_variable, web_folder_within_caps,
+    RevealShape, RevisitMode, SCHEMA_VERSION, Scene, Scoring, ScrollBar, SeekMode,
+    SeekbarBehaviour, Sequence, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue,
+    SlidePlayerOverrides, SlideTarget, SlidesViewedTracking, StateDef, StateExtra, StateExtraKind,
+    TABLE_MAX_AXIS, TABLE_MAX_CELLS, TABLE_MIN_FRACTION, TableBorders, TableCell, TableRow,
+    TextDirection, TextInsets, TextRun, TextStyle, Theme, TimerFormat, Timing, TrackingSettings,
+    Transition, TransitionEffect, Trigger, Trim, VALID_TRIGGER_KEYS, VAlign, Value, ValueKind,
+    ValueSource, VarOp, VariableDef, WEB_DEFAULT_ENTRY, WEB_MAX_BYTES, WEB_MAX_FILES, WebSource,
+    builtin_variable_kind, clamp_letter_spacing, clamp_lottie_speed, clamp_opacity,
+    clamp_panel_offset, d500, d1000, default_accent_color, default_background_color,
+    default_bar_color, default_bar_text_color, default_theme_font, default_theme_text_color, fill,
+    format_timer_text, is_image_src, is_language_tag_valid, is_safe_media_path,
+    is_timer_remaining_variable_on, is_valid_link_url, is_valid_trigger_key, is_valid_web_entry,
+    is_valid_web_folder_path, is_valid_web_url, normalize_rotation, normalize_table_fractions,
+    path_frame_and_points, safe_clamp, safe_clamp_ord, script_unsupported, snap_to_step,
+    sort_and_repair_cues, table_cell_is_visible, table_cell_owners, table_fraction_offsets,
+    timer_id_for_remaining_variable, timer_remaining_seconds, timer_remaining_variable,
+    web_folder_within_caps,
 };
 pub use outline::{
     CourseOutline, MAX_BODY_LINES, MAX_CHOICES, MAX_LINE_BYTES, MAX_OUTLINE_SLIDES, OutlineChoice,

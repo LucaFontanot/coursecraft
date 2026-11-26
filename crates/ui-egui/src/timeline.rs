@@ -1119,6 +1119,15 @@ fn draw_bar_or_preview(
         let radius = CornerRadius::same(coursecraft_render::RADIUS_MD as u8);
         let bar_color = if is_selected { p.accent } else { p.pressed };
         painter.rect_filled(bar_rect, radius, bar_color);
+        paint_animation_marks(
+            editor,
+            painter,
+            oid,
+            bar_rect,
+            timing,
+            duration_ms,
+            &ms_to_x,
+        );
 
         if let Some((peaks, file_dur_ms, trim)) = audio_waveform_for_object(editor, oid)
             && !peaks.is_empty()
@@ -1179,6 +1188,56 @@ fn draw_bar_or_preview(
                 );
             }
         }
+    }
+}
+
+/// The object's animations as strips along the bottom of its bar (M46 phase 6): entrance
+/// green at the start, exit red at the end, each emphasis amber where it plays.
+fn paint_animation_marks(
+    editor: &Editor,
+    painter: &egui::Painter,
+    oid: &str,
+    bar_rect: Rect,
+    timing: &Timing,
+    duration_ms: u32,
+    ms_to_x: &dyn Fn(u32) -> f32,
+) {
+    let Some((obj, _)) = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .and_then(|s| s.object(oid))
+    else {
+        return;
+    };
+    let p = coursecraft_render::palette(painter.ctx());
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(bar_rect));
+    let strip = |from: u32, to: u32, color: Color32| {
+        let x0 = ms_to_x(from).max(bar_rect.min.x);
+        let x1 = ms_to_x(to).min(bar_rect.max.x).max(x0 + 2.0);
+        painter.rect_filled(
+            Rect::from_min_max(
+                pos2(x0, bar_rect.max.y - 4.0),
+                pos2(x1, bar_rect.max.y - 1.0),
+            ),
+            CornerRadius::same(1),
+            color,
+        );
+    };
+    let start = timing.start_ms;
+    let end = timing.end_ms.unwrap_or(duration_ms);
+    if let Some(a) = &obj.entrance {
+        strip(
+            start,
+            start.saturating_add(a.duration_ms).min(end),
+            p.success,
+        );
+    }
+    if let Some(a) = &obj.exit {
+        strip(end.saturating_sub(a.duration_ms).max(start), end, p.danger);
+    }
+    for e in &obj.emphasis {
+        strip(e.start_ms.max(start), e.end_ms().min(end), p.warning);
     }
 }
 

@@ -7,7 +7,6 @@ use coursecraft_course::{
     Align, Color, DashStyle, LineJoin, MarkerIcon, MeterStyle, Paragraph, ScrollBar, ShapeKind,
     Theme, TimerFormat, VAlign,
 };
-use egui::emath::Rot2;
 use egui::epaint::PathShape;
 use egui::{
     Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Rect, Stroke, StrokeKind, pos2,
@@ -1693,10 +1692,7 @@ fn paint_text_with_options(
         transform_painted_shapes(
             slide_painter,
             marker,
-            text_rect.center(),
-            rot_deg,
-            false,
-            false,
+            &crate::mesh_post::MeshPost::turn(text_rect.center(), rot_deg, false, false),
         );
     }
 }
@@ -2331,18 +2327,14 @@ fn transformed_bounds(rect: Rect, rotation: f32, flip_h: bool, flip_v: bool) -> 
     Rect::from_min_max(min, max)
 }
 
-/// Tessellate every shape painted after `marker`, rotate and mirror the meshes
-/// about `centre`, and replace the originals with the transformed meshes.
+/// Tessellate every shape painted after `marker`, run the meshes through `post` (scale,
+/// rotate, mirror, mask, tint), and replace the originals with the results.
 ///
-/// Text and images become textured meshes here too, so they rotate and mirror
-/// exactly like shapes. A single flip reverses the triangle winding.
-fn transform_painted_shapes(
+/// Text and images become textured meshes here too, so they change exactly like shapes.
+pub(crate) fn transform_painted_shapes(
     painter: &Painter,
     marker: egui::layers::ShapeIdx,
-    centre: egui::Pos2,
-    rotation: f32,
-    flip_h: bool,
-    flip_v: bool,
+    post: &crate::mesh_post::MeshPost<'_>,
 ) {
     let mut painted: Vec<(egui::layers::ShapeIdx, egui::epaint::ClippedShape)> = Vec::new();
     // `for_each_shape` does not expose the index, but entries are in order.
@@ -2361,38 +2353,18 @@ fn transform_painted_shapes(
     }
     painter.set(marker, egui::Shape::Noop);
 
-    let radians = if rotation.is_finite() {
-        rotation.to_radians()
-    } else {
-        0.0
-    };
-    let rot = Rot2::from_angle(radians);
-    let mirror = usize::from(flip_h) + usize::from(flip_v);
     let ppp = painter.pixels_per_point();
-    for (_, clipped) in painted {
+    for (_, mut clipped) in painted {
+        if post.scales() {
+            // Content is laid out larger or smaller than it shows; don't let tessellation
+            // cull parts that the scale brings back on screen. The painter clips the result.
+            clipped.clip_rect = Rect::EVERYTHING;
+        }
         for primitive in painter.ctx().tessellate(vec![clipped], ppp).into_iter() {
-            let egui::epaint::Primitive::Mesh(mut mesh) = primitive.primitive else {
+            let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive else {
                 continue;
             };
-            if radians != 0.0 {
-                mesh.rotate(rot, centre);
-            }
-            if flip_h || flip_v {
-                for vertex in &mut mesh.vertices {
-                    if flip_h {
-                        vertex.pos.x = 2.0 * centre.x - vertex.pos.x;
-                    }
-                    if flip_v {
-                        vertex.pos.y = 2.0 * centre.y - vertex.pos.y;
-                    }
-                }
-                if mirror == 1 {
-                    for triangle in mesh.indices.as_chunks_mut::<3>().0 {
-                        let [a, _, c] = triangle;
-                        std::mem::swap(a, c);
-                    }
-                }
-            }
+            let mesh = post.apply(mesh);
             if !mesh.is_empty() {
                 painter.add(egui::Shape::mesh(mesh));
             }
@@ -2446,14 +2418,49 @@ pub fn paint_items(
             pos2(item.rect.min.x + offset.0, item.rect.min.y + offset.1),
             item.rect.size(),
         );
-        let screen_rect = t.to_screen_rect(shifted_item_rect);
+        // `visual_rect` is where the item shows; `screen_rect` is where its content is laid
+        // out before the animation scale shrinks or grows the painted meshes onto it.
+        let visual_rect = t.to_screen_rect(shifted_item_rect);
+        let look = &item.anim;
+        let (anim_sx, anim_sy) = look.scale;
+        if !(anim_sx.is_finite() && anim_sy.is_finite()) || anim_sx < 1e-4 || anim_sy < 1e-4 {
+            continue;
+        }
+        let screen_rect = if look.scale == (1.0, 1.0) {
+            visual_rect
+        } else {
+            Rect::from_center_size(
+                visual_rect.center(),
+                vec2(
+                    visual_rect.width() / anim_sx,
+                    visual_rect.height() / anim_sy,
+                ),
+            )
+        };
         let op = item.opacity;
         let rotation = if item.rotation.is_finite() {
             item.rotation
         } else {
             0.0
         };
-        let transformed = rotation != 0.0 || item.flip_h || item.flip_v;
+        let animated = !look.is_identity();
+        let transformed = rotation != 0.0 || item.flip_h || item.flip_v || animated;
+        let mask_polys: Option<Vec<Vec<egui::Pos2>>> = look.mask.as_ref().map(|m| {
+            m.slide_polys(vec2(offset.0, offset.1))
+                .into_iter()
+                .map(|poly| poly.into_iter().map(|p| t.to_screen_pos(p)).collect())
+                .collect()
+        });
+        let post = crate::mesh_post::MeshPost {
+            centre: screen_rect.center(),
+            scale: look.scale,
+            rotation,
+            flip_h: item.flip_h,
+            flip_v: item.flip_v,
+            mask: mask_polys.as_deref(),
+            tint: look.tint,
+            opacity: 1.0,
+        };
 
         let mut item_painter = if let Some(frac) = item.clip {
             let sub_x = shifted_item_rect.min.x + frac.min_x * shifted_item_rect.width();
@@ -2465,7 +2472,7 @@ pub fn paint_items(
             let clip = if transformed {
                 let effect_margin = effect_margin(item, scale);
                 let bounds = transformed_bounds(
-                    screen_rect.expand(effect_margin),
+                    visual_rect.expand(effect_margin),
                     rotation,
                     item.flip_h,
                     item.flip_v,
@@ -2558,15 +2565,8 @@ pub fn paint_items(
                 if item.flip_h
                     && let Some(shape_marker) = marker.take()
                 {
-                    transform_painted_shapes(
-                        &item_painter,
-                        shape_marker,
-                        screen_rect.center(),
-                        rotation,
-                        item.flip_h,
-                        item.flip_v,
-                    );
-                    let text_marker = (rotation != 0.0 || item.flip_v)
+                    transform_painted_shapes(&item_painter, shape_marker, &post);
+                    let text_marker = (rotation != 0.0 || item.flip_v || animated)
                         .then(|| item_painter.add(egui::Shape::Noop));
                     paint_text_with_options(
                         &item_painter,
@@ -2588,10 +2588,7 @@ pub fn paint_items(
                         transform_painted_shapes(
                             &item_painter,
                             tm,
-                            screen_rect.center(),
-                            rotation,
-                            false,
-                            item.flip_v,
+                            &post.with_flips(false, item.flip_v),
                         );
                     }
                 } else {
@@ -2829,16 +2826,9 @@ pub fn paint_items(
                     if item.flip_h
                         && let Some(shape_marker) = marker.take()
                     {
-                        transform_painted_shapes(
-                            &item_painter,
-                            shape_marker,
-                            screen_rect.center(),
-                            rotation,
-                            item.flip_h,
-                            item.flip_v,
-                        );
+                        transform_painted_shapes(&item_painter, shape_marker, &post);
                     }
-                    let text_marker = (item.flip_h && (rotation != 0.0 || item.flip_v))
+                    let text_marker = (item.flip_h && (rotation != 0.0 || item.flip_v || animated))
                         .then(|| item_painter.add(egui::Shape::Noop));
                     let (tx, ty, tw, th) = shape_text_rect(
                         *shape,
@@ -2876,10 +2866,7 @@ pub fn paint_items(
                         transform_painted_shapes(
                             &item_painter,
                             tm,
-                            screen_rect.center(),
-                            rotation,
-                            false,
-                            item.flip_v,
+                            &post.with_flips(false, item.flip_v),
                         );
                     }
                 }
@@ -2931,16 +2918,9 @@ pub fn paint_items(
                     if item.flip_h
                         && let Some(shape_marker) = marker.take()
                     {
-                        transform_painted_shapes(
-                            &item_painter,
-                            shape_marker,
-                            screen_rect.center(),
-                            rotation,
-                            item.flip_h,
-                            item.flip_v,
-                        );
+                        transform_painted_shapes(&item_painter, shape_marker, &post);
                     }
-                    let text_marker = (item.flip_h && (rotation != 0.0 || item.flip_v))
+                    let text_marker = (item.flip_h && (rotation != 0.0 || item.flip_v || animated))
                         .then(|| item_painter.add(egui::Shape::Noop));
                     paint_text_with_options(
                         &item_painter,
@@ -2962,10 +2942,7 @@ pub fn paint_items(
                         transform_painted_shapes(
                             &item_painter,
                             tm,
-                            screen_rect.center(),
-                            rotation,
-                            false,
-                            item.flip_v,
+                            &post.with_flips(false, item.flip_v),
                         );
                     }
                 }
@@ -3583,14 +3560,7 @@ pub fn paint_items(
         }
 
         if let Some(marker) = marker {
-            transform_painted_shapes(
-                &item_painter,
-                marker,
-                screen_rect.center(),
-                rotation,
-                item.flip_h,
-                item.flip_v,
-            );
+            transform_painted_shapes(&item_painter, marker, &post);
         }
     }
 }

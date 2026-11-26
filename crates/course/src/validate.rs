@@ -3299,6 +3299,11 @@ fn check_state_extras(course: &Course, cx: &mut Ctx<'_>, extras: &[crate::StateE
 }
 
 fn check_object_animations(cx: &mut Ctx<'_>, o: &Object) {
+    for (which, anim) in [("entrance", &o.entrance), ("exit", &o.exit)] {
+        if let Some(anim) = anim {
+            check_anim_effect(cx, which, &anim.effect);
+        }
+    }
     if let Some(ref anim) = o.entrance
         && (anim.duration_ms == 0 || anim.duration_ms > 60000)
     {
@@ -3313,6 +3318,61 @@ fn check_object_animations(cx: &mut Ctx<'_>, o: &Object) {
         cx.err_at(
             "exit/duration_ms",
             "animation duration_ms must be 1..=60000",
+        );
+    }
+    if o.emphasis.len() > crate::MAX_EMPHASIS_PER_OBJECT {
+        cx.err_at(
+            "emphasis",
+            format!(
+                "an object has at most {} emphasis animations",
+                crate::MAX_EMPHASIS_PER_OBJECT
+            ),
+        );
+    }
+    for (i, e) in o.emphasis.iter().enumerate() {
+        if e.effect.def().is_none() {
+            cx.warn_at(
+                &format!("emphasis/{i}/effect/type"),
+                format!(
+                    "unknown emphasis effect `{}`; it plays as `{}`",
+                    e.effect.id,
+                    crate::FALLBACK_EMPHASIS
+                ),
+            );
+        }
+        if e.duration_ms == 0 || e.duration_ms > 60000 {
+            cx.err_at(
+                &format!("emphasis/{i}/duration_ms"),
+                "emphasis duration_ms must be 1..=60000",
+            );
+        }
+        if e.repeat == 0 || e.repeat > crate::MAX_EMPHASIS_REPEAT {
+            cx.err_at(
+                &format!("emphasis/{i}/repeat"),
+                format!("emphasis repeat must be 1..={}", crate::MAX_EMPHASIS_REPEAT),
+            );
+        }
+    }
+}
+
+/// Unknown effect ids and options the effect does not take are warnings: the file still
+/// plays (an unknown effect as a fade, an extra option ignored).
+fn check_anim_effect(cx: &mut Ctx<'_>, which: &str, effect: &crate::AnimEffect) {
+    let Some(def) = effect.def() else {
+        cx.warn_at(
+            &format!("{which}/effect/type"),
+            format!(
+                "unknown animation effect `{}`; it plays as `{}`",
+                effect.id,
+                crate::FALLBACK_EFFECT
+            ),
+        );
+        return;
+    };
+    for (field, message) in def.option_problems(effect) {
+        cx.warn_at(
+            &format!("{which}/effect/{field}"),
+            format!("{message}; it plays with the default"),
         );
     }
 }

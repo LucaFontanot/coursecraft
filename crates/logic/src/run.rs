@@ -4546,7 +4546,7 @@ fn answers_equal(entry: &str, accepted: &str, case_sensitive: bool) -> bool {
 fn point_in_sampled_frame(
     frame: coursecraft_course::Rect,
     offset: (f32, f32),
-    scale: f32,
+    scale: (f32, f32),
     x: f32,
     y: f32,
 ) -> bool {
@@ -4558,17 +4558,19 @@ fn point_in_sampled_frame(
         || !frame.h.is_finite()
         || !offset.0.is_finite()
         || !offset.1.is_finite()
-        || !scale.is_finite()
+        || !scale.0.is_finite()
+        || !scale.1.is_finite()
         || frame.w < 0.0
         || frame.h < 0.0
-        || scale < 0.0
+        || scale.0 < 0.0
+        || scale.1 < 0.0
     {
         return false;
     }
     let cx = frame.x + offset.0 + frame.w * 0.5;
     let cy = frame.y + offset.1 + frame.h * 0.5;
-    let hw = (frame.w * scale * 0.5).abs();
-    let hh = (frame.h * scale * 0.5).abs();
+    let hw = (frame.w * scale.0 * 0.5).abs();
+    let hh = (frame.h * scale.1 * 0.5).abs();
     x >= cx - hw && x <= cx + hw && y >= cy - hh && y <= cy + hh
 }
 

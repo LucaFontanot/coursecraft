@@ -107,6 +107,7 @@ pub(super) fn object_add(s: &mut Session, p: &Json) -> Result<Json> {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         states: Vec::new(),
         initial_state: "normal".into(),
         focus_order: None,

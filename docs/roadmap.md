@@ -463,8 +463,8 @@ form view, feedback and scoring by choice, media per choice and feedback.
 
 ## M42 Animation and timeline depth (planned)
 
-Full entrance/exit gallery, emphasis animations, animation painter, sequence by paragraph with
-build steps on the timeline, transition effect options and Apply to All, path options, camera
+The effects themselves (full entrance/exit gallery, emphasis, animation painter, sequence by
+paragraph, transition effects) moved to M46. Here: path options, camera
 zoom, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
 C adds a cue point while playing, Course Map scene collapse and branch lines.
 
@@ -492,6 +492,60 @@ Plan: `docs/testing/m45-plan.md`; report: `docs/testing/m45-report.md`. Briefs a
 - `.ccraft` file association on Windows and Linux; Intel Mac dmg built by the release workflow.
 - The Fill toggle restores the previous colour; trimming an audio bar on the timeline stops the audio at the bar end.
 - Released as 0.5.2 with the media read errors, `course.json` media folder and Theme font picker fixes.
+
+## M46 Animation system (in progress)
+
+Plan: `docs/plans/m46-animation-system.md`. One effect registry that the player, renderer,
+editor, validator, CLI and MCP all read; more effects with icons for each effect and option; a
+rebuilt Animations panel; live preview on the canvas.
+
+- Phase 1 (registry, no visible change) **built (2026-11-25)**: `coursecraft-course::effects`
+  (`EFFECTS`, `EffectDef`, `effect_def`), `AnimEffect` is a registry id plus typed options (same
+  JSON), `coursecraft-logic::effects` (one sample function per id, tests that the two tables
+  match), the ribbon galleries and the Animate inspector list effects from the registry, the
+  `animation.effects` command, and `object.set_animation` refuses unknown effects and options.
+  Unknown ids in a file warn and play as Fade.
+- Phase 2 (renderer) **built (2026-11-25)**: animation samples carry x/y scale, rotation, tint
+  and shaped masks (convex polygons). The renderer applies them in one mesh pass
+  (`coursecraft-render` `mesh_post`: scale, turn, flip, Sutherland–Hodgman clip, tint) on the
+  player, the editor's timeline preview and offscreen renders; scaled text shrinks instead of
+  rewrapping. Pixel tests cover each part, and every effect ends pixel-identical to its resting
+  object. No effect uses the new parts yet.
+- Phase 3 (effect pack 1) **built (2026-11-25)**: 25 effects (Appear, Fade, Grow, Fly, Float,
+  Split, Wipe, Shape, Wheel, Random bars, Zoom, Dissolve, Blinds, Peek, Expand, Rise up, Spin,
+  Spin & grow, Grow & turn, Checkerboard, Strips, Flip, Swivel, Bounce, Pop), each also an exit.
+  Directions gain the four corners. New options: shape, in/out, spokes, orientation. The Animate
+  inspector shows every option the effect takes, and PowerPoint import maps the matching presets
+  instead of falling back to Fade.
+- Phase 4 (icons) **built (2026-11-26)**: every gallery tile draws its effect by running the
+  effect's own sample function on a small card (a ghost trail for movement, the mask for
+  reveals), green for entrances and red for exits, playing in a loop on hover. Effect Options ▾
+  of the Entrance and Exit galleries is built from the registry: a compass of arrows for
+  directions and rows with Phosphor icons for shape, in/out, spokes and orientation.
+- Phase 5 (Animations panel and canvas preview) **built (2026-11-26)**: the Animate inspector's
+  Entrance and Exit cards (effect picker with drawn icons, search, Recent and category headers;
+  icon buttons per option; Duration in seconds; Easing as curves; ▶ Preview; Remove) and a live
+  preview on the canvas through the player's sampler: once on ▶ or a pick, looping while an effect
+  tile is hovered in the ribbon or the picker, stopped by a click on the slide or a new selection.
+  Auto-preview turns the automatic previews off.
+- Phase 6 (emphasis and Animation Painter) **built (2026-11-26)**: `Object.emphasis` (12 effects:
+  Pulse, Grow and shrink, Teeter, Spin, Shake, Heartbeat, Jump, Blink, Transparency, Darken, Lighten,
+  Colour pulse) with start, duration and repeat, layered over the entrance or exit at runtime;
+  `object.add_emphasis`, `object.set_emphasis`, `object.remove_emphasis` and
+  `object.copy_animation`; the Emphasis gallery in the ribbon, the Emphasis card in the Animate
+  inspector, amber, green and red strips on timeline bars, and the Animation Painter.
+- Phase 7 (sequence and easings) **built (2026-11-26)**: entrances and exits play as one, by
+  paragraph or by letter (`Animation.sequence`) inside their duration; the renderer splits the
+  text into parts that keep its layout. New easings: Overshoot, Bounce, Elastic. Sequence in
+  Effect Options and the Animate cards; the easing picker shows all seven as curves.
+- Phase 8 (transitions pack) **built (2026-11-26)**: 15 slide transitions (Fade, Fade through
+  black, Push, Cover, Uncover, Reveal, Wipe, Split, Zoom, Shape, Clock, Dissolve, Random bars,
+  Blinds, Checkerboard) from a registry; mask transitions reuse the entrance effects' masks on the
+  whole slide; the player draws each slide through one mesh pass (offset, opacity, scale, mask).
+  The gallery draws every transition; Effect Options and the Slide inspector show its options
+  with icons; Apply To All was already there.
+- Next: the follow-ups listed in the plan (emphasis trigger action, by word, PowerPoint emphasis
+  and build import, 3-D transitions).
 
 ## After the first release
 

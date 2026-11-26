@@ -187,6 +187,8 @@ pub enum UiAction {
     Cut,
     Copy,
     FormatPainter,
+    /// Animations › Animation Painter: copy entrance, exit and emphasis onto other objects.
+    AnimationPainter,
     NewSlide,
     NewScene,
     DuplicateSlide,
@@ -289,6 +291,8 @@ pub enum Gallery {
     Transitions,
     Entrance,
     Exit,
+    /// Emphasis: a pick adds one (it never shows as selected).
+    Emphasis,
 }
 
 /// What an effect option acts on.
@@ -402,6 +406,9 @@ pub enum UiMenu {
     Callouts,
     /// Question ▾ (the question kinds).
     Questions,
+    /// Effect Options ▾ of the Transitions, Entrance or Exit gallery, built from the registries
+    /// (`gallery::effect_options_menu`).
+    EffectOptions(Motion),
 }
 
 /// Why a control whose feature exists is not wired to the ribbon yet (M37 step 2).
@@ -1888,68 +1895,6 @@ const DESIGN: &[Group] = &[
 // Transitions
 // ---------------------------------------------------------------------------
 
-const fn from_menu(ids: [&'static str; 4], motion: Motion) -> [Item; 4] {
-    use coursecraft_course::Direction;
-    [
-        item(
-            ids[0],
-            "From Left",
-            Icon::ArrowRight,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Left))),
-        ),
-        item(
-            ids[1],
-            "From Right",
-            Icon::ArrowLeft,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Right))),
-        ),
-        item(
-            ids[2],
-            "From Top",
-            Icon::ArrowDown,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Top))),
-        ),
-        item(
-            ids[3],
-            "From Bottom",
-            Icon::ArrowUp,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Bottom))),
-        ),
-    ]
-}
-
-const TRANSITION_FROM: [Item; 4] = from_menu(
-    [
-        "transitions.from_left",
-        "transitions.from_right",
-        "transitions.from_top",
-        "transitions.from_bottom",
-    ],
-    Motion::Transition,
-);
-const ENTRANCE_FROM: [Item; 4] = from_menu(
-    [
-        "animations.entrance_left",
-        "animations.entrance_right",
-        "animations.entrance_top",
-        "animations.entrance_bottom",
-    ],
-    Motion::Entrance,
-);
-const EXIT_FROM: [Item; 4] = from_menu(
-    [
-        "animations.exit_left",
-        "animations.exit_right",
-        "animations.exit_top",
-        "animations.exit_bottom",
-    ],
-    Motion::Exit,
-);
-
 const TRANSITIONS: &[Group] = &[
     Group {
         id: "transitions.to_this_slide",
@@ -1975,7 +1920,7 @@ const TRANSITIONS: &[Group] = &[
                 Icon::SlidersHorizontal,
                 LargeSplit,
                 Ui(UiAction::Effect(EffectOp::Options(Motion::Transition))),
-                Menu::Items(&TRANSITION_FROM),
+                Menu::Ui(UiMenu::EffectOptions(Motion::Transition)),
             ),
         ],
     },
@@ -2020,7 +1965,7 @@ const ANIMATIONS: &[Group] = &[
             "Animation Painter",
             Icon::PaintBrush,
             Large,
-            NotYet("the Animation Painter"),
+            Ui(UiAction::AnimationPainter),
         )],
     },
     Group {
@@ -2044,7 +1989,7 @@ const ANIMATIONS: &[Group] = &[
                 Icon::SlidersHorizontal,
                 SmallSplit,
                 Ui(UiAction::Effect(EffectOp::Options(Motion::Entrance))),
-                Menu::Items(&ENTRANCE_FROM),
+                Menu::Ui(UiMenu::EffectOptions(Motion::Entrance)),
             ),
             item(
                 "animations.entrance_duration",
@@ -2076,7 +2021,7 @@ const ANIMATIONS: &[Group] = &[
                 Icon::SlidersHorizontal,
                 SmallSplit,
                 Ui(UiAction::Effect(EffectOp::Options(Motion::Exit))),
-                Menu::Items(&EXIT_FROM),
+                Menu::Ui(UiMenu::EffectOptions(Motion::Exit)),
             ),
             item(
                 "animations.exit_duration",
@@ -2091,12 +2036,15 @@ const ANIMATIONS: &[Group] = &[
         id: "animations.emphasis",
         label: "Emphasis Animations",
         launcher: None,
-        items: &[item(
-            "animations.emphasis",
-            "Add Emphasis Animation",
-            Icon::Sparkle,
-            LargeSplit,
-            NotYet("emphasis animations"),
+        items: &[helped(
+            item(
+                "animations.emphasis",
+                "Add Emphasis Animation",
+                Icon::Sparkle,
+                Kind::Gallery { tiles: 4 },
+                Ui(UiAction::Gallery(Gallery::Emphasis)),
+            ),
+            "Add an emphasis to the selected objects, at the playhead.",
         )],
     },
     Group {

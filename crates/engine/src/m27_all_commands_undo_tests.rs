@@ -41,6 +41,7 @@ fn base_object(id: &str, kind: ObjectKind, frame: Rect) -> Object {
         entrance: None,
         exit: None,
         motion_paths: Vec::new(),
+        emphasis: Vec::new(),
         focus_order: None,
         decorative: false,
         description: None,
@@ -394,6 +395,7 @@ fn fixture_session() -> Session {
         easing: Default::default(),
         relative: true,
     }];
+    obj_shape.emphasis = vec![coursecraft_course::Emphasis::new("pulse", 0)];
 
     let obj_shape2 = make_shape_obj("obj_shape2", 200.0, 40.0, 100.0, 60.0, "#445566");
     let obj_shape3 = make_shape_obj("obj_shape3", 360.0, 40.0, 100.0, 60.0, "#445566");
@@ -1315,6 +1317,22 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         (
             "object.set_animation",
             json!({ "slide": "slide1", "object": "obj_shape", "which": "entrance", "animation": { "effect": { "type": "fade" }, "duration_ms": 500 } }),
+        ),
+        (
+            "object.add_emphasis",
+            json!({ "slide": "slide1", "object": "obj_shape2", "effect": "shake", "start_ms": 500 }),
+        ),
+        (
+            "object.set_emphasis",
+            json!({ "slide": "slide1", "object": "obj_shape", "index": 0, "emphasis": { "effect": { "type": "spin" }, "start_ms": 200, "duration_ms": 800 } }),
+        ),
+        (
+            "object.remove_emphasis",
+            json!({ "slide": "slide1", "object": "obj_shape", "index": 0 }),
+        ),
+        (
+            "object.copy_animation",
+            json!({ "slide": "slide1", "from": "obj_shape", "objects": ["obj_shape2", "obj_shape3"] }),
         ),
         (
             "object.add_motion_path",

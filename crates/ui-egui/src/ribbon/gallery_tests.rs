@@ -2,7 +2,7 @@
 //! Transitions, Animations).
 
 use crate::test_harness::TestHarness;
-use coursecraft_course::{AnimEffect, Course, Direction, TransitionEffect};
+use coursecraft_course::{Course, Direction, TransitionEffect};
 
 fn frames(h: &mut TestHarness, n: usize) {
     for _ in 0..n {
@@ -96,9 +96,10 @@ fn the_entrance_gallery_animates_the_selected_object() {
     let mut h = harness();
     h.editor.selection.object = Some("sh1".into());
     open_tab(&mut h, "animations");
-    let tiles = h.find_texts("Fly In");
-    let fly = tiles.first().copied().expect("Fly In tile");
-    h.click_at(fly);
+    // Fade is near the start of the gallery, so its tile is always in view.
+    let tiles = h.find_texts("Fade in");
+    let fade = tiles.first().copied().expect("Fade in tile");
+    h.click_at(fade);
     frames(&mut h, 2);
     let object = |h: &TestHarness| {
         h.editor
@@ -111,9 +112,9 @@ fn the_entrance_gallery_animates_the_selected_object() {
     };
     assert!(matches!(
         object(&h).entrance.map(|a| a.effect),
-        Some(AnimEffect::FlyIn { .. })
+        Some(e) if e.id == "fade"
     ));
-    assert!(object(&h).exit.is_none(), "the first Fly In is Entrance");
+    assert!(object(&h).exit.is_none(), "the first Fade in is Entrance");
 }
 
 #[test]
@@ -127,5 +128,284 @@ fn galleries_say_why_they_are_off() {
         )
         .is_err(),
         "no transition yet"
+    );
+}
+
+/// Give the shape `sh1` an entrance of `effect` (registry defaults).
+fn with_entrance(h: &mut TestHarness, effect: &str) {
+    h.editor.selection.object = Some("sh1".into());
+    h.editor.run(
+        "object.set_animation",
+        serde_json::json!({
+            "slide": "sl1", "object": "sh1", "which": "entrance",
+            "animation": {
+                "effect": coursecraft_course::AnimEffect::new(effect),
+                "duration_ms": 500
+            }
+        }),
+    );
+    frames(h, 2);
+}
+
+fn entrance_effect(h: &TestHarness) -> coursecraft_course::AnimEffect {
+    h.editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("sh1"))
+        .and_then(|(o, _)| o.entrance.clone())
+        .map(|a| a.effect)
+        .expect("an entrance")
+}
+
+#[test]
+fn effect_options_follow_the_registry() {
+    use super::effect_art::OptionValue;
+    use super::spec::{EffectOp, Motion};
+    let mut h = harness();
+    with_entrance(&mut h, "fade");
+    assert!(
+        super::gallery::effect_available(&h.editor, EffectOp::Options(Motion::Entrance)).is_err(),
+        "Fade has no options"
+    );
+    with_entrance(&mut h, "shape");
+    assert!(
+        super::gallery::effect_available(&h.editor, EffectOp::Options(Motion::Entrance)).is_ok()
+    );
+    super::gallery::set_option(
+        &mut h.editor,
+        Motion::Entrance,
+        OptionValue::Shape(coursecraft_course::RevealShape::Diamond),
+    );
+    assert_eq!(
+        entrance_effect(&h).shape(),
+        Some(coursecraft_course::RevealShape::Diamond)
+    );
+    // An option the effect doesn't take changes nothing.
+    let before = entrance_effect(&h);
+    super::gallery::set_option(&mut h.editor, Motion::Entrance, OptionValue::Spokes(3));
+    assert_eq!(entrance_effect(&h), before);
+}
+
+#[test]
+fn the_effect_options_menu_sets_an_option() {
+    let mut h = harness();
+    with_entrance(&mut h, "shape");
+    open_tab(&mut h, "animations");
+    let before = h.find_texts("Shape").len();
+    let options = h.find_texts("Effect Options");
+    let first = options.first().copied().expect("Effect Options");
+    h.click_at(first);
+    frames(&mut h, 3);
+    assert!(
+        h.find_texts("Shape").len() > before,
+        "the menu opens with its Shape section"
+    );
+    let diamond = h.find_text_last("Diamond").expect("Diamond row");
+    h.click_at(diamond);
+    frames(&mut h, 2);
+    assert_eq!(
+        entrance_effect(&h).shape(),
+        Some(coursecraft_course::RevealShape::Diamond)
+    );
+    assert!(h.find_text("Diamond").is_none(), "the menu closes");
+}
+
+#[test]
+fn the_emphasis_gallery_adds_an_emphasis_at_the_playhead() {
+    let mut h = harness();
+    h.editor.selection.object = Some("sh1".into());
+    h.editor.ui.timeline.playhead_ms = 1500;
+    open_tab(&mut h, "animations");
+    let pulse = h.find_texts("Pulse");
+    let tile = pulse.first().copied().expect("Pulse tile");
+    h.click_at(tile);
+    frames(&mut h, 2);
+    let emphasis = h
+        .editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("sh1"))
+        .map(|(o, _)| o.emphasis.clone())
+        .expect("shape");
+    assert_eq!(emphasis.len(), 1);
+    assert_eq!(emphasis[0].effect.id, "pulse");
+    assert_eq!(emphasis[0].start_ms, 1500);
+    assert!(h.editor.ui.anim_preview.is_playing(), "a pick plays it");
+}
+
+#[test]
+fn the_animation_painter_copies_animations_onto_a_clicked_object() {
+    let json = serde_json::json!({
+        "schema_version": 1, "id": "ap", "title": "Painter",
+        "slide_size": { "w": 1000, "h": 600 },
+        "scenes": [{ "id": "sc1", "title": "Scene 1", "slides": [
+            { "id": "sl1", "title": "One", "duration_ms": 5000, "objects": [
+                { "id": "src", "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                  "frame": { "x": 100, "y": 100, "w": 200, "h": 120 },
+                  "entrance": { "effect": { "type": "wipe" }, "duration_ms": 700 },
+                  "emphasis": [{ "effect": { "type": "shake" }, "start_ms": 1000 }] },
+                { "id": "dst", "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+                  "frame": { "x": 600, "y": 100, "w": 200, "h": 120 } }
+            ] }
+        ] }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid course");
+    let mut h = TestHarness::new_with_size(course, (2400.0, 900.0));
+    h.editor.ui.ribbon.visible = true;
+    h.editor.selection = crate::Selection::new("sl1");
+    h.editor.selection.object = Some("src".into());
+    frames(&mut h, 2);
+    h.editor.arm_animation_painter(false);
+    assert!(h.editor.animation_painter_armed());
+    h.editor.apply_format_painter(&["dst".to_owned()]);
+    let dst = h
+        .editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("dst"))
+        .map(|(o, _)| o.clone())
+        .expect("dst");
+    assert_eq!(dst.entrance.map(|a| a.effect.id), Some("wipe".to_owned()));
+    assert_eq!(dst.emphasis.len(), 1);
+    assert!(h.editor.ui.format_painter.is_none(), "one use disarms");
+    // The ribbon button reports why it is off with nothing selected.
+    h.editor.selection.clear_objects();
+    assert!(
+        super::availability(
+            &h.editor,
+            super::spec::Action::Ui(super::spec::UiAction::AnimationPainter),
+            None
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn effect_options_offer_a_sequence_for_text() {
+    use super::spec::{EffectOp, Motion};
+    let json = serde_json::json!({
+        "schema_version": 1, "id": "sq", "title": "Sequence",
+        "slide_size": { "w": 1000, "h": 600 },
+        "scenes": [{ "id": "sc1", "title": "Scene 1", "slides": [
+            { "id": "sl1", "title": "One", "duration_ms": 5000, "objects": [
+                { "id": "tx", "kind": { "type": "text", "text": "One\nTwo" },
+                  "frame": { "x": 100, "y": 100, "w": 300, "h": 120 },
+                  "entrance": { "effect": { "type": "fade" }, "duration_ms": 800 } }
+            ] }
+        ] }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid course");
+    let mut h = TestHarness::new_with_size(course, (2400.0, 900.0));
+    h.editor.ui.ribbon.visible = true;
+    h.editor.selection = crate::Selection::new("sl1");
+    h.editor.selection.object = Some("tx".into());
+    frames(&mut h, 2);
+    // Fade has no options, but text can play by paragraph.
+    assert!(
+        super::gallery::effect_available(&h.editor, EffectOp::Options(Motion::Entrance)).is_ok()
+    );
+    open_tab(&mut h, "animations");
+    let options = h.find_texts("Effect Options");
+    h.click_at(options.first().copied().expect("Effect Options"));
+    frames(&mut h, 3);
+    let by_paragraph = h.find_text_last("By paragraph").expect("By paragraph row");
+    h.click_at(by_paragraph);
+    frames(&mut h, 2);
+    let a = h
+        .editor
+        .session
+        .course
+        .slide("sl1")
+        .and_then(|s| s.object("tx"))
+        .and_then(|(o, _)| o.entrance.clone())
+        .expect("entrance");
+    assert_eq!(a.sequence, coursecraft_course::Sequence::ByParagraph);
+    assert_eq!(a.duration_ms, 800, "the rest is kept");
+}
+
+#[test]
+fn the_transitions_gallery_lists_the_registry_and_keeps_options() {
+    use coursecraft_course::{Direction, RevealShape};
+    let mut h = harness();
+    let tiles = super::gallery::tiles(&h.editor, super::spec::Gallery::Transitions);
+    assert_eq!(
+        tiles.len(),
+        coursecraft_course::TRANSITIONS.len() + 1,
+        "None plus each"
+    );
+    let index = |id: &str| {
+        coursecraft_course::TRANSITIONS
+            .iter()
+            .position(|d| d.id == id)
+            .map(|i| i + 1)
+            .expect("known")
+    };
+    let effect = |h: &TestHarness| {
+        h.editor
+            .session
+            .course
+            .slide("sl1")
+            .and_then(|s| s.transition.clone())
+            .map(|t| t.effect)
+    };
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("push"),
+    );
+    super::gallery::run_effect(
+        &mut h.editor,
+        super::spec::EffectOp::From(super::spec::Motion::Transition, Direction::TopLeft),
+    );
+    // Wipe keeps the corner Push had.
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("wipe"),
+    );
+    assert_eq!(
+        effect(&h),
+        Some(TransitionEffect::Wipe {
+            from: Direction::TopLeft
+        })
+    );
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("shape"),
+    );
+    assert!(
+        super::gallery::effect_available(
+            &h.editor,
+            super::spec::EffectOp::Options(super::spec::Motion::Transition)
+        )
+        .is_ok()
+    );
+    super::gallery::set_transition_option(
+        &mut h.editor,
+        super::effect_art::OptionValue::Shape(RevealShape::Diamond),
+    );
+    assert!(matches!(
+        effect(&h),
+        Some(TransitionEffect::Shape {
+            shape: RevealShape::Diamond,
+            ..
+        })
+    ));
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("dissolve"),
+    );
+    assert!(
+        super::gallery::effect_available(
+            &h.editor,
+            super::spec::EffectOp::Options(super::spec::Motion::Transition)
+        )
+        .is_err(),
+        "Dissolve has no options"
     );
 }

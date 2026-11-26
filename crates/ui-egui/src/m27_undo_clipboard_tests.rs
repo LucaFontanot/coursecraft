@@ -159,7 +159,8 @@ fn d5_2_non_mutating_commands_and_noop_mutations_do_not_touch_undo_or_redo() {
     {
         let params = match spec.id {
             "course.info" | "course.validate" | "course.audit" | "course.summary"
-            | "course.map" | "edit.history" | "history.info" | "commands.list" => {
+            | "course.map" | "edit.history" | "history.info" | "commands.list"
+            | "animation.effects" => {
                 serde_json::json!({})
             }
             "course.export_xliff" => serde_json::json!({ "target_language": "fr" }),
