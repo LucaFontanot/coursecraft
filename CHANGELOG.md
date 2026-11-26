@@ -6,6 +6,8 @@ What changed in each release, newest first. Versions follow [semantic versioning
 
 The Download and What's new buttons in the update window now work, plus text and formatting gaps (M39) and two fixes from GitHub issues.
 
+Thanks to apomultimedia70, who reported the Triggers and Layers issues fixed in this release (#11 and #12).
+
 **Text formatting**
 - Highlight colour and text shadow for any part of the text, from Home › Font and the Text panel. PowerPoint import brings in highlights and text shadows.
 - Clear Formatting removes character formatting from the selection and keeps links.
