@@ -969,6 +969,7 @@ fn course_with_image() -> Course {
             entrance: None,
             exit: None,
             motion_paths: Vec::new(),
+            emphasis: Vec::new(),
             focus_order: None,
             decorative: false,
             description: None,
