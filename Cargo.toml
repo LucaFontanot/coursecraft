@@ -93,6 +93,10 @@ wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
 
+# Our own crates keep file and line numbers for backtraces, without full debug info.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
