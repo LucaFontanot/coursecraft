@@ -406,7 +406,7 @@ pub enum UiMenu {
     Callouts,
     /// Question ▾ (the question kinds).
     Questions,
-    /// Effect Options ▾ of the Entrance or Exit gallery, built from the effect registry
+    /// Effect Options ▾ of the Transitions, Entrance or Exit gallery, built from the registries
     /// (`gallery::effect_options_menu`).
     EffectOptions(Motion),
 }
@@ -1895,50 +1895,6 @@ const DESIGN: &[Group] = &[
 // Transitions
 // ---------------------------------------------------------------------------
 
-const fn from_menu(ids: [&'static str; 4], motion: Motion) -> [Item; 4] {
-    use coursecraft_course::Direction;
-    [
-        item(
-            ids[0],
-            "From Left",
-            Icon::ArrowRight,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Left))),
-        ),
-        item(
-            ids[1],
-            "From Right",
-            Icon::ArrowLeft,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Right))),
-        ),
-        item(
-            ids[2],
-            "From Top",
-            Icon::ArrowDown,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Top))),
-        ),
-        item(
-            ids[3],
-            "From Bottom",
-            Icon::ArrowUp,
-            Small,
-            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Bottom))),
-        ),
-    ]
-}
-
-const TRANSITION_FROM: [Item; 4] = from_menu(
-    [
-        "transitions.from_left",
-        "transitions.from_right",
-        "transitions.from_top",
-        "transitions.from_bottom",
-    ],
-    Motion::Transition,
-);
-
 const TRANSITIONS: &[Group] = &[
     Group {
         id: "transitions.to_this_slide",
@@ -1964,7 +1920,7 @@ const TRANSITIONS: &[Group] = &[
                 Icon::SlidersHorizontal,
                 LargeSplit,
                 Ui(UiAction::Effect(EffectOp::Options(Motion::Transition))),
-                Menu::Items(&TRANSITION_FROM),
+                Menu::Ui(UiMenu::EffectOptions(Motion::Transition)),
             ),
         ],
     },

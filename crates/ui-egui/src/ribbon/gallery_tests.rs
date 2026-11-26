@@ -325,3 +325,87 @@ fn effect_options_offer_a_sequence_for_text() {
     assert_eq!(a.sequence, coursecraft_course::Sequence::ByParagraph);
     assert_eq!(a.duration_ms, 800, "the rest is kept");
 }
+
+#[test]
+fn the_transitions_gallery_lists_the_registry_and_keeps_options() {
+    use coursecraft_course::{Direction, RevealShape};
+    let mut h = harness();
+    let tiles = super::gallery::tiles(&h.editor, super::spec::Gallery::Transitions);
+    assert_eq!(
+        tiles.len(),
+        coursecraft_course::TRANSITIONS.len() + 1,
+        "None plus each"
+    );
+    let index = |id: &str| {
+        coursecraft_course::TRANSITIONS
+            .iter()
+            .position(|d| d.id == id)
+            .map(|i| i + 1)
+            .expect("known")
+    };
+    let effect = |h: &TestHarness| {
+        h.editor
+            .session
+            .course
+            .slide("sl1")
+            .and_then(|s| s.transition.clone())
+            .map(|t| t.effect)
+    };
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("push"),
+    );
+    super::gallery::run_effect(
+        &mut h.editor,
+        super::spec::EffectOp::From(super::spec::Motion::Transition, Direction::TopLeft),
+    );
+    // Wipe keeps the corner Push had.
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("wipe"),
+    );
+    assert_eq!(
+        effect(&h),
+        Some(TransitionEffect::Wipe {
+            from: Direction::TopLeft
+        })
+    );
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("shape"),
+    );
+    assert!(
+        super::gallery::effect_available(
+            &h.editor,
+            super::spec::EffectOp::Options(super::spec::Motion::Transition)
+        )
+        .is_ok()
+    );
+    super::gallery::set_transition_option(
+        &mut h.editor,
+        super::effect_art::OptionValue::Shape(RevealShape::Diamond),
+    );
+    assert!(matches!(
+        effect(&h),
+        Some(TransitionEffect::Shape {
+            shape: RevealShape::Diamond,
+            ..
+        })
+    ));
+    super::gallery::apply(
+        &mut h.editor,
+        super::spec::Gallery::Transitions,
+        index("dissolve"),
+    );
+    assert!(
+        super::gallery::effect_available(
+            &h.editor,
+            super::spec::EffectOp::Options(super::spec::Motion::Transition)
+        )
+        .is_err(),
+        "Dissolve has no options"
+    );
+}

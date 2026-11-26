@@ -2,9 +2,9 @@
 
 use crate::Editor;
 use coursecraft_course::{
-    Align, AnimEffect, Autofit, Color, Course, Direction, Easing, Glow, ListKind, ObjectKind,
-    Paragraph, RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing,
-    TransitionEffect, Trim, VAlign, paragraphs_for,
+    Align, AnimEffect, Autofit, Color, Course, Easing, Glow, ListKind, ObjectKind, Paragraph,
+    RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing, Trim, VAlign,
+    paragraphs_for,
 };
 use coursecraft_render::parse_color;
 use egui::{
@@ -405,7 +405,8 @@ pub struct PropertiesState {
 
     // Slide transition buffers
     pub slide_transition_effect: String,
-    pub slide_transition_direction: Direction,
+    /// The transition's options, in their entrance-effect form (`TransitionEffect::as_effect`).
+    pub slide_transition_fx: AnimEffect,
     pub slide_transition_duration_ms: u32,
 }
 
@@ -644,7 +645,7 @@ impl Default for PropertiesState {
             exit_easing: Easing::EaseOut,
             exit_sequence: coursecraft_course::Sequence::AsOne,
             slide_transition_effect: "none".into(),
-            slide_transition_direction: Direction::Bottom,
+            slide_transition_fx: AnimEffect::default(),
             slide_transition_duration_ms: 500,
             remembered_fills: std::collections::HashMap::new(),
         }
@@ -782,19 +783,12 @@ impl PropertiesState {
         self.slide_revisit = slide.revisit;
 
         if let Some(ref t) = slide.transition {
-            self.slide_transition_effect = match t.effect {
-                TransitionEffect::Fade => "fade".to_owned(),
-                TransitionEffect::Push { .. } => "push".to_owned(),
-                TransitionEffect::Cover { .. } => "cover".to_owned(),
-            };
-            self.slide_transition_direction = match t.effect {
-                TransitionEffect::Push { from } | TransitionEffect::Cover { from } => from,
-                _ => Direction::Bottom,
-            };
+            self.slide_transition_effect = t.effect.id().to_owned();
+            self.slide_transition_fx = t.effect.as_effect().unwrap_or_default();
             self.slide_transition_duration_ms = t.duration_ms;
         } else {
             self.slide_transition_effect = "none".to_owned();
-            self.slide_transition_direction = Direction::Bottom;
+            self.slide_transition_fx = AnimEffect::default();
             self.slide_transition_duration_ms = 500;
         }
 
@@ -10954,62 +10948,47 @@ fn show_transition_section(
     action_to_run: &mut Option<(&'static str, Json)>,
 ) {
     let mut trans_changed = false;
-    let trans_label = match props.slide_transition_effect.as_str() {
-        "fade" => "Fade",
-        "push" => "Push",
-        "cover" => "Cover",
-        _ => "None",
-    };
-
+    let label = coursecraft_course::transition_def(&props.slide_transition_effect)
+        .map_or("None", |d| d.label);
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
         crate::widgets::styled_combo(ui, "slide_transition_combo", rem_w)
-            .selected_text(trans_label)
+            .selected_text(crate::tl!(label))
             .show_ui(ui, |ui| {
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "none".to_string(),
-                        "None",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
-                }
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "fade".to_string(),
-                        "Fade",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
-                }
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "push".to_string(),
-                        "Push",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
-                }
-                if ui
-                    .selectable_value(
-                        &mut props.slide_transition_effect,
-                        "cover".to_string(),
-                        "Cover",
-                    )
-                    .clicked()
-                {
-                    trans_changed = true;
+                let ids = std::iter::once(("none", "None")).chain(
+                    coursecraft_course::TRANSITIONS
+                        .iter()
+                        .map(|d| (d.id, d.label)),
+                );
+                for (id, name) in ids {
+                    if ui
+                        .selectable_value(
+                            &mut props.slide_transition_effect,
+                            id.to_owned(),
+                            crate::tl!(name),
+                        )
+                        .clicked()
+                    {
+                        trans_changed = true;
+                    }
                 }
             });
     });
 
-    if props.slide_transition_effect.as_str() != "none" {
+    let def = coursecraft_course::transition_def(&props.slide_transition_effect);
+    if let Some(def) = def {
+        // Options follow the effect: keep the ones the new one also takes.
+        match def.options_like {
+            Some(like) if props.slide_transition_fx.id != like => {
+                props.slide_transition_fx = if props.slide_transition_fx.id.is_empty() {
+                    AnimEffect::new(like)
+                } else {
+                    props.slide_transition_fx.switched_to(like)
+                };
+            }
+            None => props.slide_transition_fx = AnimEffect::default(),
+            _ => {}
+        }
         inspector_row(ui, "Duration", |ui| {
             let rem_w = ui.available_width().max(30.0);
             let r = add_drag_left(
@@ -11025,54 +11004,25 @@ fn show_transition_section(
                 trans_changed = true;
             }
         });
-
-        if matches!(props.slide_transition_effect.as_str(), "push" | "cover") {
-            let dir_label = crate::tl!(props.slide_transition_direction.label());
-            inspector_row(ui, "Direction", |ui| {
-                let rem_w = ui.available_width().max(30.0);
-                crate::widgets::styled_combo(ui, "slide_transition_dir_combo", rem_w)
-                    .selected_text(dir_label)
-                    .show_ui(ui, |ui| {
-                        for (val, l) in [
-                            (Direction::Bottom, "Bottom"),
-                            (Direction::Left, "Left"),
-                            (Direction::Right, "Right"),
-                            (Direction::Top, "Top"),
-                        ] {
-                            if ui
-                                .selectable_value(&mut props.slide_transition_direction, val, l)
-                                .clicked()
-                            {
-                                trans_changed = true;
-                            }
-                        }
-                    });
-            });
+        if def.options_like.is_some() {
+            trans_changed |=
+                crate::anim_panel::option_rows(ui, false, &mut props.slide_transition_fx);
         }
     }
 
     if trans_changed {
-        let trans_json = if props.slide_transition_effect.as_str() == "none" {
-            serde_json::Value::Null
-        } else {
-            match props.slide_transition_effect.as_str() {
-                "fade" => serde_json::json!({
-                    "type": "fade",
-                    "duration_ms": props.slide_transition_duration_ms,
-                }),
-                "push" => serde_json::json!({
-                    "type": "push",
-                    "from": props.slide_transition_direction,
-                    "duration_ms": props.slide_transition_duration_ms,
-                }),
-                "cover" => serde_json::json!({
-                    "type": "cover",
-                    "from": props.slide_transition_direction,
-                    "duration_ms": props.slide_transition_duration_ms,
-                }),
-                _ => serde_json::Value::Null,
-            }
-        };
+        let trans_json = def
+            .and_then(|d| {
+                let fx = d.options_like.map(|_| &props.slide_transition_fx);
+                coursecraft_course::TransitionEffect::from_parts(d.id, fx)
+            })
+            .map_or(Json::Null, |effect| {
+                serde_json::to_value(coursecraft_course::Transition {
+                    effect,
+                    duration_ms: props.slide_transition_duration_ms,
+                })
+                .unwrap_or(Json::Null)
+            });
         *action_to_run = Some((
             "slide.set_transition",
             serde_json::json!({

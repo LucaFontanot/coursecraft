@@ -1051,6 +1051,62 @@ pub enum TransitionEffect {
         #[serde(default)]
         from: Direction,
     },
+    /// Fades to black, then up into the new slide (M46 phase 8).
+    FadeBlack,
+    /// The old slide slides away toward the far side, uncovering the new one.
+    Uncover {
+        #[serde(default)]
+        from: Direction,
+    },
+    /// The old slide drifts away and fades while the new one fades in.
+    Reveal {
+        #[serde(default)]
+        from: Direction,
+    },
+    /// A straight edge sweeps the new slide in from `from`.
+    Wipe {
+        #[serde(default)]
+        from: Direction,
+    },
+    /// Opens from the centre line (`out`) or closes from both edges (`in`).
+    Split {
+        #[serde(default)]
+        orientation: Orientation,
+        #[serde(default)]
+        inout: InOut,
+    },
+    /// The new slide grows from the centre while fading in.
+    Zoom,
+    /// The new slide shows through a growing circle, box, diamond or plus.
+    Shape {
+        #[serde(default)]
+        shape: RevealShape,
+        #[serde(default)]
+        inout: InOut,
+    },
+    /// Wedges sweep clockwise from 12 o'clock.
+    Clock {
+        #[serde(default = "one_spoke")]
+        spokes: u8,
+    },
+    /// Cells of the new slide appear in a fixed shuffled order.
+    Dissolve,
+    RandomBars {
+        #[serde(default)]
+        orientation: Orientation,
+    },
+    Blinds {
+        #[serde(default)]
+        orientation: Orientation,
+    },
+    Checker {
+        #[serde(default)]
+        orientation: Orientation,
+    },
+}
+
+fn one_spoke() -> u8 {
+    1
 }
 
 fn default_duration() -> u32 {

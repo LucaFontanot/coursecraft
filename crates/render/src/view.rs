@@ -1,8 +1,6 @@
 //! Slide view widget and pointer input handling.
 
-use coursecraft_course::{
-    Color, Orientation, Question, QuestionKind, Transition, TransitionEffect, Value,
-};
+use coursecraft_course::{Color, Orientation, Question, QuestionKind, Transition, Value};
 use coursecraft_logic::{Input, Player};
 use egui::{Color32, CornerRadius, Event, PointerButton, Pos2, Rect, Stroke, StrokeKind, Ui};
 
@@ -1243,87 +1241,56 @@ impl SlideView {
             }
         }
 
-        if let Some((effect, sample, prev_items, prev_bg)) = transition_info {
-            match effect {
-                TransitionEffect::Fade => {
-                    paint::paint_background(&painter, &t, theme, slide_bg, (0.0, 0.0));
-                    let mut old_items = prev_items;
-                    for item in &mut old_items {
-                        item.opacity *= sample.prev_alpha;
-                    }
-                    paint::paint_items(
-                        &painter,
-                        &t,
-                        &old_items,
-                        Highlight::default(),
-                        media.as_mut().map(|(c, s)| (&mut **c, *s)),
-                        theme,
-                        (0.0, 0.0),
-                    );
-                    let mut next_items = display.to_vec();
-                    for item in &mut next_items {
-                        item.opacity *= sample.next_alpha;
-                    }
-                    paint::paint_items(
-                        &painter,
-                        &t,
-                        &next_items,
-                        self.pointer.highlight(),
-                        media,
-                        theme,
-                        (0.0, 0.0),
-                    );
-                }
-                TransitionEffect::Push { .. } => {
-                    paint::paint_background(
-                        &painter,
-                        &t,
-                        theme,
-                        prev_bg.as_ref(),
-                        sample.prev_offset,
-                    );
-                    paint::paint_items(
-                        &painter,
-                        &t,
-                        &prev_items,
-                        Highlight::default(),
-                        media.as_mut().map(|(c, s)| (&mut **c, *s)),
-                        theme,
-                        sample.prev_offset,
-                    );
-                    paint::paint_background(&painter, &t, theme, slide_bg, sample.next_offset);
-                    paint::paint_items(
-                        &painter,
-                        &t,
-                        display,
-                        self.pointer.highlight(),
-                        media,
-                        theme,
-                        sample.next_offset,
-                    );
-                }
-                TransitionEffect::Cover { .. } => {
-                    paint::paint_background(&painter, &t, theme, prev_bg.as_ref(), (0.0, 0.0));
-                    paint::paint_items(
-                        &painter,
-                        &t,
-                        &prev_items,
-                        Highlight::default(),
-                        media.as_mut().map(|(c, s)| (&mut **c, *s)),
-                        theme,
-                        (0.0, 0.0),
-                    );
-                    paint::paint_background(&painter, &t, theme, slide_bg, sample.next_offset);
-                    paint::paint_items(
-                        &painter,
-                        &t,
-                        display,
-                        self.pointer.highlight(),
-                        media,
-                        theme,
-                        sample.next_offset,
-                    );
-                }
+        if let Some((_effect, sample, prev_items, prev_bg)) = transition_info {
+            if let Some([r, g, b]) = sample.backdrop {
+                painter.rect_filled(
+                    t.slide_rect(),
+                    CornerRadius::ZERO,
+                    Color32::from_rgb(r, g, b),
+                );
+            }
+            if sample.prev_on_top {
+                paint_transition_slide(
+                    &painter,
+                    &t,
+                    theme,
+                    slide_bg,
+                    display,
+                    self.pointer.highlight(),
+                    media.as_mut().map(|(c, s)| (&mut **c, *s)),
+                    &sample.next,
+                );
+                paint_transition_slide(
+                    &painter,
+                    &t,
+                    theme,
+                    prev_bg.as_ref(),
+                    &prev_items,
+                    Highlight::default(),
+                    media,
+                    &sample.prev,
+                );
+            } else {
+                paint_transition_slide(
+                    &painter,
+                    &t,
+                    theme,
+                    prev_bg.as_ref(),
+                    &prev_items,
+                    Highlight::default(),
+                    media.as_mut().map(|(c, s)| (&mut **c, *s)),
+                    &sample.prev,
+                );
+                paint_transition_slide(
+                    &painter,
+                    &t,
+                    theme,
+                    slide_bg,
+                    display,
+                    self.pointer.highlight(),
+                    media,
+                    &sample.next,
+                );
             }
         } else if let Some(box_rect) = box_transform.as_ref().map(SlideTransform::slide_rect) {
             // Base slide, frozen, then the dim backdrop and the boxed slide.
@@ -2124,5 +2091,145 @@ mod tests {
                 None
             );
         }
+    }
+}
+
+/// Paint one slide of a transition (M46 phase 8): its background and items moved by the
+/// look's offset; scale, fade and the reveal mask go through the mesh pass.
+#[allow(clippy::too_many_arguments)]
+fn paint_transition_slide(
+    painter: &egui::Painter,
+    t: &SlideTransform,
+    theme: Option<&coursecraft_course::Theme>,
+    bg: Option<&Color>,
+    items: &[DrawItem],
+    highlight: Highlight,
+    media: Option<(&mut MediaCache, &dyn MediaSource)>,
+    look: &coursecraft_logic::SlideLook,
+) {
+    if look.alpha <= 0.0 {
+        return;
+    }
+    if look.only_moves() {
+        paint::paint_background(painter, t, theme, bg, look.offset);
+        paint::paint_items(painter, t, items, highlight, media, theme, look.offset);
+        return;
+    }
+    let marker = painter.add(egui::Shape::Noop);
+    paint::paint_background(painter, t, theme, bg, look.offset);
+    paint::paint_items(painter, t, items, highlight, media, theme, look.offset);
+    let k = t.scale();
+    let slide = t
+        .slide_rect()
+        .translate(egui::vec2(look.offset.0 * k, look.offset.1 * k));
+    let to_screen = |(x, y): (f32, f32)| {
+        egui::pos2(
+            slide.min.x + x * slide.width(),
+            slide.min.y + y * slide.height(),
+        )
+    };
+    let mut polys: Option<Vec<Vec<Pos2>>> = look.mask.as_ref().map(|m| {
+        m.polys()
+            .iter()
+            .map(|p| p.0.iter().copied().map(to_screen).collect())
+            .collect()
+    });
+    if polys.is_none()
+        && let Some(c) = look.clip
+    {
+        polys = Some(vec![
+            [
+                (c.min_x, c.min_y),
+                (c.max_x, c.min_y),
+                (c.max_x, c.max_y),
+                (c.min_x, c.max_y),
+            ]
+            .into_iter()
+            .map(to_screen)
+            .collect(),
+        ]);
+    }
+    let post = crate::mesh_post::MeshPost {
+        centre: slide.center(),
+        scale: (look.scale, look.scale),
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        mask: polys.as_deref(),
+        tint: None,
+        opacity: look.alpha,
+    };
+    paint::transform_painted_shapes(painter, marker, &post);
+}
+
+#[cfg(test)]
+mod transition_paint_tests {
+    use super::*;
+    use coursecraft_logic::{ConvexPoly, Mask, SlideLook};
+
+    fn render(look: &SlideLook) -> crate::offscreen::RgbaImage {
+        crate::offscreen::render_ui(
+            200,
+            100,
+            1.0,
+            |_| {},
+            |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let Some(t) = SlideTransform::fit(
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0)),
+                    coursecraft_course::Size { w: 200, h: 100 },
+                ) else {
+                    return;
+                };
+                let red = Color("#FF0000".into());
+                paint_transition_slide(
+                    &painter,
+                    &t,
+                    None,
+                    Some(&red),
+                    &[],
+                    Highlight::default(),
+                    None,
+                    look,
+                );
+            },
+        )
+        .expect("render")
+    }
+
+    fn px(img: &crate::offscreen::RgbaImage, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * img.width + x) * 4) as usize;
+        [
+            img.pixels[i],
+            img.pixels[i + 1],
+            img.pixels[i + 2],
+            img.pixels[i + 3],
+        ]
+    }
+
+    #[test]
+    fn a_mask_reveals_only_its_part_of_the_new_slide() {
+        let look = SlideLook {
+            mask: Some(Mask::new(vec![ConvexPoly::rect(0.0, 0.0, 0.5, 1.0)])),
+            ..SlideLook::REST
+        };
+        let img = render(&look);
+        assert_eq!(px(&img, 50, 50)[..3], [255, 0, 0]);
+        assert_ne!(px(&img, 150, 50)[..3], [255, 0, 0]);
+    }
+
+    #[test]
+    fn alpha_fades_the_whole_slide_and_zero_draws_nothing() {
+        let half = render(&SlideLook {
+            alpha: 0.5,
+            ..SlideLook::REST
+        });
+        let [r, g, _, _] = px(&half, 100, 50);
+        assert!(r > 200 && g > 90 && g < 160, "half red over white: {r} {g}");
+        let none = render(&SlideLook {
+            alpha: 0.0,
+            ..SlideLook::REST
+        });
+        assert_ne!(px(&none, 100, 50)[..3], [255, 0, 0]);
     }
 }

@@ -538,7 +538,14 @@ rebuilt Animations panel; live preview on the canvas.
   paragraph or by letter (`Animation.sequence`) inside their duration; the renderer splits the
   text into parts that keep its layout. New easings: Overshoot, Bounce, Elastic. Sequence in
   Effect Options and the Animate cards; the easing picker shows all seven as curves.
-- Next: transitions.
+- Phase 8 (transitions pack) **built (2026-11-26)**: 15 slide transitions (Fade, Fade through
+  black, Push, Cover, Uncover, Reveal, Wipe, Split, Zoom, Shape, Clock, Dissolve, Random bars,
+  Blinds, Checkerboard) from a registry; mask transitions reuse the entrance effects' masks on the
+  whole slide; the player draws each slide through one mesh pass (offset, opacity, scale, mask).
+  The gallery draws every transition; Effect Options and the Slide inspector show its options
+  with icons; Apply To All was already there.
+- Next: the follow-ups listed in the plan (emphasis trigger action, by word, PowerPoint emphasis
+  and build import, 3-D transitions).
 
 ## After the first release
 

@@ -26,6 +26,8 @@ pub(crate) struct MeshPost<'a> {
     /// Screen-space convex polygons; only their inside is kept. Applied after the transform.
     pub mask: Option<&'a [Vec<Pos2>]>,
     pub tint: Option<Tint>,
+    /// Multiplies every colour (premultiplied), for whole-slide fades in transitions.
+    pub opacity: f32,
 }
 
 impl MeshPost<'_> {
@@ -39,6 +41,7 @@ impl MeshPost<'_> {
             flip_v,
             mask: None,
             tint: None,
+            opacity: 1.0,
         }
     }
 
@@ -95,6 +98,16 @@ impl MeshPost<'_> {
         }
         if let Some(tint) = self.tint {
             tint_mesh(&mut mesh, tint);
+        }
+        if self.opacity < 1.0 {
+            let a = if self.opacity.is_finite() {
+                self.opacity.max(0.0)
+            } else {
+                1.0
+            };
+            for v in &mut mesh.vertices {
+                v.color = v.color.linear_multiply(a);
+            }
         }
         mesh
     }

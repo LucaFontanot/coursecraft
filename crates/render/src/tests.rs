@@ -3733,18 +3733,18 @@ fn transition_sampling_fade_and_push() {
         duration_ms: 500,
     };
     let s0 = sample_transition(&fade, 0.0, slide_size);
-    assert_eq!(s0.prev_alpha, 1.0);
-    assert_eq!(s0.next_alpha, 0.0);
-    assert_eq!(s0.prev_offset, (0.0, 0.0));
-    assert_eq!(s0.next_offset, (0.0, 0.0));
+    assert_eq!(s0.prev.alpha, 1.0);
+    assert_eq!(s0.next.alpha, 0.0);
+    assert_eq!(s0.prev.offset, (0.0, 0.0));
+    assert_eq!(s0.next.offset, (0.0, 0.0));
 
     let s_mid = sample_transition(&fade, 0.5, slide_size);
-    assert!((s_mid.prev_alpha - 0.5).abs() < 1e-4);
-    assert!((s_mid.next_alpha - 0.5).abs() < 1e-4);
+    assert!((s_mid.prev.alpha - 0.5).abs() < 1e-4);
+    assert!((s_mid.next.alpha - 0.5).abs() < 1e-4);
 
     let s1 = sample_transition(&fade, 1.0, slide_size);
-    assert_eq!(s1.prev_alpha, 0.0);
-    assert_eq!(s1.next_alpha, 1.0);
+    assert_eq!(s1.prev.alpha, 0.0);
+    assert_eq!(s1.next.alpha, 1.0);
 
     // Push from Left: enters from Left (moves from -w to 0), prev moves from 0 to +w
     let push_left = Transition {
@@ -3754,16 +3754,16 @@ fn transition_sampling_fade_and_push() {
         duration_ms: 500,
     };
     let p0 = sample_transition(&push_left, 0.0, slide_size);
-    assert_eq!(p0.prev_offset, (0.0, 0.0));
-    assert_eq!(p0.next_offset, (-1000.0, 0.0));
+    assert_eq!(p0.prev.offset, (0.0, 0.0));
+    assert_eq!(p0.next.offset, (-1000.0, 0.0));
 
     let p_mid = sample_transition(&push_left, 0.5, slide_size);
-    assert_eq!(p_mid.prev_offset, (500.0, 0.0));
-    assert_eq!(p_mid.next_offset, (-500.0, 0.0));
+    assert_eq!(p_mid.prev.offset, (500.0, 0.0));
+    assert_eq!(p_mid.next.offset, (-500.0, 0.0));
 
     let p1 = sample_transition(&push_left, 1.0, slide_size);
-    assert_eq!(p1.prev_offset, (1000.0, 0.0));
-    assert_eq!(p1.next_offset, (0.0, 0.0));
+    assert_eq!(p1.prev.offset, (1000.0, 0.0));
+    assert_eq!(p1.next.offset, (0.0, 0.0));
 
     // Push from Top: enters from Top (moves from -h to 0), prev moves from 0 to +h
     let push_top = Transition {
@@ -3773,16 +3773,16 @@ fn transition_sampling_fade_and_push() {
         duration_ms: 500,
     };
     let pt0 = sample_transition(&push_top, 0.0, slide_size);
-    assert_eq!(pt0.prev_offset, (0.0, 0.0));
-    assert_eq!(pt0.next_offset, (0.0, -500.0));
+    assert_eq!(pt0.prev.offset, (0.0, 0.0));
+    assert_eq!(pt0.next.offset, (0.0, -500.0));
 
     let pt_mid = sample_transition(&push_top, 0.5, slide_size);
-    assert_eq!(pt_mid.prev_offset, (0.0, 250.0));
-    assert_eq!(pt_mid.next_offset, (0.0, -250.0));
+    assert_eq!(pt_mid.prev.offset, (0.0, 250.0));
+    assert_eq!(pt_mid.next.offset, (0.0, -250.0));
 
     let pt1 = sample_transition(&push_top, 1.0, slide_size);
-    assert_eq!(pt1.prev_offset, (0.0, 500.0));
-    assert_eq!(pt1.next_offset, (0.0, 0.0));
+    assert_eq!(pt1.prev.offset, (0.0, 500.0));
+    assert_eq!(pt1.next.offset, (0.0, 0.0));
 }
 
 #[test]
@@ -3800,16 +3800,16 @@ fn transition_sampling_cover() {
         duration_ms: 500,
     };
     let c0 = sample_transition(&cover_right, 0.0, slide_size);
-    assert_eq!(c0.prev_offset, (0.0, 0.0));
-    assert_eq!(c0.next_offset, (1000.0, 0.0));
+    assert_eq!(c0.prev.offset, (0.0, 0.0));
+    assert_eq!(c0.next.offset, (1000.0, 0.0));
 
     let c_mid = sample_transition(&cover_right, 0.5, slide_size);
-    assert_eq!(c_mid.prev_offset, (0.0, 0.0));
-    assert_eq!(c_mid.next_offset, (500.0, 0.0));
+    assert_eq!(c_mid.prev.offset, (0.0, 0.0));
+    assert_eq!(c_mid.next.offset, (500.0, 0.0));
 
     let c1 = sample_transition(&cover_right, 1.0, slide_size);
-    assert_eq!(c1.prev_offset, (0.0, 0.0));
-    assert_eq!(c1.next_offset, (0.0, 0.0));
+    assert_eq!(c1.prev.offset, (0.0, 0.0));
+    assert_eq!(c1.next.offset, (0.0, 0.0));
 }
 
 #[test]

@@ -2331,7 +2331,7 @@ fn transformed_bounds(rect: Rect, rotation: f32, flip_h: bool, flip_v: bool) -> 
 /// rotate, mirror, mask, tint), and replace the originals with the results.
 ///
 /// Text and images become textured meshes here too, so they change exactly like shapes.
-fn transform_painted_shapes(
+pub(crate) fn transform_painted_shapes(
     painter: &Painter,
     marker: egui::layers::ShapeIdx,
     post: &crate::mesh_post::MeshPost<'_>,
@@ -2459,6 +2459,7 @@ pub fn paint_items(
             flip_v: item.flip_v,
             mask: mask_polys.as_deref(),
             tint: look.tint,
+            opacity: 1.0,
         };
 
         let mut item_painter = if let Some(frac) = item.clip {

@@ -23,6 +23,8 @@ pub struct Tile {
     pub effect: Option<(AnimEffect, bool)>,
     /// An emphasis effect, drawn by its own sample function (amber).
     pub emphasis: Option<coursecraft_course::EmphasisEffect>,
+    /// A slide transition, drawn by its own sample (old slide grey, new slide accent).
+    pub transition: Option<TransitionEffect>,
     pub selected: bool,
 }
 
@@ -86,14 +88,6 @@ const THEMES: &[ThemePreset] = &[
     },
 ];
 
-/// The transitions a slide can have, in gallery order.
-const TRANSITIONS: &[(&str, Icon)] = &[
-    ("None", Icon::XCircle),
-    ("Fade", Icon::Drop),
-    ("Push", Icon::ArrowRight),
-    ("Cover", Icon::Stack),
-];
-
 fn hex(color: &str) -> Color32 {
     coursecraft_render::parse_color(&coursecraft_course::Color(color.to_owned()))
         .unwrap_or(Color32::GRAY)
@@ -129,12 +123,24 @@ fn animation(object: &Object, motion: Motion) -> Option<&Animation> {
 }
 
 fn transition_index(t: Option<&Transition>) -> usize {
-    match t.map(|t| &t.effect) {
-        None => 0,
-        Some(TransitionEffect::Fade) => 1,
-        Some(TransitionEffect::Push { .. }) => 2,
-        Some(TransitionEffect::Cover { .. }) => 3,
-    }
+    t.and_then(|t| {
+        coursecraft_course::TRANSITIONS
+            .iter()
+            .position(|d| d.id == t.effect.id())
+    })
+    .map_or(0, |i| i + 1)
+}
+
+/// Transition `def` keeping the options of `old` that it also takes.
+fn transition_like(
+    def: &coursecraft_course::TransitionDef,
+    old: Option<&TransitionEffect>,
+) -> Option<TransitionEffect> {
+    let fx = def.options_like.map(|like| {
+        old.and_then(TransitionEffect::as_effect)
+            .map_or_else(|| AnimEffect::new(like), |f| f.switched_to(like))
+    });
+    TransitionEffect::from_parts(def.id, fx.as_ref())
 }
 
 /// Tile index of an animation: 0 is None, then the registry in order. An unknown effect
@@ -163,6 +169,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                     swatch: Some([hex(t.background), hex(t.accent), hex(t.text)]),
                     effect: None,
                     emphasis: None,
+                    transition: None,
                     selected: same_color(&theme.accent.0, t.accent)
                         && same_color(&theme.background.0, t.background)
                         && same_color(&theme.text.0, t.text),
@@ -171,17 +178,33 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
         }
         Gallery::Transitions => {
             let current = slide(editor).map(|s| transition_index(s.transition.as_ref()));
-            TRANSITIONS
-                .iter()
-                .enumerate()
-                .map(|(i, (label, icon))| Tile {
-                    label,
-                    icon: *icon,
-                    swatch: None,
-                    effect: None,
-                    emphasis: None,
-                    selected: current == Some(i),
-                })
+            let old = slide(editor)
+                .and_then(|s| s.transition.as_ref())
+                .map(|t| t.effect.clone());
+            let none = Tile {
+                label: "None",
+                icon: Icon::XCircle,
+                swatch: None,
+                effect: None,
+                emphasis: None,
+                transition: None,
+                selected: current == Some(0),
+            };
+            std::iter::once(none)
+                .chain(
+                    coursecraft_course::TRANSITIONS
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| Tile {
+                            label: d.label,
+                            icon: Icon::FilmStrip,
+                            swatch: None,
+                            effect: None,
+                            emphasis: None,
+                            transition: transition_like(d, old.as_ref()),
+                            selected: current == Some(i + 1),
+                        }),
+                )
                 .collect()
         }
         Gallery::Entrance | Gallery::Exit => {
@@ -198,6 +221,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                 swatch: None,
                 effect: None,
                 emphasis: None,
+                transition: None,
                 selected: current == Some(0),
             };
             std::iter::once(none)
@@ -213,6 +237,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                         swatch: None,
                         effect: Some((effect, exit)),
                         emphasis: None,
+                        transition: None,
                         selected: current == Some(i + 1),
                     }
                 }))
@@ -226,6 +251,7 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
                 swatch: None,
                 effect: None,
                 emphasis: Some(coursecraft_course::EmphasisEffect::new(d.id)),
+                transition: None,
                 selected: false,
             })
             .collect(),
@@ -291,15 +317,10 @@ pub fn apply(editor: &mut Editor, gallery: Gallery, index: usize) {
             };
             let old = s.transition.as_ref();
             let duration_ms = old.map_or(500, |t| t.duration_ms);
-            let from = old
-                .and_then(|t| transition_from(&t.effect))
-                .unwrap_or(Direction::Right);
-            let effect = match index {
-                1 => Some(TransitionEffect::Fade),
-                2 => Some(TransitionEffect::Push { from }),
-                3 => Some(TransitionEffect::Cover { from }),
-                _ => None,
-            };
+            let effect = index
+                .checked_sub(1)
+                .and_then(|i| coursecraft_course::TRANSITIONS.get(i))
+                .and_then(|d| transition_like(d, old.map(|t| &t.effect)));
             let transition = effect.map(|effect| Transition {
                 effect,
                 duration_ms,
@@ -469,10 +490,7 @@ fn set_animation(
 }
 
 fn transition_from(effect: &TransitionEffect) -> Option<Direction> {
-    match effect {
-        TransitionEffect::Push { from } | TransitionEffect::Cover { from } => Some(*from),
-        TransitionEffect::Fade => None,
-    }
+    effect.as_effect().and_then(|fx| fx.from)
 }
 
 fn effect_from(effect: &AnimEffect) -> Option<Direction> {
@@ -535,10 +553,10 @@ pub fn effect_available(editor: &Editor, op: EffectOp) -> Result<(), &'static st
     match op {
         EffectOp::Options(Motion::Transition) => {
             base(Motion::Transition)?;
-            if current_from(editor, Motion::Transition).is_some() {
+            if current_transition_options(editor).is_some() {
                 Ok(())
             } else {
-                Err("Pick an effect that comes from a side first")
+                Err("Pick a transition that has options first")
             }
         }
         EffectOp::Options(motion) => {
@@ -612,11 +630,14 @@ fn set_from(editor: &mut Editor, motion: Motion, dir: Direction) {
         editor,
         motion,
         |t| {
-            t.effect = match t.effect {
-                TransitionEffect::Push { .. } => TransitionEffect::Push { from: dir },
-                TransitionEffect::Cover { .. } => TransitionEffect::Cover { from: dir },
-                TransitionEffect::Fade => TransitionEffect::Fade,
-            };
+            if let Some(mut fx) = t.effect.as_effect()
+                && fx.from.is_some()
+            {
+                fx.from = Some(dir);
+                if let Some(e) = TransitionEffect::from_parts(t.effect.id(), Some(&fx)) {
+                    t.effect = e;
+                }
+            }
         },
         |a| a.effect = with_from(&a.effect),
     );
@@ -756,6 +777,20 @@ fn tile(ui: &mut Ui, t: &Tile, enabled: bool) -> Response {
                 text,
             );
         }
+        None if t.transition.is_some() => {
+            if let Some(effect) = &t.transition {
+                let at = (enabled && resp.hovered()).then(|| {
+                    ui.ctx().request_repaint();
+                    super::effect_art::hover_shown(ui.input(|i| i.time))
+                });
+                let (old, new) = if enabled {
+                    (p.border_strong, p.accent)
+                } else {
+                    (p.border, p.text_disabled)
+                };
+                super::effect_art::paint_transition(ui.painter(), art, effect, old, new, at);
+            }
+        }
         None if t.emphasis.is_some() => {
             if let Some(effect) = &t.emphasis {
                 let at = (enabled && resp.hovered()).then(|| {
@@ -833,6 +868,7 @@ pub fn effect_tile(
         swatch: None,
         effect: effect.map(|e| (e, exit)),
         emphasis: None,
+        transition: None,
         selected,
     };
     tile(ui, &t, true)
@@ -850,6 +886,7 @@ pub fn emphasis_tile(
         swatch: None,
         effect: None,
         emphasis: Some(effect),
+        transition: None,
         selected: false,
     };
     tile(ui, &t, true)
@@ -943,7 +980,12 @@ pub fn show(
 /// option on every selected object whose effect takes it.
 pub fn effect_options_menu(editor: &mut Editor, ui: &mut Ui, motion: Motion) {
     use super::effect_art::{OptionValue, paint_glyph};
-    let Some(effect) = current_effect(editor, motion) else {
+    let current = if motion == Motion::Transition {
+        current_transition_options(editor)
+    } else {
+        current_effect(editor, motion)
+    };
+    let Some(effect) = current else {
         return;
     };
     let Some(def) = effect.def() else {
@@ -1047,15 +1089,43 @@ pub fn effect_options_menu(editor: &mut Editor, ui: &mut Ui, motion: Motion) {
         }
     }
     if let Some(v) = picked {
-        set_option(editor, motion, v);
+        if motion == Motion::Transition {
+            set_transition_option(editor, v);
+        } else {
+            set_option(editor, motion, v);
+        }
         ui.close();
     }
-    if first_has_text(editor) {
+    if motion != Motion::Transition && first_has_text(editor) {
         if !def.options.is_empty() {
             ui.separator();
         }
         sequence_section(editor, ui, motion);
     }
+}
+
+/// The current slide's transition options, in their entrance-effect form.
+fn current_transition_options(editor: &Editor) -> Option<AnimEffect> {
+    slide(editor)
+        .and_then(|s| s.transition.as_ref())
+        .and_then(|t| t.effect.as_effect())
+}
+
+/// Set option `value` on the current slide's transition.
+pub fn set_transition_option(editor: &mut Editor, value: super::effect_art::OptionValue) {
+    update(
+        editor,
+        Motion::Transition,
+        |t| {
+            if let Some(mut fx) = t.effect.as_effect() {
+                value.set(&mut fx);
+                if let Some(e) = TransitionEffect::from_parts(t.effect.id(), Some(&fx)) {
+                    t.effect = e;
+                }
+            }
+        },
+        |_| {},
+    );
 }
 
 /// Whether the first selected object has text to play in parts.

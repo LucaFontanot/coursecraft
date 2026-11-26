@@ -269,6 +269,17 @@ Each phase updates `docs/spec/triggers.md`, `docs/ui/ribbon.md` and `docs/ui/fea
   used by the player, the editor's timeline preview and the live preview.
 - By word, and PowerPoint's build-by-paragraph import, are follow-ups.
 
+## Phase 8 as built
+
+- `TransitionEffect` keeps its tagged JSON (old files unchanged) and gains 12 variants.
+  `TransitionEffect::as_effect` / `from_parts` convert a transition's options to and from the
+  entrance effect it borrows them from (`TransitionDef::options_like`), so the option menus,
+  icons and the reveal masks are shared with animations.
+- `TransitionSample` is now a `SlideLook` per slide plus `prev_on_top` and a `backdrop`.
+  `view::paint_transition_slide` paints a slide and runs `mesh_post::MeshPost` (which gained
+  `opacity`) over everything it painted; Push and Cover still take the plain moved path.
+- Not done: DeckCraft's 3-D transitions (Cube, Flip, Gallery, Doors) and per-layer transitions.
+
 ## On stock icons from Magnific / Freepik
 
 Searching the stock library for animation icons returned a mixed, mostly premium set ("Sputnik",

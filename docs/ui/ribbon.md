@@ -255,8 +255,8 @@ Shown when the Course Map view tab is active.
 
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
-| Transition to This Slide ↘ | transition gallery | G | `slide.set_transition` | ✅ (`ribbon/gallery.rs`: None, Fade, Push, Cover; ↘ opens the Slide inspector) |
-| | Effect Options | LS | `slide.set_transition` `{from}` | ✅ ▾ From Left / Right / Top / Bottom, for Push and Cover |
+| Transition to This Slide ↘ | transition gallery | G | `slide.set_transition` | ✅ (`ribbon/gallery.rs`: None plus the 15 transitions of the registry: Fade, Fade through black, Push, Cover, Uncover, Reveal, Wipe, Split, Zoom, Shape, Clock, Dissolve, Random bars, Blinds, Checkerboard; each tile draws its own sample (old slide grey, new slide accent) and plays on hover; a pick keeps the options the new transition also takes; ↘ opens the Slide inspector) |
+| | Effect Options | LS | `slide.set_transition` `{from, orientation, inout, shape, spokes}` | ✅ ▾ built from the registry like the animation menus: a compass of eight arrows for the moving and wiping transitions, rows with icons for orientation, in/out, shape and spokes; off for a transition without options |
 | Timing | Duration | N | `slide.set_transition` `{duration_ms}` | ✅ seconds, one undo step |
 | | Apply To All | S | `slide.set_transition_all` | ✅ every slide of every scene, one undo step |
 | Publish | Preview | LS | | ✅ |

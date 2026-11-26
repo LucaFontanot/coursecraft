@@ -26,7 +26,8 @@ pub mod suspend;
 
 pub use animation::{
     AnimationPhase, ClipFrac, ConvexPoly, MAX_MASK_POLYS, MAX_POLY_POINTS, Mask, ObjectSample,
-    Tint, TransitionSample, ease, sample_animation, sample_motion_path, sample_transition,
+    SlideLook, Tint, TransitionSample, ease, sample_animation, sample_motion_path,
+    sample_transition,
 };
 pub use suspend::{SUSPEND_PREFIX, SuspendError, decode_suspend, encode_suspend};
 

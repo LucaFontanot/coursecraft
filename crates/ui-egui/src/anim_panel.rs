@@ -300,7 +300,7 @@ fn effect_gallery(
 }
 
 /// One row of icon buttons per option of `fx`'s effect. Returns whether one changed.
-fn option_rows(ui: &mut Ui, exit: bool, fx: &mut AnimEffect) -> bool {
+pub(crate) fn option_rows(ui: &mut Ui, exit: bool, fx: &mut AnimEffect) -> bool {
     let Some(def) = fx.def() else {
         return false;
     };
@@ -318,7 +318,7 @@ fn option_rows(ui: &mut Ui, exit: bool, fx: &mut AnimEffect) -> bool {
                         }
                         _ => tl!(v.label()).to_owned(),
                     };
-                    let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                    let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
                     resp.widget_info(|| {
                         egui::WidgetInfo::selected(egui::Role::Button, true, on, &name)
                     });

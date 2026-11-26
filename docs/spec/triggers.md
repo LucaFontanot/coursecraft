@@ -546,9 +546,12 @@ Entrance and exit animations and motion paths describe object visual motion and 
 ## Transitions
 
 Slide transitions are render-only visual effects occurring when a slide with `transition` is entered:
-- `fade`: Previous slide items blend out at alpha `1 - p`, new slide items blend in at alpha `p`.
-- `push { from }`: Both slides translate together; new enters from `from`, old exits opposite.
-- `cover { from }`: New slide translates in from `from` over static previous slide.
+- Each transition gives both slides a look at progress `p` (linear in real time): an offset, an opacity, a uniform scale about the slide centre, and a rectangular or shaped reveal in fractions of the slide (`coursecraft_logic::sample_transition`, M46 phase 8). The new slide is drawn above the old one, except for `uncover` and `reveal`. The registry is `coursecraft-course::TRANSITIONS`.
+- `fade`: the old slide fades out (`1 − p`), the new one in (`p`). `fade_black`: both over black; the old slide fades out over the first half, the new one in over the second.
+- `push { from }`: both slides translate together; the new one enters from `from`, the old one leaves the other way. `cover { from }`: the new slide slides in from `from` over the still old one. `uncover { from }`: the old slide slides away (as for push), uncovering the still new one. `reveal { from }`: the old slide drifts 30 % of the way and fades out over the new one fading in.
+- `zoom`: the new slide grows from 30 % while fading in.
+- `wipe { from }`, `split { orientation, inout }`, `shape { shape, inout }`, `clock { spokes }`, `dissolve`, `random_bars { orientation }`, `blinds { orientation }` and `checker { orientation }` reveal the new slide through the same mask as the entrance effects `wipe`, `split`, `shape`, `wheel`, `dissolve`, `random_bars`, `blinds` and `checkerboard` (see Animations), applied to the whole slide.
+- Every transition ends with the new slide at rest. Background, items, text and media of each slide are moved, faded, scaled and masked together (one mesh pass per slide).
 - Transitions run for `duration_ms` of real time. Inputs and logic begin running on the new slide immediately.
 
 ## Question banks and the random draw

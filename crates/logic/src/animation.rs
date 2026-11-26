@@ -350,12 +350,59 @@ pub fn sample_motion_path(
 }
 
 /// Result of sampling a slide transition between previous and next slide.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// How one slide looks during a transition (M46 phase 8).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlideLook {
+    /// Translation in slide pixels.
+    pub offset: (f32, f32),
+    pub alpha: f32,
+    /// Uniform scale about the slide centre.
+    pub scale: f32,
+    /// Rectangular reveal, in fractions of the slide.
+    pub clip: Option<ClipFrac>,
+    /// Shaped reveal, in fractions of the slide.
+    pub mask: Option<Mask>,
+}
+
+impl SlideLook {
+    pub const REST: Self = Self {
+        offset: (0.0, 0.0),
+        alpha: 1.0,
+        scale: 1.0,
+        clip: None,
+        mask: None,
+    };
+
+    /// Only moved (Push and Cover draw without the mesh pass).
+    #[must_use]
+    pub fn only_moves(&self) -> bool {
+        self.alpha >= 1.0 && self.scale == 1.0 && self.clip.is_none() && self.mask.is_none()
+    }
+
+    fn moved(offset: (f32, f32)) -> Self {
+        Self {
+            offset,
+            ..Self::REST
+        }
+    }
+
+    fn faded(alpha: f32) -> Self {
+        Self {
+            alpha: alpha.clamp(0.0, 1.0),
+            ..Self::REST
+        }
+    }
+}
+
+/// Both slides during a transition.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransitionSample {
-    pub prev_offset: (f32, f32),
-    pub prev_alpha: f32,
-    pub next_offset: (f32, f32),
-    pub next_alpha: f32,
+    pub prev: SlideLook,
+    pub next: SlideLook,
+    /// Draw the old slide above the new one (Uncover, Reveal).
+    pub prev_on_top: bool,
+    /// A colour drawn under both slides (Fade through black).
+    pub backdrop: Option<[u8; 3]>,
 }
 
 /// Sample a slide transition at progress `progress` in `[0, 1]`.
@@ -365,39 +412,102 @@ pub fn sample_transition(
     progress: f32,
     slide_size: Size,
 ) -> TransitionSample {
-    let p = progress.clamp(0.0, 1.0);
+    let p = if progress.is_finite() {
+        progress.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     let w = slide_size.w as f32;
     let h = slide_size.h as f32;
-
+    let plain = |prev: SlideLook, next: SlideLook| TransitionSample {
+        prev,
+        next,
+        prev_on_top: false,
+        backdrop: None,
+    };
+    let away = |from: coursecraft_course::Direction, amount: f32| {
+        let (vx, vy) = from.vector();
+        (-vx * amount * w, -vy * amount * h)
+    };
     match transition.effect {
-        TransitionEffect::Fade => TransitionSample {
-            prev_offset: (0.0, 0.0),
-            prev_alpha: 1.0 - p,
-            next_offset: (0.0, 0.0),
-            next_alpha: p,
+        TransitionEffect::Fade => plain(SlideLook::faded(1.0 - p), SlideLook::faded(p)),
+        TransitionEffect::FadeBlack => TransitionSample {
+            backdrop: Some([0, 0, 0]),
+            ..plain(
+                SlideLook::faded(1.0 - 2.0 * p),
+                SlideLook::faded(2.0 * p - 1.0),
+            )
         },
+        // The new slide comes in from `from` (a side or corner); the old one leaves the other
+        // way.
         TransitionEffect::Push { from } => {
-            // The new slide comes in from `from` (a side or corner); the old one leaves the
-            // other way.
             let (vx, vy) = from.vector();
-            let next_offset = (vx * (1.0 - p) * w, vy * (1.0 - p) * h);
-            let prev_offset = (-vx * p * w, -vy * p * h);
-            TransitionSample {
-                prev_offset,
-                prev_alpha: 1.0,
-                next_offset,
-                next_alpha: 1.0,
-            }
+            plain(
+                SlideLook::moved(away(from, p)),
+                SlideLook::moved((vx * (1.0 - p) * w, vy * (1.0 - p) * h)),
+            )
         }
         TransitionEffect::Cover { from } => {
             let (vx, vy) = from.vector();
-            let next_offset = (vx * (1.0 - p) * w, vy * (1.0 - p) * h);
-            TransitionSample {
-                prev_offset: (0.0, 0.0),
-                prev_alpha: 1.0,
-                next_offset,
-                next_alpha: 1.0,
-            }
+            plain(
+                SlideLook::REST,
+                SlideLook::moved((vx * (1.0 - p) * w, vy * (1.0 - p) * h)),
+            )
+        }
+        TransitionEffect::Uncover { from } => TransitionSample {
+            prev_on_top: true,
+            ..plain(SlideLook::moved(away(from, p)), SlideLook::REST)
+        },
+        TransitionEffect::Reveal { from } => TransitionSample {
+            prev_on_top: true,
+            ..plain(
+                SlideLook {
+                    alpha: 1.0 - p,
+                    ..SlideLook::moved(away(from, 0.3 * p))
+                },
+                SlideLook::faded(p),
+            )
+        },
+        TransitionEffect::Zoom => plain(
+            SlideLook::REST,
+            SlideLook {
+                alpha: p,
+                scale: 0.3 + 0.7 * p,
+                ..SlideLook::REST
+            },
+        ),
+        // The rest reveal the new slide through an entrance effect's mask, on the whole slide.
+        _ => {
+            let Some(fx) = transition.effect.as_effect().or_else(|| {
+                matches!(transition.effect, TransitionEffect::Dissolve)
+                    .then(|| coursecraft_course::AnimEffect::new("dissolve"))
+            }) else {
+                return plain(SlideLook::faded(1.0 - p), SlideLook::faded(p));
+            };
+            let s = crate::effects::sample_effect(
+                &fx,
+                &crate::effects::EffectCtx {
+                    phase: AnimationPhase::Entering,
+                    eased: p,
+                    frame: coursecraft_course::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w,
+                        h,
+                    },
+                    slide_size,
+                },
+            );
+            plain(
+                SlideLook::REST,
+                SlideLook {
+                    offset: s.offset,
+                    alpha: s.opacity,
+                    scale: s.scale.0,
+                    clip: s.clip,
+                    mask: s.mask,
+                },
+            )
         }
     }
 }

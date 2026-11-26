@@ -180,6 +180,85 @@ pub fn emphasis_pieces(effect: &EmphasisEffect, at: Option<f32>) -> Vec<Piece> {
     }
 }
 
+/// Paint a slide transition's icon into `art`: the old slide in `old`, the new one in `new`,
+/// part way through (`at` as for effects).
+pub fn paint_transition(
+    painter: &Painter,
+    art: Rect,
+    effect: &coursecraft_course::TransitionEffect,
+    old: Color32,
+    new: Color32,
+    at: Option<f32>,
+) {
+    let size = Size {
+        w: STAGE.x as u32,
+        h: STAGE.y as u32,
+    };
+    let t = coursecraft_course::Transition {
+        effect: effect.clone(),
+        duration_ms: 1000,
+    };
+    let s = coursecraft_logic::sample_transition(&t, at.unwrap_or(0.55), size);
+    let k = (art.width() / STAGE.x).min(art.height() / STAGE.y);
+    let origin = art.center() - STAGE * k / 2.0;
+    let map = |p: Pos2| origin + p.to_vec2() * k;
+    let painter = painter.with_clip_rect(art.intersect(painter.clip_rect()));
+    let slide = |look: &coursecraft_logic::SlideLook, color: Color32| {
+        if look.alpha <= 0.0 {
+            return;
+        }
+        let unit = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let mut polys: Vec<Vec<(f32, f32)>> = match &look.mask {
+            Some(m) => m.polys().iter().map(|p| p.0.clone()).collect(),
+            None => vec![unit],
+        };
+        if let Some(c) = look.clip {
+            polys = polys
+                .iter()
+                .map(|p| clip_rect(p, c.min_x, c.min_y, c.max_x, c.max_y))
+                .collect();
+        }
+        let centre = pos2(STAGE.x / 2.0, STAGE.y / 2.0);
+        let color = Color32::from_rgba_unmultiplied(
+            color.r(),
+            color.g(),
+            color.b(),
+            (look.alpha.clamp(0.0, 1.0) * 255.0) as u8,
+        );
+        for poly in polys.into_iter().filter(|p| p.len() >= 3) {
+            let points: Vec<Pos2> = poly
+                .into_iter()
+                .map(|(u, v)| {
+                    let p = pos2(u * STAGE.x, v * STAGE.y);
+                    let p = centre + (p - centre) * look.scale;
+                    map(p + vec2(look.offset.0, look.offset.1))
+                })
+                .collect();
+            if points.iter().all(|q| q.x.is_finite() && q.y.is_finite()) {
+                painter.add(Shape::convex_polygon(
+                    points,
+                    color,
+                    Stroke::new(0.6, color),
+                ));
+            }
+        }
+    };
+    if let Some([r, g, b]) = s.backdrop {
+        painter.rect_filled(
+            Rect::from_min_max(map(Pos2::ZERO), map(pos2(STAGE.x, STAGE.y))),
+            0.0,
+            Color32::from_rgb(r, g, b),
+        );
+    }
+    if s.prev_on_top {
+        slide(&s.next, new);
+        slide(&s.prev, old);
+    } else {
+        slide(&s.prev, old);
+        slide(&s.next, new);
+    }
+}
+
 /// The hover loop's frame at `time` seconds: 0→1 over a second, then a short hold at rest.
 #[must_use]
 pub fn hover_shown(time: f64) -> f32 {

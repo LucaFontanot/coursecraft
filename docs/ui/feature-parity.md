@@ -19,13 +19,13 @@
 | Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
-| Animation, transitions, timeline | 18 | 1 | 5 | 0 |
+| Animation, transitions, timeline | 19 | 1 | 5 | 0 |
 | Questions and quizzes | 8 | 4 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **116** | **38** | **55** | **12** |
+| **Total** | **117** | **38** | **55** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -194,7 +194,8 @@ Counted from the tables below; recount when a row changes.
 | Timeline shows current layer; group rows expand | `timeline.rs` | ✅ | — |
 | Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`): 25 effects from the registry, each also as an exit | ✅ | M46 |
 | Effect icons and Effect Options menu | Each gallery tile draws its effect with the effect's own sample function (entrance green, exit red, plays on hover); Effect Options ▾ has one section per option of the effect, with icons (`ribbon/effect_art.rs`) | ✅ | M46 |
-| Transition effect options | Transitions › Effect Options ▾ (from left, right, top, bottom) | ✅ | — |
+| Transition effect options | Transitions › Effect Options ▾ and the Slide inspector: direction (eight), orientation, in/out, shape, spokes | ✅ | M46 |
+| Transitions pack (15 transitions) | `TransitionEffect`: Fade, Fade through black, Push, Cover, Uncover, Reveal, Wipe, Split, Zoom, Shape, Clock, Dissolve, Random bars, Blinds, Checkerboard, with drawn gallery icons | ✅ | M46 |
 | Path options | | 🟡 | M42 |
 | Emphasis animations | 12 effects (`object.add_emphasis`, `set_emphasis`, `remove_emphasis`); Animations › Emphasis gallery, the Animate inspector's Emphasis card, amber strips on timeline bars | ✅ | M46 |
 | Animation painter | Animations › Animation Painter (`object.copy_animation`) | ✅ | M46 |

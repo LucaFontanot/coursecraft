@@ -1334,4 +1334,58 @@ mod tests {
         assert!((late[0].opacity - 1.0).abs() < 1e-4 && late[1].opacity > 0.4);
         assert_eq!(at(1000), vec![ObjectSample::IDENTITY; 2]);
     }
+
+    #[test]
+    fn every_transition_ends_on_the_new_slide_and_round_trips_its_options() {
+        use coursecraft_course::{TRANSITIONS, Transition, TransitionEffect};
+        let size = Size { w: 960, h: 540 };
+        for def in TRANSITIONS {
+            let fx = def.options_like.map(AnimEffect::new);
+            let effect = TransitionEffect::from_parts(def.id, fx.as_ref()).expect("known id");
+            assert_eq!(effect.id(), def.id);
+            // The editor reads and writes options through the effect form.
+            if let Some(form) = effect.as_effect() {
+                assert_eq!(
+                    TransitionEffect::from_parts(def.id, Some(&form)),
+                    Some(effect.clone()),
+                    "{}",
+                    def.id
+                );
+            }
+            let t = Transition {
+                effect: effect.clone(),
+                duration_ms: 500,
+            };
+            let end = crate::sample_transition(&t, 1.0, size);
+            assert_eq!(
+                end.next,
+                crate::SlideLook::REST,
+                "`{}` ends at rest",
+                def.id
+            );
+            if end.prev_on_top {
+                let gone = end.prev.alpha <= 0.0
+                    || end.prev.offset.0.abs() >= 960.0
+                    || end.prev.offset.1.abs() >= 540.0;
+                assert!(gone, "`{}` leaves the old slide in the way", def.id);
+            }
+            for p in [0.0, 0.25, 0.5, 0.75, f32::NAN] {
+                let s = crate::sample_transition(&t, p, size);
+                for look in [&s.prev, &s.next] {
+                    assert!(look.alpha.is_finite() && look.scale.is_finite());
+                    assert!(look.offset.0.is_finite() && look.offset.1.is_finite());
+                }
+            }
+        }
+        // Old files keep their meaning.
+        let old: TransitionEffect =
+            serde_json::from_value(serde_json::json!({ "type": "push", "from": "left" }))
+                .expect("push");
+        assert_eq!(
+            old,
+            TransitionEffect::Push {
+                from: Direction::Left
+            }
+        );
+    }
 }

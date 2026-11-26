@@ -35,7 +35,8 @@ pub use connector_route::{
 };
 pub use effects::{
     EFFECTS, EMPHASIS, EffectCategory, EffectDef, EffectOptionDef, EmphasisDef, FALLBACK_EFFECT,
-    FALLBACK_EMPHASIS, OPTION_FIELDS, effect_def, emphasis_def,
+    FALLBACK_EMPHASIS, OPTION_FIELDS, TRANSITIONS, TransitionDef, effect_def, emphasis_def,
+    transition_def,
 };
 
 pub use course_map::{

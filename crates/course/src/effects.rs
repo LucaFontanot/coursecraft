@@ -751,3 +751,150 @@ mod tests {
         assert!(wheel.option_problems(&AnimEffect::new("wheel")).is_empty());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Slide transitions (M46 phase 8)
+// ---------------------------------------------------------------------------
+
+/// One slide transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TransitionDef {
+    /// Stored `type` (`"wipe"`).
+    pub id: &'static str,
+    /// English name ("Wipe").
+    pub label: &'static str,
+    /// The entrance effect whose options (and option icons) this transition takes, if any.
+    pub options_like: Option<&'static str>,
+}
+
+const fn tr(
+    id: &'static str,
+    label: &'static str,
+    options_like: Option<&'static str>,
+) -> TransitionDef {
+    TransitionDef {
+        id,
+        label,
+        options_like,
+    }
+}
+
+/// Every slide transition, in gallery order.
+pub static TRANSITIONS: &[TransitionDef] = &[
+    tr("fade", "Fade", None),
+    tr("fade_black", "Fade through black", None),
+    tr("push", "Push", Some("fly_in")),
+    tr("cover", "Cover", Some("fly_in")),
+    tr("uncover", "Uncover", Some("fly_in")),
+    tr("reveal", "Reveal", Some("fly_in")),
+    tr("wipe", "Wipe", Some("wipe")),
+    tr("split", "Split", Some("split")),
+    tr("zoom", "Zoom", None),
+    tr("shape", "Shape", Some("shape")),
+    tr("clock", "Clock", Some("wheel")),
+    tr("dissolve", "Dissolve", None),
+    tr("random_bars", "Random bars", Some("random_bars")),
+    tr("blinds", "Blinds", Some("blinds")),
+    tr("checker", "Checkerboard", Some("checkerboard")),
+];
+
+/// The transition registry entry for `id`.
+#[must_use]
+pub fn transition_def(id: &str) -> Option<&'static TransitionDef> {
+    TRANSITIONS.iter().find(|d| d.id == id)
+}
+
+impl crate::TransitionEffect {
+    /// The stored `type`.
+    #[must_use]
+    pub const fn id(&self) -> &'static str {
+        use crate::TransitionEffect as T;
+        match self {
+            T::Fade => "fade",
+            T::FadeBlack => "fade_black",
+            T::Push { .. } => "push",
+            T::Cover { .. } => "cover",
+            T::Uncover { .. } => "uncover",
+            T::Reveal { .. } => "reveal",
+            T::Wipe { .. } => "wipe",
+            T::Split { .. } => "split",
+            T::Zoom => "zoom",
+            T::Shape { .. } => "shape",
+            T::Clock { .. } => "clock",
+            T::Dissolve => "dissolve",
+            T::RandomBars { .. } => "random_bars",
+            T::Blinds { .. } => "blinds",
+            T::Checker { .. } => "checker",
+        }
+    }
+
+    /// Its registry entry.
+    #[must_use]
+    pub fn def(&self) -> Option<&'static TransitionDef> {
+        transition_def(self.id())
+    }
+
+    /// The transition's options as an entrance effect of [`TransitionDef::options_like`]
+    /// (`None` when it takes none). The editor's option pickers and the runtime's reveal masks
+    /// both use it.
+    #[must_use]
+    pub fn as_effect(&self) -> Option<AnimEffect> {
+        use crate::TransitionEffect as T;
+        let like = self.def()?.options_like?;
+        let mut fx = AnimEffect::new(like);
+        match *self {
+            T::Push { from }
+            | T::Cover { from }
+            | T::Uncover { from }
+            | T::Reveal { from }
+            | T::Wipe { from } => fx.from = Some(from),
+            T::Split { orientation, inout } => {
+                fx.orientation = Some(orientation);
+                fx.inout = Some(inout);
+            }
+            T::Shape { shape, inout } => {
+                fx.shape = Some(shape);
+                fx.inout = Some(inout);
+            }
+            T::Clock { spokes } => fx.spokes = Some(spokes),
+            T::RandomBars { orientation }
+            | T::Blinds { orientation }
+            | T::Checker { orientation } => fx.orientation = Some(orientation),
+            T::Fade | T::FadeBlack | T::Zoom | T::Dissolve => {}
+        }
+        Some(fx)
+    }
+
+    /// Transition `id` with the options of `fx` (each missing one at its default). `None` for an
+    /// unknown id.
+    #[must_use]
+    pub fn from_parts(id: &str, fx: Option<&AnimEffect>) -> Option<Self> {
+        use crate::TransitionEffect as T;
+        let from = fx.and_then(|f| f.from).unwrap_or_default();
+        let orientation = fx.and_then(|f| f.orientation).unwrap_or_default();
+        let inout = fx.and_then(|f| f.inout).unwrap_or_default();
+        Some(match id {
+            "fade" => T::Fade,
+            "fade_black" => T::FadeBlack,
+            "push" => T::Push { from },
+            "cover" => T::Cover { from },
+            "uncover" => T::Uncover { from },
+            "reveal" => T::Reveal { from },
+            "wipe" => T::Wipe { from },
+            "split" => T::Split { orientation, inout },
+            "zoom" => T::Zoom,
+            "shape" => T::Shape {
+                shape: fx.and_then(|f| f.shape).unwrap_or_default(),
+                inout,
+            },
+            "clock" => T::Clock {
+                spokes: fx.and_then(|f| f.spokes).unwrap_or(1),
+            },
+            "dissolve" => T::Dissolve,
+            "random_bars" => T::RandomBars { orientation },
+            "blinds" => T::Blinds { orientation },
+            "checker" => T::Checker { orientation },
+            _ => return None,
+        })
+    }
+}
