@@ -51,6 +51,8 @@ Built to the conventions of the [ArtCraft](https://github.com/storytold) Craftin
 - **A ribbon editor with panels you arrange:** commands grouped in ribbon tabs, with extra tabs for what you select, and Slides, Timeline, Triggers, States, the inspectors and more as panels you can move, tab, split, float or close. Your layout is saved, and every label is ready for translation.
 - **A visual editor** on the desktop and in the browser: multi-select, align and distribute, smart guides, grouping, copy and paste, slide masters, layouts and templates, find and replace, image crop, a timeline, and PowerPoint import.
 - **Interactive courses:** layers, triggers, variables, animation, and twelve question types with feedback, question banks and results slides.
+- **Animation and transitions:** 25 entrance and exit effects, played as one, by paragraph or letter by letter, 12 emphasis effects layered on top, and 15 slide transitions, each previewed live while you pick it. The Animation Painter copies animations from one object to others.
+- **Text formatting:** fonts, highlight colour, text shadow, Change Case, bullets and numbering styles, text direction, theme heading and body fonts, symbols, and variables inserted right into the text.
 - **Text and buttons that behave:** click to place a label that fits its text and grows as you type, or drag a box that wraps. Group a shape, icon and text and make the group act as one button, with one hover look, one click, one Tab stop and one screen-reader name.
 - **Rich object states:** hover, pressed, selected, visited and your own states, each a full second look for an object (picture, text, fill, outline, shadow, glow, rotation and items of its own), all side by side in the States tab and edited right on the canvas.
 - **Any slide size:** Full HD, HD, 4:3, square or portrait, or your own; resize a whole course with a live preview of how content fits.
@@ -142,6 +144,10 @@ See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/road
 layout (a tabbed ribbon grouping commands by task, with planned buttons shown greyed out until
 they work) is specified in [docs/ui/](docs/ui/README.md); what CourseCraft can and cannot do yet,
 feature by feature, is in [docs/ui/feature-parity.md](docs/ui/feature-parity.md).
+
+## Contributors
+
+Thanks to [LucaFontanot](https://github.com/LucaFontanot), who designed and built the animation system (PR #13), the ribbon editor interface (PR #6), and the player's seekbar settings and web Play gate (PRs #3 and #4).
 
 ## Help and contributing
 
