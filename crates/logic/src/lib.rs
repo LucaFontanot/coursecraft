@@ -1293,17 +1293,7 @@ impl<'c> Player<'c> {
         }
 
         // d. Base slide clock and visible layer clocks.
-        let show_bar = slide
-            .player
-            .as_ref()
-            .and_then(|o| o.show_bar)
-            .unwrap_or(self.course.player.show_bar);
-        let show_seekbar = show_bar
-            && slide
-                .player
-                .as_ref()
-                .and_then(|o| o.show_seekbar)
-                .unwrap_or(self.course.player.show_seekbar);
+        let show_seekbar = self.course.player_for(slide).seekbar_available();
         let seek_target = self.seek_target();
 
         if !base_held {
@@ -1572,19 +1562,7 @@ impl<'c> Player<'c> {
     /// directly, for those three flags.
     #[must_use]
     pub fn effective_player(&self) -> coursecraft_course::PlayerSettings {
-        let mut settings = self.course.player.clone();
-        if let Some(overrides) = self.current_slide().and_then(|slide| slide.player.as_ref()) {
-            if let Some(show) = overrides.show_nav {
-                settings.show_nav = show;
-            }
-            if let Some(show) = overrides.show_seekbar {
-                settings.show_seekbar = show;
-            }
-            if let Some(show) = overrides.show_menu {
-                settings.show_menu = show;
-            }
-        }
-        settings
+        self.course.player.for_slide(self.current_slide())
     }
 
     /// Set the playback speed. Snaps to the nearest of 0.5, 0.75, 1, 1.25, 1.5
@@ -1647,10 +1625,7 @@ impl<'c> Player<'c> {
 
     /// The rule that decides when Next unlocks on the current slide.
     fn next_rule(&self) -> NextRequirement {
-        self.current_slide()
-            .and_then(|slide| slide.player.as_ref())
-            .and_then(|overrides| overrides.next_requires.clone())
-            .unwrap_or_else(|| self.course.player.next_requires.clone())
+        self.effective_player().next_requires
     }
 
     /// Whether the Next button works right now. False while the slide's "Next

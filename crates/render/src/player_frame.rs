@@ -475,14 +475,14 @@ impl PlayerFrame {
             .rect_filled(full, CornerRadius::ZERO, PLAYER_GROUND);
 
         let started = player.state().started;
-        let show_bar = effective_show_bar(player);
+        let settings = &player.effective_player();
+        let show_bar = settings.show_bar;
         if !show_bar {
             self.drawer_open = false;
             self.speed_open = false;
         }
-        let settings = &player.effective_player();
-        let show_menu = show_bar && settings.show_menu && started;
-        let show_nav = show_bar && settings.show_nav && started;
+        let show_menu = settings.menu_available() && started;
+        let show_nav = settings.nav_available() && started;
         let now = ui.input(|i| i.time);
         let dt = if self.initialized {
             (now - self.last_time).clamp(0.0, 0.1) as f32
@@ -1117,14 +1117,6 @@ impl PlayerFrame {
     }
 }
 
-fn effective_show_bar(player: &Player<'_>) -> bool {
-    player
-        .current_slide()
-        .and_then(|slide| slide.player.as_ref())
-        .and_then(|overrides| overrides.show_bar)
-        .unwrap_or(player.course().player.show_bar)
-}
-
 fn strip_has_focus(ui: &Ui) -> bool {
     ui.memory(|m| {
         m.focused().is_some_and(|id| {
@@ -1549,7 +1541,7 @@ fn strip_layout(
     let total = player.play_order().len();
     let index = player.slide_position(&slide.id)?;
     let started = player.state().started;
-    let show_seekbox = settings.show_seekbar && started;
+    let show_seekbox = settings.seekbar_available() && started;
     let info = player.seek_info();
     let title_text = player.display_text(&slide.title);
     let counter_text = format!("{} / {}", index.saturating_add(1), total);
@@ -2234,7 +2226,7 @@ fn draw_secondary_controls(
     };
     let started = player.state().started;
     let can_nav = show_nav && started && !player.lightbox_open();
-    let can_menu = player.effective_player().show_menu && started;
+    let can_menu = player.effective_player().menu_available() && started;
 
     if let Some(rect) = layout.captions {
         let fill = (*captions_on).then_some(accent);
