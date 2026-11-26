@@ -493,7 +493,7 @@ Plan: `docs/testing/m45-plan.md`; report: `docs/testing/m45-report.md`. Briefs a
 - The Fill toggle restores the previous colour; trimming an audio bar on the timeline stops the audio at the bar end.
 - Released as 0.5.2 with the media read errors, `course.json` media folder and Theme font picker fixes.
 
-## M46 Animation system (in progress)
+## M46 Animation system ✅
 
 Plan: `docs/plans/m46-animation-system.md`. One effect registry that the player, renderer,
 editor, validator, CLI and MCP all read; more effects with icons for each effect and option; a

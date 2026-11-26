@@ -2,6 +2,35 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.6.0
+
+A new animation system: many more entrance, exit and emphasis effects, slide transitions, and live previews while you pick them.
+
+Thanks to LucaFontanot, who designed and built the whole animation system in this release (PR #13).
+
+**Entrance and exit effects**
+- 25 entrance and exit effects in four groups (Basic, Subtle, Moderate, Exciting), including Fly, Float, Wipe, Zoom, Bounce, Flip, Swivel, Wheel and Dissolve, with diagonal directions and shape, in/out, spokes and orientation options.
+- Effects can scale, turn, tint and reveal objects through shaped masks, and text shrinks smoothly instead of rewrapping.
+- Play an entrance or exit as one, by paragraph or letter by letter.
+- New easings: Overshoot, Bounce and Elastic.
+
+**Emphasis effects**
+- 12 emphasis effects such as Pulse, Grow and shrink, Spin, Shake, Heartbeat, Jump, Blink and Colour pulse, each with its own start, duration and repeat, layered over an entrance or exit.
+- The Animation Painter copies an object's animations to other objects, like the Format Painter.
+- Timeline bars show strips for each animation.
+
+**Slide transitions**
+- 15 slide transitions: Fade, Fade through black, Push, Cover, Uncover, Reveal, Wipe, Split, Zoom, Shape, Clock, Dissolve, Random bars, Blinds and Checkerboard, each with its options.
+
+**Picking and previewing**
+- Every gallery tile draws its own effect, looping while you hover it. Effect Options shows directions as a compass and the other options with icons.
+- The Animate panel has Entrance, Exit and Emphasis cards with an effect picker (search, Recent, groups), duration in seconds and easing drawn as curves.
+- The canvas plays the selected objects' animation in place when you pick an effect or press Preview. Auto-preview turns this off.
+- PowerPoint import brings in the matching entrance and exit presets.
+- Agents can list every effect with the new `animation.effects` command, and add emphasis with `object.add_emphasis`, `object.set_emphasis`, `object.remove_emphasis` and `object.copy_animation`.
+
+Courses saved by older versions open unchanged, and an unknown effect in a file plays as Fade.
+
 ## 0.5.3
 
 Everyday-use fixes for the keyboard, the slide list, the stage, number fields and the ribbon.
