@@ -98,6 +98,8 @@ fn piece(run: &ResolvedTextRun, text: String, visible: bool) -> ResolvedTextRun 
         r.color = egui::Color32::TRANSPARENT;
         r.underline = false;
         r.strikethrough = false;
+        r.highlight = None;
+        r.shadow = false;
     }
     r
 }

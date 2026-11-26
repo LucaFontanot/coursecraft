@@ -2,7 +2,9 @@ use coursecraft_course::Course;
 use coursecraft_logic::{Input, Player};
 use serde_json::{Value, json};
 
-use super::{ChromeButton, ExternalFocus, FocusManager, FocusTarget, build_list};
+use super::{
+    ChromeButton, ExternalFocus, FocusManager, FocusTarget, build_list, focus_order_candidates,
+};
 
 fn course(slides: Value) -> Course {
     let text = json!({
@@ -1407,4 +1409,58 @@ fn gb_08_interactive_group_tab_activate_and_union_focus_ring() {
         focus.focused(),
         Some(&FocusTarget::Object("btn-after".into()))
     );
+}
+
+#[test]
+fn focus_order_candidates_match_the_player_focus_list() {
+    let mut late = button("late");
+    late["focus_order"] = json!(1);
+    let mut early = button("early");
+    early["focus_order"] = json!(1);
+    let mut decorative = button("deco");
+    decorative["decorative"] = json!(true);
+    let c = course(json!([{
+        "id": "s1",
+        "title": "S",
+        "objects": [button("a"), late, button("b"), decorative, early]
+    }]));
+    let slide = c.slide("s1").expect("slide");
+    let got: Vec<String> = focus_order_candidates(slide)
+        .into_iter()
+        .map(|candidate| candidate.id)
+        .collect();
+    assert_eq!(got, ["late", "early", "a", "b"]);
+    let list = build_list(&player(&c), false, false, false);
+    let from_player: Vec<String> = list
+        .into_iter()
+        .filter_map(|target| match target {
+            FocusTarget::Object(id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(got, from_player);
+}
+
+#[test]
+fn focus_order_candidates_list_layers_after_the_base_and_skip_plain_shapes() {
+    let c = course(json!([{
+        "id": "s1",
+        "title": "S",
+        "objects": [
+            button("base"),
+            {
+                "id": "plain",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#000000" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+            }
+        ],
+        "layers": [{ "id": "l1", "name": "L", "objects": [button("inlayer")] }]
+    }]));
+    let slide = c.slide("s1").expect("slide");
+    let got = focus_order_candidates(slide);
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].id, "base");
+    assert_eq!(got[0].layer, None);
+    assert_eq!(got[1].id, "inlayer");
+    assert_eq!(got[1].layer.as_deref(), Some("l1"));
 }

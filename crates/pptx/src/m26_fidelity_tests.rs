@@ -20,7 +20,7 @@ const TINY_PNG: &[u8] = &[
     0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
 
-fn build_pptx(slides: &[&str], extra: &[(&str, &[u8])]) -> Vec<u8> {
+pub(crate) fn build_pptx(slides: &[&str], extra: &[(&str, &[u8])]) -> Vec<u8> {
     let mut buffer = std::io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut buffer);

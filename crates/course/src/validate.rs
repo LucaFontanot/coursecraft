@@ -329,6 +329,9 @@ impl Course {
             return;
         }
         check_font_name(self, cx, &self.theme.font, "theme/font");
+        if let Some(heading) = &self.theme.heading_font {
+            check_font_name(self, cx, heading, "theme/heading_font");
+        }
         check_palette(self, cx);
         if cx.should_stop() {
             return;
@@ -1773,6 +1776,14 @@ fn check_text_runs(
                     cx.err_at(
                         "color",
                         format!("color {:?} is not #RRGGBB or #RRGGBBAA", c.0),
+                    );
+                }
+                if let Some(ref c) = run.highlight
+                    && !c.is_valid()
+                {
+                    cx.err_at(
+                        "highlight",
+                        format!("highlight {:?} is not #RRGGBB or #RRGGBBAA", c.0),
                     );
                 }
                 if !cx.skip_warnings

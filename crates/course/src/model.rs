@@ -3022,6 +3022,13 @@ pub struct TextRun {
     /// Font family for this run. Omitted when it inherits the paragraph style.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// Background colour behind this run's glyphs (a text highlight). `None`
+    /// draws no highlight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<Color>,
+    /// A soft shadow behind this run's glyphs. `None` inherits no shadow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<bool>,
 }
 
 impl TextRun {
@@ -3041,6 +3048,8 @@ impl TextRun {
             color,
             link,
             font,
+            highlight,
+            shadow,
         } = self;
         bold.is_none()
             && italic.is_none()
@@ -3052,6 +3061,8 @@ impl TextRun {
             && color.is_none()
             && link.is_none()
             && font.is_none()
+            && highlight.is_none()
+            && shadow.is_none()
     }
 }
 
@@ -4212,6 +4223,10 @@ pub struct Theme {
     pub text: Color,
     #[serde(default = "default_theme_font")]
     pub font: String,
+    /// Font for headings (layout titles). `None` means headings use `font`.
+    /// Omitted when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_font: Option<String>,
     #[serde(default)]
     pub player: PlayerTheme,
     /// Named colours the editor offers first in every colour picker, up to
@@ -4266,8 +4281,20 @@ impl Default for Theme {
             background: default_background_color(),
             text: default_theme_text_color(),
             font: default_theme_font(),
+            heading_font: None,
             player: PlayerTheme::default(),
             palette: Vec::new(),
+        }
+    }
+}
+
+impl Theme {
+    /// The font headings use: `heading_font` when set and not blank, else `font`.
+    #[must_use]
+    pub fn heading_font_or_body(&self) -> &str {
+        match self.heading_font.as_deref() {
+            Some(f) if !f.trim().is_empty() => f,
+            _ => &self.font,
         }
     }
 }

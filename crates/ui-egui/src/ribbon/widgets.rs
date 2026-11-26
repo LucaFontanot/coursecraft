@@ -266,6 +266,44 @@ pub fn toggle(ui: &mut Ui, icon: Icon, name: &str, enabled: bool, on: bool) -> R
     resp
 }
 
+/// An icon toggle with a ▾ strip: the main part toggles, the strip opens a menu.
+pub fn toggle_split(
+    ui: &mut Ui,
+    icon: Icon,
+    name: &str,
+    enabled: bool,
+    on: bool,
+) -> (Response, Response) {
+    let p = palette(ui.ctx());
+    let arrow_w = 12.0;
+    let (rect, outer) = ui.allocate_exact_size(vec2(24.0 + arrow_w, SMALL_H), Sense::hover());
+    let main_rect = Rect::from_min_max(rect.min, pos2(rect.max.x - arrow_w, rect.max.y));
+    let arrow_rect = Rect::from_min_max(pos2(rect.max.x - arrow_w, rect.min.y), rect.max);
+    let main = ui.interact(main_rect, outer.id.with("main"), sense(enabled));
+    main.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, name));
+    let arrow = ui.interact(arrow_rect, outer.id.with("arrow"), sense(enabled));
+    arrow.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{name} options"))
+    });
+    let painter = ui.painter_at(rect);
+    let radius = CornerRadius::same(coursecraft_render::RADIUS_SM as u8);
+    if let Some(c) = fill(ui, &main, on, &p) {
+        painter.rect_filled(main_rect, radius, c);
+    }
+    if let Some(c) = fill(ui, &arrow, false, &p) {
+        painter.rect_filled(arrow_rect, radius, c);
+    }
+    let col = if enabled { p.text } else { p.text_disabled };
+    paint_icon(&painter, main_rect.center(), icon, SMALL_ICON, col);
+    chevron(
+        &painter,
+        pos2(arrow_rect.center().x, rect.center().y),
+        2.4,
+        p.text_secondary,
+    );
+    (main, arrow)
+}
+
 /// A text field with a ▾ (font family, size) showing `text`.
 pub fn combo_field(ui: &mut Ui, name: &str, text: &str, width: f32, enabled: bool) -> Response {
     let p = palette(ui.ctx());

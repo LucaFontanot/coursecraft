@@ -19,6 +19,8 @@ use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 
 #[cfg(test)]
+mod m39_t_tests;
+#[cfg(test)]
 mod tests;
 
 /// XLIFF 1.2 namespace.
@@ -1708,6 +1710,8 @@ fn set_object_text(object: &mut Object, field: &str, target: &ParsedText) -> boo
                         strikethrough: None,
                         baseline: None,
                         letter_spacing: None,
+                        highlight: None,
+                        shadow: None,
                     });
                 run.text = segment.text.clone();
                 new_runs.push(run);
@@ -1756,6 +1760,8 @@ fn set_object_text(object: &mut Object, field: &str, target: &ParsedText) -> boo
                         strikethrough: None,
                         baseline: None,
                         letter_spacing: None,
+                        highlight: None,
+                        shadow: None,
                     });
                 run.text = segment.text.clone();
                 new_runs.push(run);
@@ -1808,6 +1814,8 @@ fn set_object_text(object: &mut Object, field: &str, target: &ParsedText) -> boo
                         strikethrough: None,
                         baseline: None,
                         letter_spacing: None,
+                        highlight: None,
+                        shadow: None,
                     });
                 run.text = segment.text.clone();
                 new_runs.push(run);
@@ -1980,6 +1988,8 @@ fn rebuild_runs(formatting: &[TextRun], target: &ParsedText) -> Vec<TextRun> {
                 strikethrough: None,
                 baseline: None,
                 letter_spacing: None,
+                highlight: None,
+                shadow: None,
             });
         run.text = segment.text.clone();
         new_runs.push(run);

@@ -2184,7 +2184,7 @@ fn eye_and_dim_are_editor_only_and_leave_revision_alone() {
     harness.click_at(eye.center());
     harness.idle_frame();
 
-    assert!(harness.editor.ui.layers.is_hidden("l1"));
+    assert!(harness.editor.ui.layers.is_shown("l1"));
     assert_eq!(harness.editor.session.revision, rev_before);
     assert_eq!(harness.editor.session.course, before);
     let slide = harness
@@ -2194,8 +2194,8 @@ fn eye_and_dim_are_editor_only_and_leave_revision_alone() {
         .slide("s-tabs")
         .expect("s-tabs");
     let extra = harness.editor.ui.layers.extra_layer_ids(slide, Some("l2"));
-    assert_eq!(extra, vec!["l3".to_owned()]);
-    assert!(!extra.iter().any(|id| id == "l1"));
+    assert_eq!(extra, vec!["l1".to_owned()]);
+    assert!(!extra.iter().any(|id| id == "l3"));
 
     let dim = harness.editor.ui.layers.dim_rect.expect("dim toggle");
     harness.click_at(dim.center());

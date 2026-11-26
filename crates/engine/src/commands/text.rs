@@ -1,10 +1,10 @@
 //! Rich text, paragraph, hyperlink, and autofit commands.
 
 use coursecraft_course::{
-    Align, Autofit, Baseline, Color, Link, ListKind, ObjectKind, Paragraph, Rect, ShapeText,
-    TextDirection, TextRun, TextRunPatch, TextStyle, VAlign, align_paragraphs, apply_link_to_range,
-    apply_style_to_range_with_base, apply_text_edit, is_valid_link_url, paragraphs_for,
-    parse_color, relative_luminance,
+    Align, Autofit, Baseline, CaseChange, Color, Link, ListKind, ObjectKind, Paragraph, Rect,
+    ShapeText, TextDirection, TextRun, TextRunPatch, TextStyle, VAlign, align_paragraphs,
+    apply_link_to_range, apply_style_to_range_with_base, apply_text_edit, is_valid_link_url,
+    paragraphs_for, parse_color, relative_luminance,
 };
 use coursecraft_media::text_metrics::{
     MeasuredRun, POINT_TEXT_MAX_DIM, POINT_TEXT_MIN_W, ParagraphMetrics, TextBoxInsets,
@@ -440,6 +440,19 @@ pub(super) fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
     let size: Option<f32> = opt(C, p, "size")?;
     let color_str: Option<String> = opt(C, p, "color")?;
     let font: Option<String> = opt(C, p, "font")?;
+    let shadow: Option<bool> = opt(C, p, "shadow")?;
+    // `highlight` is a colour, or `null` to remove the highlight. Absent leaves it alone.
+    let highlight: Option<Option<Color>> = match p.get("highlight") {
+        None => None,
+        Some(Json::Null) => Some(None),
+        Some(value) => {
+            let text: String = serde_json::from_value(value.clone())
+                .map_err(|e| bad(C, format!("`highlight`: {e}")))?;
+            let color = Color(text);
+            validate_color(C, &color)?;
+            Some(Some(color))
+        }
+    };
 
     if let Some(sz) = size
         && (!sz.is_finite() || sz <= 0.0)
@@ -459,14 +472,7 @@ pub(super) fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
         return Err(bad(C, format!("object {oid:?} is not a text object")));
     };
-    let total_chars = parts.text.chars().count();
-    let (range_start, range_end) = if start == 0 && end == 0 {
-        (0, 0)
-    } else {
-        let s_clamp = start.min(total_chars);
-        let e_clamp = end.min(total_chars);
-        (s_clamp.min(e_clamp), s_clamp.max(e_clamp))
-    };
+    let (range_start, range_end) = clamped_range(start, end, parts.text.chars().count());
 
     let patch = TextRunPatch {
         bold,
@@ -479,6 +485,8 @@ pub(super) fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
         strikethrough,
         baseline,
         letter_spacing,
+        highlight,
+        shadow,
     };
     let new_runs = apply_style_to_range_with_base(
         parts.runs,
@@ -491,6 +499,13 @@ pub(super) fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(C, "exceeded 1000 text runs"));
     }
     *parts.runs = new_runs;
+    refit_text_frame(obj);
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+/// Refit point text and Grow boxes after the characters or their formatting changed.
+fn refit_text_frame(obj: &mut coursecraft_course::Object) {
     if let ObjectKind::Text {
         text,
         style,
@@ -507,6 +522,76 @@ pub(super) fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
             fit_grow_text_frame(&mut obj.frame, text, runs, style, paragraphs, None, false);
         }
     }
+}
+
+/// The character range `start..end` clamped to the text; `0..0` means the whole text.
+fn clamped_range(start: usize, end: usize, total_chars: usize) -> (usize, usize) {
+    if start == 0 && end == 0 {
+        (0, 0)
+    } else {
+        let s_clamp = start.min(total_chars);
+        let e_clamp = end.min(total_chars);
+        (s_clamp.min(e_clamp), s_clamp.max(e_clamp))
+    }
+}
+
+pub(super) fn text_clear_formatting(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "text.clear_formatting";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let start: usize = req(C, p, "start")?;
+    let end: usize = req(C, p, "end")?;
+
+    let sl = slide_mut(s, &sid)?;
+    let obj = find_object_mut(sl, &oid)?;
+    let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
+        return Err(bad(C, format!("object {oid:?} is not a text object")));
+    };
+    let range = clamped_range(start, end, parts.text.chars().count());
+    *parts.runs = coursecraft_course::clear_formatting_in_range(parts.runs, parts.text, range);
+    refit_text_frame(obj);
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+pub(super) fn text_change_case(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "text.change_case";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let start: usize = req(C, p, "start")?;
+    let end: usize = req(C, p, "end")?;
+    let case_name: String = req(C, p, "case")?;
+    let change = match case_name.as_str() {
+        "sentence" => CaseChange::Sentence,
+        "lower" => CaseChange::Lower,
+        "upper" => CaseChange::Upper,
+        "title" => CaseChange::Title,
+        "toggle" => CaseChange::Toggle,
+        other => return Err(bad(C, format!("unknown case {other:?}"))),
+    };
+
+    let sl = slide_mut(s, &sid)?;
+    let obj = find_object_mut(sl, &oid)?;
+    let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
+        return Err(bad(C, format!("object {oid:?} is not a text object")));
+    };
+    // The runs hold the displayed text when there are runs.
+    let plain: String = if parts.runs.is_empty() {
+        parts.text.clone()
+    } else {
+        parts.runs.iter().map(|r| r.text.as_str()).collect()
+    };
+    let range = clamped_range(start, end, plain.chars().count());
+    let (new_plain, new_runs) =
+        coursecraft_course::change_case_in_range(parts.runs, &plain, range, change);
+    if new_plain.len() > super::MAX_TEXT {
+        return Err(bad(C, "the changed text is too long"));
+    }
+    *parts.runs = new_runs;
+    *parts.text = new_plain;
+    refit_text_frame(obj);
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
 }
@@ -613,6 +698,29 @@ pub(super) fn text_set_paragraphs(s: &mut Session, p: &Json) -> Result<Json> {
     let line_spacing: Option<f32> = opt(C, p, "line_spacing")?;
     let space_before: Option<f32> = opt(C, p, "space_before")?;
     let space_after: Option<f32> = opt(C, p, "space_after")?;
+    // A numbering scheme (`null` goes back to the level's default) and the first number
+    // (`null` starts at 1). Absent leaves the paragraph alone.
+    let number_scheme: Option<Option<coursecraft_course::NumberScheme>> =
+        match p.get("number_scheme") {
+            None => None,
+            Some(Json::Null) => Some(None),
+            Some(value) => Some(Some(
+                serde_json::from_value(value.clone())
+                    .map_err(|e| bad(C, format!("`number_scheme`: {e}")))?,
+            )),
+        };
+    let start_at: Option<Option<u32>> = match p.get("start_at") {
+        None => None,
+        Some(Json::Null) => Some(None),
+        Some(value) => {
+            let number: u32 = serde_json::from_value(value.clone())
+                .map_err(|e| bad(C, format!("`start_at`: {e}")))?;
+            if !(1..=99_999).contains(&number) {
+                return Err(bad(C, "start_at must be within 1..=99999"));
+            }
+            Some(Some(number))
+        }
+    };
 
     let list = match list_str.as_deref() {
         None => None,
@@ -663,6 +771,12 @@ pub(super) fn text_set_paragraphs(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(value) = space_after {
             paragraph.space_after = value;
+        }
+        if let Some(scheme) = number_scheme {
+            paragraph.number_scheme = scheme;
+        }
+        if let Some(number) = start_at {
+            paragraph.start_at = number;
         }
     }
     trim_paragraphs(&mut paragraphs);

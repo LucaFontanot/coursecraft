@@ -518,6 +518,8 @@ fn runs_are_checked_separately_with_their_own_colours() {
                 strikethrough: None,
                 baseline: None,
                 letter_spacing: None,
+                highlight: None,
+                shadow: None,
             },
             TextRun {
                 text: "Faint".to_owned(),
@@ -531,6 +533,8 @@ fn runs_are_checked_separately_with_their_own_colours() {
                 strikethrough: None,
                 baseline: None,
                 letter_spacing: None,
+                highlight: None,
+                shadow: None,
             },
         ],
         paragraphs: Vec::new(),

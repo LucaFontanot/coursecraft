@@ -1844,7 +1844,7 @@ pub(crate) fn remember_color(ctx: &egui::Context, hex: &str) {
 }
 
 /// A labelled row of small swatches `(tooltip label, hex)`. Returns the clicked hex.
-fn swatch_row(ui: &mut Ui, title: &str, colors: &[(String, String)]) -> Option<String> {
+pub(crate) fn swatch_row(ui: &mut Ui, title: &str, colors: &[(String, String)]) -> Option<String> {
     if colors.is_empty() {
         return None;
     }
@@ -2163,7 +2163,7 @@ pub struct PendingCaretStyle {
 
 /// The run that typing at `cursor_char` would inherit: at `0`, the first
 /// non-empty run; otherwise the run containing the character before the caret.
-fn run_at_caret(runs: &[TextRun], cursor_char: usize) -> Option<&TextRun> {
+pub(crate) fn run_at_caret(runs: &[TextRun], cursor_char: usize) -> Option<&TextRun> {
     if cursor_char == 0 {
         return runs.iter().find(|r| !r.text.is_empty());
     }
@@ -2861,7 +2861,6 @@ fn text_panel_sections(
         }
     }
     not_yet_row(ui, tl!("Caps"), tl!("all caps and small caps"));
-    not_yet_row(ui, tl!("Highlight"), tl!("text highlight colour"));
     not_yet_row(ui, tl!("Underline"), tl!("underline styles"));
 
     section_header(focus, ui, Section::Paragraph);
@@ -5284,6 +5283,166 @@ fn show_text_box_controls(
     action_to_run
 }
 
+/// Overrides the toolbar's tri-states (bold, italic, underline, strike, super, sub)
+/// with what a pending caret style sets.
+fn apply_pending_tri(
+    patch: &coursecraft_course::TextRunPatch,
+    [bold, italic, underline, strike, sup, sub]: [&mut Option<bool>; 6],
+) {
+    if let Some(b) = patch.bold {
+        *bold = Some(b);
+    }
+    if let Some(it) = patch.italic {
+        *italic = Some(it);
+    }
+    if let Some(u) = patch.underline {
+        *underline = Some(u);
+    }
+    if let Some(st) = patch.strikethrough {
+        *strike = Some(st);
+    }
+    if let Some(base) = patch.baseline {
+        *sup = Some(base == coursecraft_course::Baseline::Superscript);
+        *sub = Some(base == coursecraft_course::Baseline::Subscript);
+    }
+}
+
+/// A pending-caret-style setter: `(props, caret, patch edit)`.
+type SetPending<'a> =
+    dyn Fn(&mut PropertiesState, usize, &dyn Fn(&mut coursecraft_course::TextRunPatch)) + 'a;
+
+/// The Text panel row with the Shadow toggle, the highlight swatch and No Color.
+/// Returns the command to run for a range; at a caret it records a pending style instead.
+fn show_shadow_highlight_row(
+    ui: &mut Ui,
+    props: &mut PropertiesState,
+    (tri_shadow, run_highlight): (Option<bool>, Option<String>),
+    caret: Option<usize>,
+    char_range: (usize, usize),
+    (slide_id, obj_id): (&str, &str),
+    set_pending: &SetPending<'_>,
+) -> Option<(&'static str, serde_json::Value)> {
+    let mut action_to_run = None;
+    inspector_row(ui, "Highlight", |ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if crate::widgets::mixed_toggle(ui, "Sh", tri_shadow, "Text shadow").clicked() {
+            let next = tri_shadow != Some(true);
+            if let Some(pos) = caret {
+                set_pending(props, pos, &|p| p.shadow = Some(next));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "shadow": next,
+                    }),
+                ));
+            }
+        }
+        let mut hex = run_highlight.clone().unwrap_or_default();
+        let picked = color_swatch_picker(ui, &mut hex, "prop_run_highlight", 18.0, 4);
+        let none = ui
+            .add_enabled(
+                run_highlight.is_some(),
+                egui::Button::new(tl!("No Color")).small(),
+            )
+            .on_disabled_hover_text(tl!("The text has no highlight."))
+            .clicked();
+        let next: Option<Option<String>> = if none {
+            Some(None)
+        } else if picked && parse_color(&Color(hex.trim().to_owned())).is_some() {
+            Some(Some(hex.trim().to_owned()))
+        } else {
+            None
+        };
+        if let Some(next) = next {
+            if let Some(pos) = caret {
+                set_pending(props, pos, &|p| {
+                    p.highlight = Some(next.clone().map(Color));
+                });
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "highlight": next,
+                    }),
+                ));
+            }
+        }
+    });
+    action_to_run
+}
+
+/// The shadow state and highlight colour the text controls show: from the runs in `range`,
+/// overridden by a pending caret style at `caret`.
+fn shadow_and_highlight(
+    runs: &[TextRun],
+    range: (usize, usize),
+    caret: Option<usize>,
+    props: &PropertiesState,
+    slide_id: &str,
+    obj_id: &str,
+    cell: Option<(usize, usize)>,
+) -> (Option<bool>, Option<String>) {
+    let mut tri_shadow = crate::text_format::shadow_for_range(runs, range);
+    let mut run_highlight = crate::text_format::highlight_for_range(runs, range);
+    if let Some(pos) = caret
+        && let Some(pending) = props.pending_caret_style.as_ref().filter(|p| {
+            p.slide == slide_id && p.object == obj_id && p.cell == cell && p.cursor == pos
+        })
+    {
+        tri_shadow = pending.patch.shadow.or(tri_shadow);
+        if let Some(highlight) = &pending.patch.highlight {
+            run_highlight = highlight.as_ref().map(|c| c.0.clone());
+        }
+    }
+    (tri_shadow, run_highlight)
+}
+
+/// Turns a font-picker choice in the text controls into the command to run (or a request).
+fn font_pick_action(
+    picked: crate::font_picker::FontPickerAction,
+    shown_font: &str,
+    slide_id: &str,
+    obj_id: &str,
+    char_range: (usize, usize),
+    props: &mut PropertiesState,
+    font_requests: &mut Vec<crate::EditorRequest>,
+) -> Option<(&'static str, serde_json::Value)> {
+    let params = |name: &str| {
+        serde_json::json!({
+            "slide": slide_id,
+            "object": obj_id,
+            "start": char_range.0,
+            "end": char_range.1,
+            "font": name,
+        })
+    };
+    match picked {
+        crate::font_picker::FontPickerAction::PickCourseOrRecent(name) => {
+            (shown_font != name).then(|| ("text.style_range", params(&name)))
+        }
+        crate::font_picker::FontPickerAction::PickSystem(name) => {
+            font_requests.push(crate::EditorRequest::AddSystemFont {
+                apply: Some(("text.style_range".to_owned(), params(&name))),
+                family: name,
+            });
+            None
+        }
+        crate::font_picker::FontPickerAction::AddFont => {
+            props.add_font_requested = true;
+            None
+        }
+    }
+}
+
 /// The Text panel controls, shared by text objects and shape text.
 ///
 /// `current_text` is the text being edited and `id_prefix` keeps the text box's
@@ -5383,22 +5542,17 @@ fn show_text_controls(
         });
         if matches_pending {
             if let Some(pending) = &props.pending_caret_style {
-                if let Some(b) = pending.patch.bold {
-                    tri_bold = Some(b);
-                }
-                if let Some(it) = pending.patch.italic {
-                    tri_italic = Some(it);
-                }
-                if let Some(u) = pending.patch.underline {
-                    tri_underline = Some(u);
-                }
-                if let Some(st) = pending.patch.strikethrough {
-                    tri_strike = Some(st);
-                }
-                if let Some(base) = pending.patch.baseline {
-                    tri_super = Some(base == coursecraft_course::Baseline::Superscript);
-                    tri_sub = Some(base == coursecraft_course::Baseline::Subscript);
-                }
+                apply_pending_tri(
+                    &pending.patch,
+                    [
+                        &mut tri_bold,
+                        &mut tri_italic,
+                        &mut tri_underline,
+                        &mut tri_strike,
+                        &mut tri_super,
+                        &mut tri_sub,
+                    ],
+                );
             }
         } else if props
             .pending_caret_style
@@ -5434,41 +5588,16 @@ fn show_text_controls(
             &mut props.system_fonts_list_requested,
             &mut props.system_font_search,
             font_requests,
+        ) && let Some(action) = font_pick_action(
+            picked,
+            &shown_font,
+            slide_id,
+            obj_id,
+            char_range,
+            props,
+            font_requests,
         ) {
-            match picked {
-                crate::font_picker::FontPickerAction::PickCourseOrRecent(name) => {
-                    if shown_font != name {
-                        action_to_run = Some((
-                            "text.style_range",
-                            serde_json::json!({
-                                "slide": slide_id,
-                                "object": obj_id,
-                                "start": char_range.0,
-                                "end": char_range.1,
-                                "font": name,
-                            }),
-                        ));
-                    }
-                }
-                crate::font_picker::FontPickerAction::PickSystem(name) => {
-                    font_requests.push(crate::EditorRequest::AddSystemFont {
-                        family: name.clone(),
-                        apply: Some((
-                            "text.style_range".to_owned(),
-                            serde_json::json!({
-                                "slide": slide_id,
-                                "object": obj_id,
-                                "start": char_range.0,
-                                "end": char_range.1,
-                                "font": name,
-                            }),
-                        )),
-                    });
-                }
-                crate::font_picker::FontPickerAction::AddFont => {
-                    props.add_font_requested = true;
-                }
-            }
+            action_to_run = Some(action);
         }
     });
 
@@ -5713,6 +5842,34 @@ fn show_text_controls(
             ));
         }
     });
+
+    // Shadow and highlight, from the runs under the selection or caret.
+    let shadow_range = match target {
+        TextStyleTarget::Selection(s, e) => (s, e),
+        TextStyleTarget::Caret(pos) => (pos, pos),
+        TextStyleTarget::WholeObject => (0, total_chars),
+    };
+    let caret = match target {
+        TextStyleTarget::Caret(pos) => Some(pos),
+        _ => None,
+    };
+    let (tri_shadow, run_highlight) =
+        shadow_and_highlight(runs, shadow_range, caret, props, slide_id, obj_id, cell);
+    // One row holds both: the highlight swatch with No Color, and the shadow toggle.
+    // The Text panel shows it; the Format inspector keeps its shorter list.
+    if !include_box_controls
+        && let Some(action) = show_shadow_highlight_row(
+            ui,
+            props,
+            (tri_shadow, run_highlight),
+            caret,
+            char_range,
+            (slide_id, obj_id),
+            &set_pending,
+        )
+    {
+        action_to_run = Some(action);
+    }
 
     let mut col_val = eff_color.clone();
     let (cr, valid_color) = show_color_field(ui, "Color", &mut col_val, "prop_run_color");

@@ -8510,6 +8510,8 @@ fn build_test_state_with_all_extras() -> coursecraft_course::StateDef {
         strikethrough: None,
         baseline: None,
         letter_spacing: Some(2.0),
+        highlight: None,
+        shadow: None,
         size: Some(16.0),
         color: None,
         link: None,
@@ -8832,6 +8834,8 @@ fn populate_missed_base_fields(s: &mut Session, crop: coursecraft_course::CropRe
         strikethrough: None,
         baseline: None,
         letter_spacing: Some(2.0),
+        highlight: None,
+        shadow: None,
         size: Some(16.0),
         color: None,
         link: None,
@@ -10867,7 +10871,7 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
     };
 
     let cmds = crate::registry();
-    assert_eq!(cmds.len(), 195, "unexpected registry command count");
+    assert_eq!(cmds.len(), 197, "unexpected registry command count");
 
     for cmd in cmds {
         check_phrase(cmd.label, &format!("label for {}", cmd.id));
@@ -12383,7 +12387,7 @@ fn r5_01_registry_golden_lock() {
     use crate::delta::UndoScope;
 
     let reg = registry();
-    assert_eq!(reg.len(), 195);
+    assert_eq!(reg.len(), 197);
 
     const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
         ("course.info", false, UndoScope::FullCourse, false),
@@ -12590,6 +12594,8 @@ fn r5_01_registry_golden_lock() {
         ),
         ("text.set", true, UndoScope::SingleSlide, true),
         ("text.style_range", true, UndoScope::SingleSlide, true),
+        ("text.clear_formatting", true, UndoScope::SingleSlide, true),
+        ("text.change_case", true, UndoScope::SingleSlide, true),
         ("text.set_paragraph", true, UndoScope::SingleSlide, true),
         ("text.set_paragraphs", true, UndoScope::SingleSlide, true),
         ("text.set_link", true, UndoScope::SingleSlide, true),
@@ -12756,10 +12762,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 25_187, "registry golden table byte length");
+    assert_eq!(table.len(), 25_664, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        1_910_133_271_443_093_977,
+        1_730_170_917_834_803_926,
         "registry golden table FNV-1a hash"
     );
 }
@@ -15875,4 +15881,103 @@ fn animation_effects_lists_the_registry_and_set_animation_checks_it() {
     assert!(set(&mut s, json!({ "type": "from_the_future" })).is_err());
     assert!(set(&mut s, json!({ "type": "zoom", "from": "left" })).is_err());
     assert!(set(&mut s, json!({ "type": "float", "from": "left" })).is_ok());
+}
+
+#[test]
+fn m39_set_theme_heading_font_sets_clears_and_undoes_in_one_step() {
+    let mut s = Session::blank("Heading");
+    let before = s.course.clone();
+    let undo = s.undo_len();
+    ok(
+        &mut s,
+        "course.set_theme",
+        json!({ "font": "Roboto", "heading_font": "Lora" }),
+    );
+    assert_eq!(s.course.theme.font, "Roboto");
+    assert_eq!(s.course.theme.heading_font.as_deref(), Some("Lora"));
+    assert_eq!(s.undo_len(), undo + 1, "both fonts are one undo step");
+    // A call without heading_font leaves it alone.
+    ok(&mut s, "course.set_theme", json!({ "accent": "#112233" }));
+    assert_eq!(s.course.theme.heading_font.as_deref(), Some("Lora"));
+    ok(&mut s, "course.set_theme", json!({ "heading_font": null }));
+    assert_eq!(s.course.theme.heading_font, None);
+    ok(
+        &mut s,
+        "course.set_theme",
+        json!({ "heading_font": "Lora" }),
+    );
+    ok(&mut s, "course.set_theme", json!({ "heading_font": "" }));
+    assert_eq!(s.course.theme.heading_font, None, "an empty name clears it");
+    assert!(
+        s.execute("course.set_theme", &json!({ "heading_font": 3 }))
+            .is_err()
+    );
+    for _ in 0..5 {
+        ok(&mut s, "edit.undo", json!({}));
+    }
+    assert_eq!(s.course, before);
+}
+
+fn m39_text_fonts(s: &Session, id: &str) -> Vec<(String, String)> {
+    let slide = s.course.slide(id).expect("slide");
+    slide
+        .objects
+        .iter()
+        .filter_map(|o| match &o.kind {
+            ObjectKind::Text { style, .. } => Some((o.name.clone(), style.font.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn m39_title_placeholders_use_the_heading_font_and_body_keeps_the_body_font() {
+    let mut s = Session::blank("Heading");
+    ok(
+        &mut s,
+        "course.set_theme",
+        json!({ "font": "Roboto", "heading_font": "Lora" }),
+    );
+    let id = ok(
+        &mut s,
+        "slide.add_from_layout",
+        json!({ "layout": "title_content", "after": "slide1" }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let fonts = m39_text_fonts(&s, &id);
+    assert!(
+        fonts
+            .iter()
+            .any(|(n, f)| n.contains("Title") && f == "Lora"),
+        "{fonts:?}"
+    );
+    assert!(
+        fonts.iter().any(|(_, f)| f == "Roboto"),
+        "the body placeholder keeps the body font: {fonts:?}"
+    );
+    assert!(
+        fonts
+            .iter()
+            .all(|(n, f)| n.contains("Title") == (f == "Lora")),
+        "{fonts:?}"
+    );
+}
+
+#[test]
+fn m39_without_a_heading_font_titles_use_the_body_font() {
+    let mut s = Session::blank("Heading");
+    ok(&mut s, "course.set_theme", json!({ "font": "Roboto" }));
+    let id = ok(
+        &mut s,
+        "slide.add_from_layout",
+        json!({ "layout": "title", "after": "slide1" }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let fonts = m39_text_fonts(&s, &id);
+    assert!(!fonts.is_empty());
+    assert!(fonts.iter().all(|(_, f)| f == "Roboto"), "{fonts:?}");
 }

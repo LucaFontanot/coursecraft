@@ -280,6 +280,8 @@ fn tri_state_overrides_and_clear_flags_round_trip_json() {
             color: None,
             font: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
             link: None,
         }]),
         paragraphs: Some(vec![crate::Paragraph::default()]),

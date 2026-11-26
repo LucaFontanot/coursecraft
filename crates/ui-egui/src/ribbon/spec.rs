@@ -81,6 +81,8 @@ pub enum Kind {
     SmallSplit,
     /// A small icon-only toggle (Bold, Align Left…); its label is the tooltip.
     Toggle,
+    /// A small icon-only toggle with a ▾ strip for its menu (Numbering).
+    ToggleSplit,
     /// A text field with a ▾ (font family, size), this wide.
     Combo { width: f32 },
     /// A label and a number field (X, Y, Width, Height), the field this wide.
@@ -99,7 +101,10 @@ impl Kind {
     /// Has a ▾ menu.
     #[must_use]
     pub fn is_split(self) -> bool {
-        matches!(self, Kind::LargeSplit | Kind::SmallSplit)
+        matches!(
+            self,
+            Kind::LargeSplit | Kind::SmallSplit | Kind::ToggleSplit
+        )
     }
 }
 
@@ -143,6 +148,16 @@ pub enum TextOp {
     Italic,
     Underline,
     Strikethrough,
+    /// Clear Formatting: remove the character formatting of the text, keeping links.
+    ClearFormatting,
+    /// Text Shadow.
+    Shadow,
+    /// Change Case ▾.
+    Case,
+    /// Highlight ▾: the colour behind the letters.
+    Highlight,
+    /// Text Direction ▾.
+    Direction,
     /// Character Spacing ▾.
     Spacing,
     /// Font Color ▾: the theme colours.
@@ -176,7 +191,18 @@ impl TextOp {
                 | TextOp::Color
                 | TextOp::LineSpacing
                 | TextOp::AlignText
+                | TextOp::Case
+                | TextOp::Highlight
+                | TextOp::Direction
+                | TextOp::Numbering
         )
+    }
+
+    /// A click on the main part opens the menu too. Numbering toggles on the main
+    /// part and keeps its menu behind the ▾.
+    #[must_use]
+    pub fn main_opens(self) -> bool {
+        self.has_menu() && self != TextOp::Numbering
     }
 }
 
@@ -184,6 +210,14 @@ impl TextOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
     Paste,
+    /// Paste exactly as copied.
+    PasteKeepSource,
+    /// Paste the text of the copied objects as one plain text box.
+    PasteTextOnly,
+    /// Open the Paste Special window.
+    PasteSpecial,
+    /// Open the Focus Order window.
+    FocusOrder,
     Cut,
     Copy,
     FormatPainter,
@@ -214,6 +248,14 @@ pub enum UiAction {
     WebObject,
     Lottie,
     TextBox,
+    /// Insert ▸ Slide Number: the slide number reference (`%Course.SlideNumber%`).
+    InsertSlideNumber,
+    /// Insert ▸ Slide Number ▾ "Slide number of total".
+    InsertSlideNumberOfTotal,
+    /// Insert ▸ Symbol: open the symbol picker.
+    InsertSymbol,
+    /// Insert ▸ Reference: open the variable reference picker.
+    InsertReference,
     Table,
     Button,
     Slider,
@@ -400,6 +442,8 @@ pub enum UiMenu {
     Preview,
     /// Arrange ▾ (the Arrange menu's commands).
     Arrange,
+    /// Design › Fonts ▾ (built-in heading and body pairs, Create New Theme Fonts…).
+    ThemeFonts,
     /// Shape ▾ (the shape gallery).
     Shapes,
     /// Caption ▾ (callout shapes in the shape gallery).
@@ -459,7 +503,7 @@ const fn helped(mut i: Item, help: &'static str) -> Item {
 }
 
 use Action::{Command, NotPlanned, NotYet, Text, Ui};
-use Kind::{Combo, Large, LargeSplit, Small, SmallSplit, Toggle};
+use Kind::{Combo, Large, LargeSplit, Small, SmallSplit, Toggle, ToggleSplit};
 
 // ---------------------------------------------------------------------------
 // Shared groups
@@ -478,21 +522,21 @@ const PASTE_MENU: &[Item] = &[
         "Keep Source Formatting",
         Icon::Notepad,
         Small,
-        NotYet("paste keeping the source formatting"),
+        Ui(UiAction::PasteKeepSource),
     ),
     item(
         "paste.text_only",
         "Keep Text Only",
         Icon::TextT,
         Small,
-        NotYet("paste as plain text"),
+        Ui(UiAction::PasteTextOnly),
     ),
     item(
         "paste.special",
         "Paste Special…",
         Icon::Notepad,
         Small,
-        NotYet("Paste Special"),
+        Ui(UiAction::PasteSpecial),
     ),
 ];
 
@@ -628,7 +672,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Focus Order",
                 Icon::ListNumbers,
                 Small,
-                NotYet("the Focus Order dialog"),
+                Ui(UiAction::FocusOrder),
             ),
             item(
                 "slide.duplicate",
@@ -688,7 +732,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Clear Formatting",
                 Icon::X,
                 Toggle,
-                NotYet("clearing formatting"),
+                Text(TextOp::ClearFormatting),
             ),
             item("font.bold", "Bold", Icon::TextB, Toggle, Text(TextOp::Bold)),
             item(
@@ -717,7 +761,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Text Shadow",
                 Icon::TextT,
                 Toggle,
-                NotYet("text shadow"),
+                Text(TextOp::Shadow),
             ),
             item(
                 "font.spacing",
@@ -731,14 +775,14 @@ const HOME_SLIDE: &[Group] = &[
                 "Change Case",
                 Icon::TextAa,
                 Toggle,
-                NotYet("changing case"),
+                Text(TextOp::Case),
             ),
             item(
                 "font.highlight",
                 "Highlight",
                 Icon::PaintBrush,
                 Toggle,
-                NotYet("text highlight colour"),
+                Text(TextOp::Highlight),
             ),
             item(
                 "font.color",
@@ -778,7 +822,7 @@ const HOME_SLIDE: &[Group] = &[
                 "paragraph.numbering",
                 "Numbering",
                 Icon::ListNumbers,
-                Toggle,
+                ToggleSplit,
                 Text(TextOp::Numbering),
             ),
             item(
@@ -835,7 +879,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Text Direction",
                 Icon::ArrowsDownUp,
                 SmallSplit,
-                NotYet("vertical and rotated text"),
+                Text(TextOp::Direction),
             ),
             item(
                 "paragraph.align_text",
@@ -1038,6 +1082,23 @@ const PICTURE_MENU: &[Item] = &[
         Icon::Monitor,
         Small,
         NotYet("screenshots"),
+    ),
+];
+
+const SLIDE_NUMBER_MENU: &[Item] = &[
+    item(
+        "slide_number.number",
+        "Slide number",
+        Icon::ListNumbers,
+        Small,
+        Ui(UiAction::InsertSlideNumber),
+    ),
+    item(
+        "slide_number.of_total",
+        "Slide number of total",
+        Icon::ListNumbers,
+        Small,
+        Ui(UiAction::InsertSlideNumberOfTotal),
     ),
 ];
 
@@ -1325,26 +1386,36 @@ const INSERT: &[Group] = &[
                 Large,
                 Ui(UiAction::Table),
             ),
-            item(
-                "insert.slide_number",
-                "Slide Number",
-                Icon::ListNumbers,
-                Large,
-                NotYet("slide number fields"),
+            helped(
+                split(
+                    "insert.slide_number",
+                    "Slide Number",
+                    Icon::ListNumbers,
+                    LargeSplit,
+                    Ui(UiAction::InsertSlideNumber),
+                    Menu::Items(SLIDE_NUMBER_MENU),
+                ),
+                "Insert the slide number. It shows the number in the preview and the player.",
             ),
-            item(
-                "insert.symbol",
-                "Symbol",
-                Icon::TextAa,
-                Small,
-                NotYet("the symbol picker"),
+            helped(
+                item(
+                    "insert.symbol",
+                    "Symbol",
+                    Icon::TextAa,
+                    Small,
+                    Ui(UiAction::InsertSymbol),
+                ),
+                "Insert a symbol such as a copyright sign, an arrow or a Greek letter.",
             ),
-            item(
-                "insert.reference",
-                "Reference",
-                Icon::BracketsCurly,
-                Small,
-                NotYet("inserting a variable reference"),
+            helped(
+                item(
+                    "insert.reference",
+                    "Reference",
+                    Icon::BracketsCurly,
+                    Small,
+                    Ui(UiAction::InsertReference),
+                ),
+                "Insert a variable reference. It shows the variable's value in the preview and the player.",
             ),
             item(
                 "insert.hyperlink",
@@ -1855,12 +1926,13 @@ const DESIGN: &[Group] = &[
                 Small,
                 Ui(UiAction::Themes),
             ),
-            item(
+            split(
                 "design.fonts",
                 "Fonts",
                 Icon::TextAa,
-                Small,
+                SmallSplit,
                 Ui(UiAction::Themes),
+                Menu::Ui(UiMenu::ThemeFonts),
             ),
         ],
     },

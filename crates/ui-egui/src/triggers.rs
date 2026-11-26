@@ -489,6 +489,61 @@ pub struct TriggersState {
     pub filter: String,
     /// When true, group triggers under their event object's name.
     pub group_by_object: bool,
+    /// Selection key (slide, layer, target) the list last scrolled to. Set only
+    /// when the panel is drawn, so a hidden panel never scrolls.
+    pub last_scroll_key: Option<String>,
+    /// Highlight of each drawn row (by trigger index) in the last frame.
+    pub row_highlights: std::collections::HashMap<usize, RowHighlight>,
+    /// The group header drawn highlighted in the last frame (Group by object).
+    pub highlighted_header: Option<String>,
+}
+
+/// How a trigger row relates to the selected object or interactive group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowHighlight {
+    /// The row's event object is the selection: strong tint and accent bar.
+    Own,
+    /// The row's actions or conditions (or a second event object) name the selection.
+    Related,
+}
+
+/// Whether `trigger` belongs to `target` or only names it.
+fn row_highlight(trigger: &Trigger, target: &str) -> Option<RowHighlight> {
+    if event_object_id(&trigger.when) == Some(target) {
+        return Some(RowHighlight::Own);
+    }
+    let second_event = match &trigger.when {
+        Event::DroppedOn { target: t, .. } => t == target,
+        Event::ObjectsIntersect { b, .. } | Event::ObjectsStopIntersecting { b, .. } => b == target,
+        _ => false,
+    };
+    let action = match &trigger.action {
+        Action::ChangeState { object, .. }
+        | Action::PlayMedia { object }
+        | Action::PauseMedia { object }
+        | Action::StopMedia { object }
+        | Action::MoveOnPath { object, .. } => object == target,
+        Action::StartTimer { timer }
+        | Action::PauseTimer { timer }
+        | Action::ResetTimer { timer } => timer == target,
+        _ => false,
+    };
+    let condition = trigger
+        .condition
+        .as_ref()
+        .is_some_and(|c| condition_names(c, target));
+    (second_event || action || condition).then_some(RowHighlight::Related)
+}
+
+fn condition_names(condition: &Condition, target: &str) -> bool {
+    match condition {
+        Condition::All(list) | Condition::Any(list) => {
+            list.iter().any(|inner| condition_names(inner, target))
+        }
+        Condition::Not(inner) => condition_names(inner, target),
+        Condition::ObjectState { object, .. } => object == target,
+        Condition::Compare { .. } => false,
+    }
 }
 
 /// Tree editor node for editing conditions.
@@ -1819,7 +1874,8 @@ pub fn show_triggers_tab(
                 }
 
                 let active_target = default_trigger_target(selection, &session.course, slide);
-                let groups: Vec<(Option<String>, Vec<TriggerRow<'_>>)> =
+                type GroupHeader = Option<(String, bool)>;
+                let groups: Vec<(GroupHeader, Vec<TriggerRow<'_>>)> =
                     if editor_ui.triggers.group_by_object {
                         let mut grouped: Vec<(Option<String>, String, Vec<TriggerRow<'_>>)> =
                             Vec::new();
@@ -1837,7 +1893,10 @@ pub fn show_triggers_tab(
                         }
                         grouped
                             .into_iter()
-                            .map(|(_, label, rows)| (Some(label), rows))
+                            .map(|(key, label, rows)| {
+                                let selected = active_target.is_some() && key == active_target;
+                                (Some((label, selected)), rows)
+                            })
                             .collect()
                     } else {
                         if let Some(sel_id) = active_target.as_deref() {
@@ -1849,14 +1908,61 @@ pub fn show_triggers_tab(
                         vec![(None, visible)]
                     };
 
+                // Highlights for the selected object or group, and the one-time scroll.
+                let highlight_of = |trig: &Trigger| -> Option<RowHighlight> {
+                    active_target
+                        .as_deref()
+                        .and_then(|target| row_highlight(trig, target))
+                };
+                editor_ui.triggers.row_highlights.clear();
+                editor_ui.triggers.highlighted_header = None;
+                let scroll_key = active_target
+                    .as_deref()
+                    .map(|target| format!("{}/{}/{target}", slide.id, owner_key));
+                let scroll_now = match &scroll_key {
+                    Some(key) => editor_ui.triggers.last_scroll_key.as_ref() != Some(key),
+                    None => {
+                        editor_ui.triggers.last_scroll_key = None;
+                        false
+                    }
+                };
+                // The first own row, else the first related row, in drawing order.
+                let scroll_idx: Option<usize> = if scroll_now {
+                    let all = || groups.iter().flat_map(|(_, rows)| rows.iter());
+                    all()
+                        .find(|(_, trig, _)| highlight_of(trig) == Some(RowHighlight::Own))
+                        .or_else(|| all().find(|(_, trig, _)| highlight_of(trig).is_some()))
+                        .map(|(idx, _, _)| *idx)
+                } else {
+                    None
+                };
+                if scroll_now {
+                    editor_ui.triggers.last_scroll_key = scroll_key;
+                }
+
                 for (group_header, rows) in groups {
-                    if let Some(header) = group_header {
+                    if let Some((header, selected)) = group_header {
                         ui.add_space(coursecraft_render::SPACE_SM);
-                        ui.label(
-                            coursecraft_render::caption(header)
-                                .color(p.text_secondary)
-                                .strong(),
-                        );
+                        let header_text = coursecraft_render::caption(header.clone())
+                            .color(if selected { p.accent } else { p.text_secondary })
+                            .strong();
+                        if selected {
+                            editor_ui.triggers.highlighted_header = Some(header);
+                            let row = ui
+                                .horizontal(|ui| {
+                                    ui.add_space(coursecraft_render::SPACE_XS);
+                                    ui.label(header_text);
+                                })
+                                .response
+                                .rect;
+                            let bar = egui::Rect::from_min_size(
+                                row.min,
+                                egui::vec2(3.0, row.height()),
+                            );
+                            ui.painter().rect_filled(bar, 0.0, p.accent);
+                        } else {
+                            ui.label(header_text);
+                        }
                     }
                     let sel_id = if editor_ui.triggers.group_by_object {
                         None
@@ -1931,6 +2037,33 @@ pub fn show_triggers_tab(
                                 egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
                                 if is_active { p.accent_subtle } else { p.hover },
                             );
+                        }
+
+                        let highlight = highlight_of(trig);
+                        if let Some(kind) = highlight {
+                            editor_ui.triggers.row_highlights.insert(idx, kind);
+                            let (tint, bar) = match kind {
+                                RowHighlight::Own => (0.20, true),
+                                RowHighlight::Related => (0.08, false),
+                            };
+                            ui.painter().rect_filled(
+                                row_rect,
+                                egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+                                p.accent.gamma_multiply(tint),
+                            );
+                            if bar {
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_size(
+                                        row_rect.min,
+                                        egui::vec2(3.0, row_rect.height()),
+                                    ),
+                                    0.0,
+                                    p.accent,
+                                );
+                            }
+                        }
+                        if scroll_idx == Some(idx) {
+                            ui.scroll_to_rect(row_rect, Some(egui::Align::Center));
                         }
 
                         ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {

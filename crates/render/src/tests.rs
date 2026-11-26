@@ -2872,6 +2872,8 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             rect: egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(200.0, 50.0)),
             visual: Visual::Text {
                 runs: vec![crate::compose::ResolvedTextRun {
+                    highlight: None,
+                    shadow: false,
                     text: "Fallback test".to_owned(),
                     size: 20.0,
                     color: egui::Color32::BLACK,
@@ -3119,6 +3121,8 @@ fn text_layout_bullets_hanging_indent_and_wrapping() {
     let ctx = text_layout_context();
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(120.0, 200.0));
     let runs = vec![crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "A long bullet line that wraps at least once in this narrow box".into(),
         size: 16.0,
         color: Color32::BLACK,
@@ -3166,6 +3170,8 @@ fn text_layout_numbering_restarts_and_formats_by_level() {
     let ctx = text_layout_context();
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0));
     let runs = vec![crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "one\ntwo\nthree\nfour".into(),
         size: 16.0,
         color: Color32::BLACK,
@@ -3227,6 +3233,8 @@ fn text_layout_numbering_restarts_and_formats_by_level() {
     );
 
     let level_runs = vec![crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "one\ntwo\nthree".into(),
         size: 16.0,
         color: Color32::BLACK,
@@ -3286,6 +3294,8 @@ fn text_layout_line_spacing_changes_height() {
     let ctx = text_layout_context();
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 400.0));
     let runs = vec![crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "one\ntwo\nthree".into(),
         size: 20.0,
         color: Color32::BLACK,
@@ -3339,6 +3349,8 @@ fn text_layout_shrink_stops_at_forty_percent_and_fits() {
     let ctx = text_layout_context();
     let narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(160.0, 110.0));
     let runs = vec![crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight".into(),
         size: 24.0,
         color: Color32::BLACK,
@@ -3421,6 +3433,8 @@ fn keyboard_focus_reaches_text_links() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         }],
         paragraphs: Vec::new(),
         autofit: Autofit::None,
@@ -3444,6 +3458,8 @@ fn keyboard_focus_reaches_text_links() {
 fn runs_produce_layout_sections_with_format() {
     let runs = vec![
         crate::compose::ResolvedTextRun {
+            highlight: None,
+            shadow: false,
             text: "Bold part ".into(),
             size: 20.0,
             color: Color32::RED,
@@ -3457,6 +3473,8 @@ fn runs_produce_layout_sections_with_format() {
             letter_spacing: 0.0,
         },
         crate::compose::ResolvedTextRun {
+            highlight: None,
+            shadow: false,
             text: "italic underline part ".into(),
             size: 20.0,
             color: Color32::GREEN,
@@ -3470,6 +3488,8 @@ fn runs_produce_layout_sections_with_format() {
             letter_spacing: 0.0,
         },
         crate::compose::ResolvedTextRun {
+            highlight: None,
+            shadow: false,
             text: "large part".into(),
             size: 32.0,
             color: Color32::BLUE,
@@ -8230,6 +8250,8 @@ fn compose_authoring_draw_slide_shows_the_draw_card_text() {
 
 fn effect_run(text: &str) -> crate::compose::ResolvedTextRun {
     crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: text.into(),
         size: 20.0,
         color: Color32::BLACK,
@@ -8425,6 +8447,8 @@ fn text_layout_custom_bullets_numbering_schemes_start_at_and_nested_continuation
     let ctx = text_layout_context();
     let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0));
     let runs = vec![crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "one\ntwo\nthree\nsubA\nsubB\nfour\nrom1\nrom2\nalpha1\nstart5".into(),
         size: 16.0,
         color: Color32::BLACK,
@@ -8528,6 +8552,8 @@ fn underline_segments_cover_only_underlined_chars_and_stay_continuous() {
     let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 200.0));
     let runs = vec![
         crate::compose::ResolvedTextRun {
+            highlight: None,
+            shadow: false,
             text: "bold+ ".into(),
             size: 20.0,
             color: Color32::BLACK,
@@ -8541,6 +8567,8 @@ fn underline_segments_cover_only_underlined_chars_and_stay_continuous() {
             letter_spacing: 0.0,
         },
         crate::compose::ResolvedTextRun {
+            highlight: None,
+            shadow: false,
             text: "italic".into(),
             size: 20.0,
             color: Color32::BLACK,
@@ -8554,6 +8582,8 @@ fn underline_segments_cover_only_underlined_chars_and_stay_continuous() {
             letter_spacing: 0.0,
         },
         crate::compose::ResolvedTextRun {
+            highlight: None,
+            shadow: false,
             text: " + underline\nnext ".into(),
             size: 20.0,
             color: Color32::BLACK,
@@ -8567,6 +8597,8 @@ fn underline_segments_cover_only_underlined_chars_and_stay_continuous() {
             letter_spacing: 0.0,
         },
         crate::compose::ResolvedTextRun {
+            highlight: None,
+            shadow: false,
             text: "part".into(),
             size: 20.0,
             color: Color32::BLACK,
@@ -8906,6 +8938,8 @@ fn u03_base_definitions_covers_player_chrome_glyphs_without_default_fonts() {
 
     // Verify `▶` is handled by text_layout's vector bullet renderer without missing-glyph boxes.
     let runs = vec![crate::compose::ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "Arrow bullet item".to_owned(),
         size: 16.0,
         color: Color32::BLACK,
@@ -9345,6 +9379,8 @@ fn u08_mid_pass_course_font_install_does_not_poison_text_layout_cache() {
     });
 
     let runs = vec![ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "WWWWWWWWWWWWWW".to_owned(),
         size: 32.0,
         color: Color32::BLACK,
@@ -9415,6 +9451,8 @@ fn u08_mid_pass_course_font_install_does_not_poison_text_layout_cache() {
         .drop_without_applying_deltas();
 
     let earlier_runs = vec![ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "Earlier slide text".to_owned(),
         size: 16.0,
         color: Color32::BLACK,
@@ -9944,6 +9982,8 @@ fn pt_02_skrifa_matches_egui_unwrapped_layout() {
                     italic: bool,
                     letter_spacing: f32,
                     baseline: Baseline| ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: text.to_owned(),
         size,
         color: Color32::BLACK,
@@ -10034,6 +10074,8 @@ fn pt_08_inline_edit_layout_job_respects_wrap_false() {
 
     let ctx = text_layout_context();
     let run = ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "A long unwrapped point text line that must never wrap".to_owned(),
         size: 20.0,
         color: Color32::BLACK,
@@ -10087,6 +10129,8 @@ fn pt_08_inline_edit_layout_job_respects_wrap_false() {
 
     // Explicit newlines still break lines when wrap=false and multiline=true.
     let multiline_run = ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: "First line\nSecond line".to_owned(),
         size: 20.0,
         color: Color32::BLACK,

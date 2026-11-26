@@ -172,11 +172,32 @@ fn painter_available(
     }
 }
 
+fn focus_order_available(editor: &Editor) -> Result<(), &'static str> {
+    if editor.ui.master_view {
+        Err(MASTER)
+    } else if editor.ui.editing_state.is_some() {
+        Err(STATE)
+    } else if editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .is_some()
+    {
+        Ok(())
+    } else {
+        Err("Select a slide first")
+    }
+}
+
 fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
     let master = editor.ui.master_view;
     let state = editor.ui.editing_state.is_some();
     match action {
-        UiAction::Paste => crate::menu::clipboard_rules(editor).paste,
+        UiAction::Paste
+        | UiAction::PasteKeepSource
+        | UiAction::PasteTextOnly
+        | UiAction::PasteSpecial => crate::menu::clipboard_rules(editor).paste,
+        UiAction::FocusOrder => focus_order_available(editor),
         UiAction::SelectAll => select_all_available(editor),
         UiAction::Cut => crate::menu::clipboard_rules(editor).cut,
         UiAction::Copy => crate::menu::clipboard_rules(editor).copy,
@@ -241,6 +262,17 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
                 Err("Select a slide first")
             } else {
                 Ok(())
+            }
+        }
+        UiAction::InsertSlideNumber
+        | UiAction::InsertSlideNumberOfTotal
+        | UiAction::InsertSymbol
+        | UiAction::InsertReference => {
+            // The pickers open anywhere; the text goes in when the author chooses it.
+            if matches!(action, UiAction::InsertSymbol | UiAction::InsertReference) {
+                Ok(())
+            } else {
+                crate::insert_text::available(editor)
             }
         }
         UiAction::Table
@@ -385,6 +417,18 @@ fn run_ui(
 ) {
     match action {
         UiAction::Paste => crate::menu::paste_now(editor, &resp.ctx),
+        UiAction::PasteKeepSource => crate::clipboard::paste_now_with(
+            editor,
+            &resp.ctx,
+            crate::clipboard::PasteMode::KeepSource,
+        ),
+        UiAction::PasteTextOnly => crate::clipboard::paste_now_with(
+            editor,
+            &resp.ctx,
+            crate::clipboard::PasteMode::TextOnly,
+        ),
+        UiAction::PasteSpecial => editor.open_paste_special(),
+        UiAction::FocusOrder => editor.open_focus_order(),
         UiAction::Cut => crate::clipboard::cut(editor),
         UiAction::Copy => crate::clipboard::copy(editor),
         UiAction::FormatPainter => crate::toolbar::format_painter_clicked(editor, resp),
@@ -430,6 +474,14 @@ fn run_ui(
         }
         UiAction::Lottie => crate::toolbar::insert_lottie(editor, requests),
         UiAction::TextBox => crate::toolbar::insert_text_box(editor),
+        UiAction::InsertSlideNumber => {
+            let _ = crate::insert_text::insert_slide_number(editor, false);
+        }
+        UiAction::InsertSlideNumberOfTotal => {
+            let _ = crate::insert_text::insert_slide_number(editor, true);
+        }
+        UiAction::InsertSymbol => crate::insert_text::open_symbol_picker(editor),
+        UiAction::InsertReference => crate::insert_text::open_reference_picker(editor),
         UiAction::Table => crate::toolbar::insert_table(editor),
         UiAction::Button => crate::toolbar::insert_button(editor),
         UiAction::Slider => drop(crate::input_insert::insert_slider(editor)),
@@ -1033,7 +1085,7 @@ fn run_of(kind: Kind) -> Run {
     match kind {
         Kind::Large | Kind::LargeSplit => Run::Large,
         Kind::Small | Kind::SmallSplit => Run::Columns,
-        Kind::Toggle | Kind::Combo { .. } | Kind::Number { .. } => Run::Rows,
+        Kind::Toggle | Kind::ToggleSplit | Kind::Combo { .. } | Kind::Number { .. } => Run::Rows,
         Kind::Gallery { .. } => Run::Large,
     }
 }
@@ -1235,6 +1287,10 @@ fn control(
             widgets::toggle(ui, item.icon, label, enabled, selected),
             None,
         ),
+        Kind::ToggleSplit => {
+            let (main, arrow) = widgets::toggle_split(ui, item.icon, label, enabled, selected);
+            (main, Some(arrow))
+        }
         Kind::Combo { width } => (
             widgets::combo_field(ui, label, &combo_text(editor, item.action), width, enabled),
             None,
@@ -1299,7 +1355,7 @@ fn control(
     }
     if let (Some(arrow), Action::Text(op)) = (&arrow, item.action) {
         let arrow = arrow.clone().on_hover_text(&tip);
-        widgets::split_popup(&main, &arrow, op.has_menu() && enabled)
+        widgets::split_popup(&main, &arrow, op.main_opens() && enabled)
             .show(|ui| text_menu(editor, ui, op));
     } else if let Some(arrow) = arrow {
         let arrow = arrow.on_hover_text(&tip);
@@ -1326,6 +1382,7 @@ fn text_selected(editor: &Editor, op: spec::TextOp) -> bool {
         TextOp::Italic => st.italic == Some(true),
         TextOp::Underline => st.underline == Some(true),
         TextOp::Strikethrough => st.strikethrough == Some(true),
+        TextOp::Shadow => st.shadow == Some(true),
         TextOp::Bullets => st.list == Some(ListKind::Bullet),
         TextOp::Numbering => st.list == Some(ListKind::Number),
         TextOp::AlignLeft => st.align == Some(Align::Left),
@@ -1371,6 +1428,8 @@ fn text_change(editor: &Editor, op: spec::TextOp) -> Option<crate::text_format::
         TextOp::Italic => Change::Italic,
         TextOp::Underline => Change::Underline,
         TextOp::Strikethrough => Change::Strikethrough,
+        TextOp::ClearFormatting => Change::ClearFormatting,
+        TextOp::Shadow => Change::Shadow,
         TextOp::Bullets => Change::List(ListKind::Bullet),
         TextOp::Numbering => Change::List(ListKind::Number),
         TextOp::IndentLess => Change::Indent(-1),
@@ -1386,7 +1445,10 @@ fn text_change(editor: &Editor, op: spec::TextOp) -> Option<crate::text_format::
         | TextOp::Spacing
         | TextOp::Color
         | TextOp::LineSpacing
-        | TextOp::AlignText => return None,
+        | TextOp::AlignText
+        | TextOp::Case
+        | TextOp::Highlight
+        | TextOp::Direction => return None,
     })
 }
 
@@ -1486,6 +1548,39 @@ fn text_menu(editor: &mut Editor, ui: &mut Ui, op: spec::TextOp) {
                 );
             }
         }
+        TextOp::Case => {
+            use coursecraft_course::CaseChange;
+            for (label, case) in [
+                ("Sentence case", CaseChange::Sentence),
+                ("lowercase", CaseChange::Lower),
+                ("UPPERCASE", CaseChange::Upper),
+                ("Capitalize Each Word", CaseChange::Title),
+                ("tOGGLE cASE", CaseChange::Toggle),
+            ] {
+                item(ui, tl!(label), false, Change::Case(case));
+            }
+        }
+        TextOp::Highlight => {
+            highlight_menu(editor, ui, &mut picked);
+        }
+        TextOp::Direction => {
+            use coursecraft_course::TextDirection;
+            for (label, direction) in [
+                ("Horizontal", TextDirection::Horizontal),
+                ("Rotate all text 90°", TextDirection::Vertical),
+                ("Rotate all text 270°", TextDirection::Vertical270),
+            ] {
+                item(
+                    ui,
+                    tl!(label),
+                    st.direction == Some(direction),
+                    Change::Direction(direction),
+                );
+            }
+        }
+        TextOp::Numbering => {
+            numbering_menu(ui, &st, &mut picked);
+        }
         TextOp::Color => {
             // The inspector's colour picker: eyedropper, palette, theme and
             // recent swatches, the colour wheel.
@@ -1527,6 +1622,104 @@ fn text_menu(editor: &mut Editor, ui: &mut Ui, op: spec::TextOp) {
         crate::text_format::apply(editor, &change);
         ui.close();
     }
+}
+
+/// The standard highlight colours: name and hex.
+pub(crate) const HIGHLIGHT_COLORS: [(&str, &str); 8] = [
+    ("Yellow", "#FFFF00"),
+    ("Bright Green", "#00FF00"),
+    ("Turquoise", "#00FFFF"),
+    ("Pink", "#FF00FF"),
+    ("Blue", "#0070FF"),
+    ("Red", "#FF0000"),
+    ("Orange", "#FFA500"),
+    ("Light Gray", "#D9D9D9"),
+];
+
+/// Highlight ▾: the theme colours, a few standard highlight colours and No Color.
+fn highlight_menu(editor: &Editor, ui: &mut Ui, picked: &mut Option<crate::text_format::Change>) {
+    let course = &editor.session.course;
+    let mut theme: Vec<(String, String)> = vec![
+        (tl!("Accent").to_owned(), course.theme.accent.0.clone()),
+        (
+            tl!("Background").to_owned(),
+            course.theme.background.0.clone(),
+        ),
+        (tl!("Text").to_owned(), course.theme.text.0.clone()),
+    ];
+    theme.extend(
+        course
+            .theme
+            .palette
+            .iter()
+            .map(|c| (c.name.clone(), c.color.0.clone())),
+    );
+    if let Some(hex) = crate::properties::swatch_row(ui, tl!("Theme colours"), &theme) {
+        *picked = Some(crate::text_format::Change::Highlight(Some(hex)));
+    }
+    let standard: Vec<(String, String)> = HIGHLIGHT_COLORS
+        .iter()
+        .map(|(name, hex)| (tl!(*name).to_owned(), (*hex).to_owned()))
+        .collect();
+    if let Some(hex) = crate::properties::swatch_row(ui, tl!("Highlight colours"), &standard) {
+        *picked = Some(crate::text_format::Change::Highlight(Some(hex)));
+    }
+    if ui.button(tl!("No Color")).clicked() {
+        *picked = Some(crate::text_format::Change::Highlight(None));
+    }
+}
+
+/// The numbering schemes with a sample of each.
+pub(crate) const NUMBER_SCHEMES: [(coursecraft_course::NumberScheme, &str); 7] = [
+    (coursecraft_course::NumberScheme::ArabicPeriod, "1. 2. 3."),
+    (coursecraft_course::NumberScheme::ArabicParenR, "1) 2) 3)"),
+    (coursecraft_course::NumberScheme::AlphaLcPeriod, "a. b. c."),
+    (coursecraft_course::NumberScheme::AlphaLcParenR, "a) b) c)"),
+    (coursecraft_course::NumberScheme::AlphaUcPeriod, "A. B. C."),
+    (
+        coursecraft_course::NumberScheme::RomanLcPeriod,
+        "i. ii. iii.",
+    ),
+    (
+        coursecraft_course::NumberScheme::RomanUcPeriod,
+        "I. II. III.",
+    ),
+];
+
+/// Numbering ▾: the seven schemes with samples, and Start at….
+fn numbering_menu(
+    ui: &mut Ui,
+    st: &crate::text_format::TextState,
+    picked: &mut Option<crate::text_format::Change>,
+) {
+    for (scheme, sample) in NUMBER_SCHEMES {
+        let on = st.number_scheme == Some(scheme);
+        if ui.add(egui::Button::selectable(on, sample)).clicked() {
+            *picked = Some(crate::text_format::Change::NumberScheme(scheme));
+        }
+    }
+    ui.separator();
+    let id = egui::Id::unique("ribbon_numbering_start_at");
+    let mut value: u32 = ui
+        .ctx()
+        .data(|d| d.get_temp::<u32>(id))
+        .or(st.start_at)
+        .unwrap_or(1);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Start at"));
+        let resp = ui.add(
+            egui::DragValue::new(&mut value)
+                .range(1..=99_999)
+                .speed(0.2),
+        );
+        if resp.changed() {
+            ui.ctx().data_mut(|d| d.insert_temp(id, value));
+        }
+        if resp.drag_stopped() || resp.lost_focus() {
+            ui.ctx().data_mut(|d| d.remove::<u32>(id));
+            *picked = Some(crate::text_format::Change::StartAt(value));
+        }
+    });
 }
 
 fn menu(
@@ -1574,6 +1767,7 @@ fn menu(
         Menu::Ui(UiMenu::EffectOptions(motion)) => {
             gallery::effect_options_menu(editor, ui, motion);
         }
+        Menu::Ui(UiMenu::ThemeFonts) => crate::theme_dialog::theme_fonts_menu(editor, ui),
         Menu::Ui(UiMenu::Arrange) => {
             let mut action = None;
             crate::menu::arrange_menu_items(editor, ui, &mut action, requests);

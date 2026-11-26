@@ -601,31 +601,39 @@ fn d7_6_eye_visibility_toggle_and_focused_layer_protection() {
     let _o1 = add_shape_on(&mut h, "s1", Some(&l1), "L1Shape", 100.0);
     h.idle_frame();
 
-    // Focused on Base: toggle Eye off on L1.
+    // Focused on Base: an eye is off by default; click turns it on.
+    assert!(!h.editor.ui.layers.shown_layers.contains(&l1));
     let eye_rect = h.editor.ui.layers.eye_rects[&l1];
     h.click_at(eye_rect.center());
     h.idle_frame();
-    assert!(h.editor.ui.layers.hidden_layers.contains(&l1));
+    assert!(h.editor.ui.layers.shown_layers.contains(&l1));
+    h.click_at(eye_rect.center());
+    h.idle_frame();
+    assert!(!h.editor.ui.layers.shown_layers.contains(&l1));
 
-    // Focus L1 -> L1 is automatically unhidden (focused layer cannot be invisible).
+    // Focus L1 -> the focused layer reads as on and its eye click does nothing.
     let row_rect = h.editor.ui.layers.layer_row_rects[&l1];
     h.click_at(row_rect.center());
     h.idle_frame();
     assert_eq!(h.editor.selection.layer.as_deref(), Some(l1.as_str()));
-    assert!(!h.editor.ui.layers.hidden_layers.contains(&l1));
-
-    // Clicking eye on focused L1 does not hide it.
     let eye_rect = h.editor.ui.layers.eye_rects[&l1];
     h.click_at(eye_rect.center());
     h.idle_frame();
-    assert!(!h.editor.ui.layers.hidden_layers.contains(&l1));
+    assert!(!h.editor.ui.layers.shown_layers.contains(&l1));
+
+    // Turn L2's eye on, then switch slide and back: the eyes are cleared.
+    let l2 = _l2.clone();
+    let eye2 = h.editor.ui.layers.eye_rects[&l2];
+    h.click_at(eye2.center());
+    h.idle_frame();
+    assert!(h.editor.ui.layers.shown_layers.contains(&l2));
 
     // Switch to Slide 2 and back: per-slide hidden map is cleared on slide change.
     select_slide(&mut h, "s2");
     h.idle_frame();
     select_slide(&mut h, "s1");
     h.idle_frame();
-    assert!(h.editor.ui.layers.hidden_layers.is_empty());
+    assert!(h.editor.ui.layers.shown_layers.is_empty());
     assert_eq!(h.editor.selection.layer, None);
 }
 

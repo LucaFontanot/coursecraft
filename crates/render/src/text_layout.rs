@@ -175,6 +175,8 @@ struct RunKey {
     letter_spacing_bits: u32,
     font: Option<String>,
     link: Option<LinkKey>,
+    highlight: Option<[u8; 4]>,
+    shadow: bool,
 }
 
 impl RunKey {
@@ -191,6 +193,8 @@ impl RunKey {
             letter_spacing_bits: f32_bits(run.letter_spacing),
             font: run.font.clone(),
             link: run.link.as_ref().map(LinkKey::from_link),
+            highlight: run.highlight.map(|c| c.to_array()),
+            shadow: run.shadow,
         }
     }
 
@@ -204,6 +208,8 @@ impl RunKey {
             && self.baseline == baseline_tag(run.baseline)
             && self.letter_spacing_bits == f32_bits(run.letter_spacing)
             && self.font.as_deref() == run.font.as_deref()
+            && self.highlight == run.highlight.map(|c| c.to_array())
+            && self.shadow == run.shadow
             && match (&self.link, &run.link) {
                 (None, None) => true,
                 (Some(a), Some(b)) => a.matches(b),
@@ -314,6 +320,14 @@ impl BorrowedTextKey<'_> {
             );
             h.write_u8(baseline_tag(run.baseline));
             h.write_u32(f32_bits(run.letter_spacing));
+            match run.highlight {
+                Some(c) => {
+                    h.write_u8(1);
+                    h.write_bytes(&c.to_array());
+                }
+                None => h.write_u8(0),
+            }
+            h.write_u8(u8::from(run.shadow));
             if let Some(font) = &run.font {
                 h.write_u8(1);
                 h.write_str(font);
@@ -590,6 +604,8 @@ fn translate_laid_text(base: &LaidText, offset: egui::Vec2) -> LaidText {
             indent: p.indent,
             height: p.height,
             underlines: p.underlines.clone(),
+            highlights: p.highlights.clone(),
+            shadow: p.shadow.clone(),
         })
         .collect();
     let links = base
@@ -651,6 +667,12 @@ pub struct LaidParagraph {
     /// [`underline_segments`] at the baseline, because egui puts an underline at
     /// the bottom of the line box, which line spacing pushes away from the text.
     pub underlines: Vec<(usize, usize, Stroke)>,
+    /// Highlighted character ranges of this paragraph and their colours. Drawn by
+    /// [`highlight_rects`] behind the glyphs, so they follow justified and wrapped lines.
+    pub highlights: Vec<(usize, usize, Color32)>,
+    /// The same text drawn in shadow colour, laid out like `galley`, and the offset to
+    /// draw it at. `None` when no run of the paragraph has a shadow.
+    pub shadow: Option<(Arc<egui::Galley>, egui::Vec2)>,
 }
 
 /// A link region in screen space.
@@ -912,6 +934,8 @@ fn split_paragraphs(runs: &[ResolvedTextRun]) -> Vec<Vec<ResolvedTextRun>> {
                 strikethrough: false,
                 baseline: template.baseline,
                 letter_spacing: template.letter_spacing,
+                highlight: None,
+                shadow: false,
             });
         } else {
             paragraph.push(ResolvedTextRun {
@@ -926,6 +950,8 @@ fn split_paragraphs(runs: &[ResolvedTextRun]) -> Vec<Vec<ResolvedTextRun>> {
                 strikethrough: false,
                 baseline: coursecraft_course::Baseline::Normal,
                 letter_spacing: 0.0,
+                highlight: None,
+                shadow: false,
             });
         }
     }
@@ -1451,6 +1477,15 @@ fn layout_at(
         };
         let mut spans: Vec<(usize, usize, Link, String)> = Vec::new();
         let mut underlines: Vec<(usize, usize, Stroke)> = Vec::new();
+        let mut highlights: Vec<(usize, usize, Color32)> = Vec::new();
+        let mut shadow_job: Option<LayoutJob> =
+            paragraph_runs.iter().any(|r| r.shadow).then(|| LayoutJob {
+                halign: job.halign,
+                wrap: job.wrap.clone(),
+                break_on_newline: false,
+                ..Default::default()
+            });
+        let mut shadow_offset = 0.0f32;
         let mut char_count = 0usize;
         for run in paragraph_runs {
             let start = char_count;
@@ -1482,6 +1517,28 @@ fn layout_at(
             } else {
                 Stroke::NONE
             };
+            if let Some(shadow_job) = &mut shadow_job {
+                let shadow_color = if run.shadow {
+                    shadow_color_for(run.color)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                if run.shadow {
+                    shadow_offset = shadow_offset.max(shadow_offset_for(size));
+                }
+                shadow_job.append(
+                    &run.text,
+                    0.0,
+                    TextFormat {
+                        font_id: font_id.clone(),
+                        color: shadow_color,
+                        line_height: Some(line_height),
+                        extra_letter_spacing: letter_spacing,
+                        valign,
+                        ..Default::default()
+                    },
+                );
+            }
             job.append(
                 &run.text,
                 0.0,
@@ -1497,6 +1554,9 @@ fn layout_at(
             );
             if underline != Stroke::NONE {
                 underlines.push((start, char_count, underline));
+            }
+            if let Some(highlight) = run.highlight {
+                highlights.push((start, char_count, highlight));
             }
             if let Some(link) = &run.link {
                 spans.push((start, char_count, link.clone(), run.text.clone()));
@@ -1516,6 +1576,18 @@ fn layout_at(
                 x + justify_x_offset,
             );
         }
+        let shadow = shadow_job.map(|job| {
+            let mut shadow_galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
+            if align == Align::Justify && wrap {
+                justify_galley_snapped(
+                    &mut shadow_galley,
+                    content_width,
+                    ctx.pixels_per_point(),
+                    x + justify_x_offset,
+                );
+            }
+            (shadow_galley, egui::vec2(shadow_offset, shadow_offset))
+        });
         let galley_h = galley.size().y;
         let indent_width = text_indent + galley.size().x;
         max_width = max_width.max(indent_width);
@@ -1575,6 +1647,8 @@ fn layout_at(
             indent: text_indent,
             height: space_before + galley_h + space_after,
             underlines,
+            highlights,
+            shadow,
         });
 
         links.extend(collect_links(&galley, paragraph_pos, &spans));
@@ -1605,6 +1679,81 @@ fn layout_at(
         width: max_width,
         shrink,
     }
+}
+
+/// The shadow colour of a run drawn in `color`: black at 45% of the run's own opacity, so a
+/// faded or dimmed run fades its shadow too.
+fn shadow_color_for(color: Color32) -> Color32 {
+    let alpha = (f32::from(color.a()) * 0.45).round().clamp(0.0, 255.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Color32::from_rgba_unmultiplied(0, 0, 0, alpha as u8)
+}
+
+/// Shadow offset for text drawn at `size` screen points: 1.5% of the size, at least 1.
+fn shadow_offset_for(size: f32) -> f32 {
+    (size * 0.015).max(1.0)
+}
+
+/// Paint what goes behind a laid paragraph's glyphs: the highlights, then the shadow.
+/// Call before painting `paragraph.galley`.
+pub fn paint_paragraph_backdrop(painter: &egui::Painter, paragraph: &LaidParagraph) {
+    for (rect, color) in highlight_rects(paragraph, paragraph.pos) {
+        painter.rect_filled(rect, 0.0, color);
+    }
+    if let Some((galley, offset)) = &paragraph.shadow {
+        painter.galley(
+            paragraph.pos + *offset,
+            Arc::clone(galley),
+            Color32::TRANSPARENT,
+        );
+    }
+}
+
+/// Screen-space highlight rectangles for a laid paragraph drawn at `origin`: one per run of
+/// highlighted glyphs of one colour on a row, covering the row's full height.
+#[must_use]
+pub fn highlight_rects(paragraph: &LaidParagraph, origin: Pos2) -> Vec<(Rect, Color32)> {
+    let mut out = Vec::new();
+    if paragraph.highlights.is_empty() {
+        return out;
+    }
+    let mut char_index = 0usize;
+    for row in &paragraph.galley.rows {
+        let mut active: Option<(Rect, Color32)> = None;
+        for glyph in &row.glyphs {
+            let color = paragraph
+                .highlights
+                .iter()
+                .find(|(start, end, _)| char_index >= *start && char_index < *end)
+                .map(|(_, _, color)| *color);
+            let left = origin.x + row.pos.x + glyph.pos.x;
+            let cell = Rect::from_min_size(
+                pos2(left, origin.y + row.pos.y),
+                egui::vec2(glyph.advance_width, row.size.y),
+            );
+            match (color, &mut active) {
+                (Some(color), Some((rect, current))) if *current == color => {
+                    *rect = rect.union(cell);
+                }
+                (Some(color), _) => {
+                    if let Some(done) = active.take() {
+                        out.push(done);
+                    }
+                    active = Some((cell, color));
+                }
+                (None, _) => {
+                    if let Some(done) = active.take() {
+                        out.push(done);
+                    }
+                }
+            }
+            char_index = char_index.saturating_add(1);
+        }
+        if let Some(done) = active.take() {
+            out.push(done);
+        }
+    }
+    out
 }
 
 /// Turn per-character glyph boxes into one rect per linked span per row.
@@ -1911,6 +2060,7 @@ pub fn inline_edit_layout_job_with_wrap(
                 TextFormat {
                     font_id,
                     color: run.color,
+                    background: run.highlight.unwrap_or(Color32::TRANSPARENT),
                     line_height: Some(line_height),
                     strikethrough: strike,
                     underline,
@@ -1936,6 +2086,7 @@ pub fn inline_edit_layout_job_with_wrap(
                 TextFormat {
                     font_id: font_id.clone(),
                     color: run.color,
+                    background: run.highlight.unwrap_or(Color32::TRANSPARENT),
                     line_height: Some(line_height),
                     strikethrough: strike,
                     underline,

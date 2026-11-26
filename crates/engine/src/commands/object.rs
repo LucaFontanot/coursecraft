@@ -1789,6 +1789,48 @@ struct Look {
     fill_style: Option<Option<FillStyle>>,
     outline: Option<Option<Outline>>,
     text_style: Option<TextStyle>,
+    /// The highlight and shadow the source's text has all through.
+    run_extras: RunExtras,
+}
+
+/// Run formatting the format painter carries with the look: a highlight and a shadow
+/// that every run of the source text has.
+#[derive(Default, Clone, PartialEq)]
+struct RunExtras {
+    highlight: Option<Color>,
+    shadow: bool,
+}
+
+fn run_extras_of(runs: &[TextRun]) -> RunExtras {
+    let Some(first) = runs.first() else {
+        return RunExtras::default();
+    };
+    let extras = RunExtras {
+        highlight: first.highlight.clone(),
+        shadow: first.shadow.unwrap_or(false),
+    };
+    let uniform = runs
+        .iter()
+        .all(|r| r.highlight == extras.highlight && r.shadow.unwrap_or(false) == extras.shadow);
+    if uniform {
+        extras
+    } else {
+        RunExtras::default()
+    }
+}
+
+/// Clear the run look, then give every character the source's highlight and shadow.
+fn paint_runs(text: &str, runs: &mut Vec<TextRun>, extras: &RunExtras) {
+    clear_run_look(runs);
+    if extras.highlight.is_none() && !extras.shadow {
+        return;
+    }
+    let patch = coursecraft_course::TextRunPatch {
+        highlight: Some(extras.highlight.clone()),
+        shadow: extras.shadow.then_some(true),
+        ..coursecraft_course::TextRunPatch::default()
+    };
+    *runs = coursecraft_course::apply_style_to_range(runs, text, (0, 0), &patch);
 }
 
 fn look_of(object: &Object) -> Look {
@@ -1800,9 +1842,13 @@ fn look_of(object: &Object) -> Look {
         fill_style: None,
         outline: None,
         text_style: None,
+        run_extras: RunExtras::default(),
     };
     match &object.kind {
-        ObjectKind::Text { style, .. } => look.text_style = Some(style.clone()),
+        ObjectKind::Text { style, runs, .. } => {
+            look.text_style = Some(style.clone());
+            look.run_extras = run_extras_of(runs);
+        }
         ObjectKind::Shape {
             fill,
             fill_style,
@@ -1814,6 +1860,9 @@ fn look_of(object: &Object) -> Look {
             look.fill_style = Some(fill_style.clone());
             look.outline = Some(outline.clone());
             look.text_style = text.as_ref().map(|t| t.style.clone());
+            if let Some(t) = text {
+                look.run_extras = run_extras_of(&t.runs);
+            }
         }
         ObjectKind::Button {
             fill, fill_style, ..
@@ -1828,6 +1877,9 @@ fn look_of(object: &Object) -> Look {
             }
             look.outline = Some(Some(path.outline.clone()));
             look.text_style = path.text.as_ref().map(|t| t.style.clone());
+            if let Some(t) = &path.text {
+                look.run_extras = run_extras_of(&t.runs);
+            }
         }
         _ => {}
     }
@@ -1845,6 +1897,8 @@ fn clear_run_look(runs: &mut [TextRun]) {
         run.size = None;
         run.color = None;
         run.font = None;
+        run.highlight = None;
+        run.shadow = None;
     }
 }
 
@@ -1856,6 +1910,7 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
     object.glow = look.glow.clone();
     match &mut object.kind {
         ObjectKind::Text {
+            text,
             style,
             runs,
             point_text,
@@ -1864,7 +1919,7 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             if let Some(src) = &look.text_style {
                 let was_point_text = *point_text;
                 *style = src.clone();
-                clear_run_look(runs);
+                paint_runs(text, runs, &look.run_extras);
                 if was_point_text {
                     style.wrap = false;
                 }
@@ -1888,7 +1943,7 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             }
             if let (Some(src), Some(t)) = (&look.text_style, text.as_mut()) {
                 t.style = src.clone();
-                clear_run_look(&mut t.runs);
+                paint_runs(&t.text, &mut t.runs, &look.run_extras);
             }
         }
         ObjectKind::Button {
@@ -1915,7 +1970,7 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             }
             if let (Some(src), Some(t)) = (&look.text_style, path.text.as_mut()) {
                 t.style = src.clone();
-                clear_run_look(&mut t.runs);
+                paint_runs(&t.text, &mut t.runs, &look.run_extras);
             }
         }
         _ => {}

@@ -51,6 +51,8 @@ mod m27_anim_tests;
 #[cfg(test)]
 mod m27_table_tests;
 #[cfg(test)]
+mod m39_t_tests;
+#[cfg(test)]
 mod tests;
 
 /// Maximum number of archive entries allowed when opening a presentation.
@@ -5172,6 +5174,8 @@ struct RunDefaults {
     size: Option<f32>,
     color: Option<Color>,
     font: Option<String>,
+    highlight: Option<Color>,
+    shadow: Option<bool>,
 }
 
 fn parse_run_props(
@@ -5236,6 +5240,19 @@ fn parse_run_props(
         && let Some(col) = resolve_solid_fill(r_pr, theme)
     {
         out.color = Some(col);
+    }
+    if out.highlight.is_none()
+        && let Some(highlight) = r_pr.child("highlight")
+        && let Some(col) = resolve_first_color_child(highlight, theme)
+    {
+        out.highlight = Some(col);
+    }
+    if out.shadow.is_none()
+        && r_pr
+            .child("effectLst")
+            .is_some_and(|effects| effects.child("outerShdw").is_some())
+    {
+        out.shadow = Some(true);
     }
 }
 
@@ -5416,6 +5433,8 @@ fn extract_text_runs(
                     strikethrough: None,
                     baseline: None,
                     letter_spacing: None,
+                    highlight: None,
+                    shadow: None,
                 });
             }
         }
@@ -5461,6 +5480,10 @@ fn extract_text_runs(
                             strikethrough: run_props.strikethrough.or(para_defaults.strikethrough),
                             baseline: run_props.baseline.or(para_defaults.baseline),
                             letter_spacing: None,
+                            highlight: run_props
+                                .highlight
+                                .or_else(|| para_defaults.highlight.clone()),
+                            shadow: run_props.shadow.or(para_defaults.shadow),
                         });
                     }
                 }
@@ -5480,6 +5503,8 @@ fn extract_text_runs(
                             strikethrough: None,
                             baseline: None,
                             letter_spacing: None,
+                            highlight: None,
+                            shadow: None,
                         });
                     }
                 }

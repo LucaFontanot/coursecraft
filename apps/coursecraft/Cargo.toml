@@ -38,8 +38,10 @@ coursecraft-export.workspace = true
 egui = { workspace = true, features = ["default_fonts"] }
 eframe = { workspace = true, features = ["default_fonts"] }
 # The system clipboard on the desktop: egui-winit's clipboard feature for text,
-# arboard directly to read pasted images.
-egui-winit = { version = "0.37", default-features = false, features = ["clipboard"] }
+# arboard directly to read pasted images. `links` lets `ctx.open_url` open the
+# system browser (update prompt Download / What's new, Open URL in preview, help links);
+# without it every open-url request is silently dropped.
+egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 craft-update.workspace = true
 ring.workspace = true

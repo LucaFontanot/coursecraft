@@ -26,6 +26,8 @@ fn text_ctx() -> egui::Context {
 
 fn plain_run(text: &str, size: f32) -> ResolvedTextRun {
     ResolvedTextRun {
+        highlight: None,
+        shadow: false,
         text: text.to_owned(),
         size,
         color: Color32::BLACK,

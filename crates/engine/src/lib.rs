@@ -929,6 +929,8 @@ mod m27_all_commands_undo_tests;
 #[cfg(test)]
 mod m29_state_commands_tests;
 #[cfg(test)]
+mod m39_t_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod styles_tests;

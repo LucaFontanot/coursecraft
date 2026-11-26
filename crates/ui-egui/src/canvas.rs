@@ -6531,7 +6531,10 @@ fn update_inline_edit_panel_yield(
         let pressed = i.pointer.primary_pressed();
         let pos = i.pointer.interact_pos();
         (
-            pressed && pos.is_some_and(|p| p.x >= panel_right),
+            pressed
+                && pos.is_some_and(|p| {
+                    p.x >= panel_right || editor.ui.insert_text.window_contains(p)
+                }),
             pressed && pos.is_some_and(|p| rect.contains(p)),
         )
     });
@@ -7038,6 +7041,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         state.last_revision = editor.session.revision;
     }
     let mut buffer = edit.buffer.clone();
+    crate::insert_text::apply_pending_inline(editor, ui.ctx(), edit_id, &mut buffer);
     let text_rect = inset_text_rect(rect, insets, scale);
     let frame = inline_edit_frame(accent);
     if live_resize {
@@ -7211,7 +7215,9 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let cmd_enter = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
     let button_enter =
         edit.is_button && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
-    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    // Escape closes the Symbol or Reference window first, not the edit.
+    let escaped =
+        ui.input(|i| i.key_pressed(egui::Key::Escape)) && !editor.ui.insert_text.any_window_open();
     let toggle_bold = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::B));
     let toggle_italic = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::I));
     let toggle_underline = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::U));
@@ -7227,6 +7233,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             && pos.x < panel_right
             // The ribbon and its menus format the text being edited.
             && !editor.ui.ribbon.rect.contains(pos)
+            && !editor.ui.insert_text.window_contains(pos)
             && !ui.ctx().layer_id_at(pos).is_some_and(|layer| {
                 matches!(layer.order, egui::Order::Foreground | egui::Order::Tooltip)
             })

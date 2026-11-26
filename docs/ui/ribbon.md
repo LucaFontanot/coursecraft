@@ -143,35 +143,35 @@ Shown when the Course Map view tab is active.
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
-| Clipboard | Paste | LS | `object.paste` | 🟡 | ▾ Use Destination Theme ✅, Keep Source Formatting ⛔, Keep Text Only ⛔, Paste Special… ⛔ |
+| Clipboard | Paste | LS | `object.paste` | ✅ | ▾ Use Destination Theme (default), Keep Source Formatting, Keep Text Only, Paste Special… (`clipboard.rs`) |
 | | Cut | S | `ui:edit.cut` | ✅ | |
 | | Copy | SS | `ui:edit.copy` | ✅ | ▾ Copy, Duplicate (`object.duplicate`) |
 | | Format Painter | S | `ui:formatPainter` | ✅ | double-click keeps it on |
 | | Select All | S | `ui:edit.selectAll` | ✅ | from Edit › Select All |
 | Slide | New Slide | LS | as Course Map | ✅ | |
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
-| | Focus Order | S | `ui:focusOrder` | 🟡 | focus order exists (`focus_order`); needs its own dialog |
+| | Focus Order | S | `ui:focusOrder` | ✅ | Focus Order window (`focus_order.rs`): reorder, drag, reset; OK sets `focus_order` 1..n in one undo step |
 | | Duplicate | S | `slide.duplicate` | ✅ | |
 | Font ↘ | Text Styles | LS | `text_style.apply`, `text_style.create` | ✅ | ▾ course styles, New Style from Selection, Manage Styles… |
 | | Font family | C | `text.style_range` `{font}` | ✅ | ▾ the inspector's font picker (`font_picker::show_font_list`): search, the course's fonts, recent and installed fonts, Add font… |
 | | Font size | C | `text.style_range` `{size}` | ✅ | ▾ 8–96 |
 | | Grow Font / Shrink Font | S | `text.style_range` `{size}` | ✅ | next size in the list |
-| | Clear Formatting | S | `text.style_range` (reset) | ⛔ | |
+| | Clear Formatting | S | `text.clear_formatting` | ✅ | keeps links; nothing at a bare caret |
 | | Bold / Italic / Underline | T | `text.style_range` | ✅ | |
-| | Shadow (text) | T | — | ⛔ | |
+| | Shadow (text) | T | `text.style_range` `{shadow}` | ✅ | on, mixed or off for the selection |
 | | Strikethrough | T | `text.style_range` | ✅ | |
 | | Character Spacing | SS | `text.style_range` `{letter_spacing}` | ✅ | ▾ Very Tight … Very Loose; exact value in the Text panel |
-| | Change Case | SS | — | ⛔ | Sentence, lower, UPPER, Capitalize, tOGGLE |
-| | Highlight | SS | `text.style_range` `{highlight}` (new field) | ⛔ | text runs have no highlight colour yet |
+| | Change Case | SS | `text.change_case` | ✅ | ▾ Sentence case, lowercase, UPPERCASE, Capitalize Each Word, tOGGLE cASE |
+| | Highlight | SS | `text.style_range` `{highlight}` | ✅ | ▾ theme colours, 8 standard colours, No Color |
 | | Font Color | SS | `text.style_range` `{color}` | ✅ | ▾ the inspector's colour picker (`properties::color_picker_body`): eyedropper, palette, theme and recent swatches, colour wheel (one change per drag) |
 | | Spelling | S | `ui:spellCheck` | ✅ | `spell_check.rs` |
 | | ↘ Font | — | `UiAction::PanelAt(Text, Font)` | ✅ | opens the Text settings panel at Font ([panels.md](panels.md)) |
 | Paragraph ↘ | Bullets | SS | `text.set_paragraphs` `{list}` | ✅ | toggles on the paragraphs at the selection; bullet symbols in the Text panel |
-| | Numbering | SS | `text.set_paragraphs` `{list}` | ✅ | numbering styles in the Text panel |
+| | Numbering | SS | `text.set_paragraphs` `{list, number_scheme, start_at}` | ✅ | split: the main part toggles; ▾ the 7 schemes with samples and Start at |
 | | Decrease / Increase Indent | S | `text.set_paragraphs` `{level}` | ✅ | levels 0–4 |
 | | Line Spacing | SS | `text.set_paragraphs` `{line_spacing}` | ✅ | ▾ 1.0–3.0 |
 | | Align Left / Center / Right / Justify | T | `text.set_paragraph` `{align}` | ✅ | |
-| | Text Direction | SS | — | ⛔ | horizontal, rotate 90°/270°, stacked |
+| | Text Direction | SS | `text.set_paragraph` `{direction}` | 🟡 | ▾ Horizontal, Rotate all text 90°, Rotate all text 270°; stacked is not built |
 | | Align Text | SS | `text.set_paragraph` `{valign}` | ✅ | ▾ top / middle / bottom |
 | | Wrap Text | S | `text.set_paragraph` `{wrap}` | ✅ | CourseCraft extra; turning Wrap on converts point text to fixed-width area text |
 | | Find / Replace | SS | `course.find`, `course.replace` | ✅ | `find.rs` |
@@ -207,9 +207,9 @@ Shown when the Course Map view tab is active.
 | | Animation (Lottie) | L | `object.set_lottie` | ✅ | CourseCraft extra; place after Web Object |
 | Text | Text Box | LS | `object.add` `{text}` | ✅ | |
 | | Table | LS | `object.add` `{table}` | ✅ | grid picker on ▾ |
-| | Slide Number | LS | — | ⛔ | slide number / total field |
-| | Symbol | S | — | ⛔ | symbol picker |
-| | Reference | S | — | ⛔ | variable reference `%var%` insert; variables exist |
+| | Slide Number | LS | `ui:insertSlideNumber` | ✅ | ▾ Slide Number, Slide Number of Total; `%Course.SlideNumber%` at the caret or in a new text box |
+| | Symbol | S | `ui:insertSymbol` | ✅ | Symbol window (`insert_text.rs`); the set is limited to the bundled font's glyphs |
+| | Reference | S | `ui:insertReference` | ✅ | Reference window: built-in and course variables, inserted as `%Name%` |
 | | Hyperlink | S | `text.set_link` | ✅ | |
 | Interactive Objects | Button | LS | `object.add` `{button}` | ✅ | ▾ button styles |
 | | Slider | LS | `object.add` `{slider}` | ✅ | `input_insert.rs` |
@@ -246,7 +246,7 @@ Shown when the Course Map view tab is active.
 | Setup | Slide Size | L | `course.set_slide_size` | ✅ | `slide_size_dialog.rs`. In the code: Colors and Fonts open the theme window; Background Styles waits for ribbon wiring (↘ opens the Slide inspector) |
 | Themes | theme gallery | G | `course.set_theme` | ✅ | `ribbon/gallery.rs`: eight built-in themes of our own (accent, background, text), ▾ shows them all, the current one is marked; Colors and Fonts open the theme window (`theme_dialog.rs`) |
 | Theme options | Colors | SS | `theme.set_palette` | ✅ | ▾ palettes, Create New Theme Colors… (`theme.set_palette_color`) |
-| | Fonts | SS | `UiAction::Themes` → `course.set_theme` | 🟡 | opens the Theme dialog with the shared picker for the course theme font; font pairs and Create New Theme Fonts… are planned |
+| | Fonts | SS | `UiAction::Themes` → `course.set_theme` `{font, heading_font}` | ✅ | opens the Theme dialog; ▾ lists font pairs (heading / body) and Create New Theme Fonts… |
 | Background ↘ | Background Styles | SS | `slide.set_background` | ✅ | |
 | | Hide Background Graphics | K | `slide.update` `{hide_master_graphics}` | ⛔ | |
 | Publish | Preview | LS | | ✅ | |

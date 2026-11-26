@@ -438,13 +438,18 @@ The milestones after M38 switch the disabled buttons on, one area at a time. Eac
 in `docs/ui/feature-parity.md` to ✅ and flips the matching `NotYet` actions in the ribbon spec.
 Order follows what testers ask for; this is the default.
 
-## M39 Text and formatting gaps (planned)
+## M39 Text and formatting gaps ✅
 
-Clear formatting, text shadow, change case, highlight colour (new run field), text direction,
-numbering styles, vertical alignment in the ribbon, paste options (keep source, text only, Paste
-Special), the Text and Size and Position settings panels that the Font, Paragraph and Size and
-Position ↘ launchers open (`docs/ui/panels.md`), Create New Theme Fonts dialog, slide
-number field, symbol picker, insert variable reference, focus order dialog.
+Clear formatting, text shadow, change case, highlight colour (new run fields), text direction
+(horizontal, 90°, 270°), numbering styles with Start at, paste options (Use Destination Theme,
+Keep Source Formatting, Keep Text Only, Paste Special), theme heading and body fonts with the
+Create New Theme Fonts dialog, scale % and reset to original size, slide number field, symbol
+picker, insert variable reference, focus order dialog. Also issues #11 (trigger rows highlight
+the selected object; the Triggers list scrolls only while it is the open tab) and #12 (a focused
+layer shows only itself; the eye adds other layers by hand). Plan:
+`docs/plans/m39-text-and-formatting.md`; report: `docs/testing/m39-report.md`. Left for later:
+stacked text, caps, underline styles, tab stops, columns, a wider symbol set (needs a bundled
+symbol font).
 
 ## M40 Pictures, buttons and media polish (planned)
 

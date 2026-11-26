@@ -58,12 +58,14 @@ pub mod font_picker;
 pub mod format_painter;
 pub mod history;
 pub mod input_insert;
+pub mod insert_text;
 pub mod interaction_gallery;
 pub mod interaction_insert;
 pub mod layers;
 pub mod media_library;
 mod media_store;
 pub use media_store::MediaStore;
+pub mod focus_order;
 pub mod menu;
 pub mod outline;
 pub mod preferences;
@@ -237,6 +239,16 @@ mod m29_state_extras_ui_tests;
 mod m29_states_tab_tests;
 #[cfg(test)]
 mod m37_point_text_ui_tests;
+#[cfg(test)]
+mod m39_f_theme_size_tests;
+#[cfg(test)]
+mod m39_i_insert_tests;
+#[cfg(test)]
+mod m39_l_triggers_layers_tests;
+#[cfg(test)]
+mod m39_p_paste_focus_tests;
+#[cfg(test)]
+mod m39_t_text_tests;
 #[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
@@ -997,6 +1009,8 @@ pub struct UiState {
     pub interaction_gallery_rects: Vec<(&'static str, egui::Rect)>,
     /// Insert ▸ Web object window and its URL field.
     pub show_web_window: bool,
+    /// Insert ▸ Symbol and Reference windows (M39 package I).
+    pub insert_text: insert_text::InsertTextState,
     pub web_url: String,
     pub web_error: Option<String>,
     pub canvas_drag: Option<CanvasDrag>,
@@ -1075,6 +1089,12 @@ pub struct UiState {
     pub clipboard_text: Option<String>,
     /// Successive pastes of the same clipboard payload.
     pub clipboard_paste_count: u32,
+    /// The Paste menu choice that waits for the system clipboard to answer.
+    pub pending_paste_mode: Option<clipboard::PasteMode>,
+    /// The Paste Special window.
+    pub paste_special: clipboard::PasteSpecialState,
+    /// The Focus Order window.
+    pub focus_order: focus_order::FocusOrderState,
     /// Text waiting to be sent to `Context::copy_text`.
     pub pending_copy_text: Option<String>,
     /// Neutral status message (skipped triggers, paste results).
@@ -1681,6 +1701,7 @@ impl Editor {
                 show_interaction_gallery: false,
                 interaction_gallery_rects: Vec::new(),
                 show_web_window: false,
+                insert_text: insert_text::InsertTextState::default(),
                 web_url: String::new(),
                 web_error: None,
                 canvas_drag: None,
@@ -1735,6 +1756,9 @@ impl Editor {
                 last_active_area: ActiveArea::Canvas,
                 clipboard: None,
                 clipboard_text: None,
+                pending_paste_mode: None,
+                paste_special: clipboard::PasteSpecialState::default(),
+                focus_order: focus_order::FocusOrderState::default(),
                 clipboard_paste_count: 0,
                 pending_copy_text: None,
                 status_message: None,
@@ -2134,6 +2158,7 @@ impl Editor {
         self.ui.show_interaction_gallery = false;
         self.ui.interaction_gallery_rects.clear();
         self.ui.show_web_window = false;
+        self.ui.insert_text.reset();
         self.ui.web_error = None;
         self.ui.canvas_drag = None;
         self.ui.inline_edit = None;
@@ -2152,6 +2177,8 @@ impl Editor {
         self.ui.question = QuestionState::default();
         self.ui.course_settings = CourseSettingsState::default();
         self.ui.theme_dialog = ThemeDialogState::default();
+        self.ui.paste_special = clipboard::PasteSpecialState::default();
+        self.ui.focus_order = focus_order::FocusOrderState::default();
         self.ui.find = find::FindState::default();
         self.ui.trigger_form = None;
         self.ui.show_course_settings_window = false;
@@ -3644,6 +3671,16 @@ impl Editor {
         if matches(&self.session.course.theme.font) {
             return true;
         }
+        if self
+            .session
+            .course
+            .theme
+            .heading_font
+            .as_deref()
+            .is_some_and(matches)
+        {
+            return true;
+        }
         let slide_uses = |slide: &coursecraft_course::Slide| {
             slide
                 .objects
@@ -4311,12 +4348,16 @@ impl Editor {
             || ui.slide_size_dialog.open
             || ui.show_course_settings_window
             || ui.show_theme_window
+            || ui.paste_special.open
+            || ui.focus_order.open
+            || ui.theme_dialog.fonts_open
             || ui.show_shortcuts_dialog
             || ui.show_outline_dialog
             || ui.show_export_video
             || ui.show_export_review
             || ui.show_export_translation
             || ui.show_web_window
+            || ui.insert_text.any_window_open()
             || ui.pending_delete_scene.is_some()
             || ui.pending_delete_master.is_some()
             || ui.confirm_delete_library_template.is_some()
@@ -4918,6 +4959,7 @@ impl Editor {
         eyedropper::process_frame(ui.ctx());
         self.check_revision();
         self.maybe_run_deferred_audit(ui.ctx());
+        font_picker::publish_theme_fonts(ui.ctx(), &self.session.course.theme);
         if self.ui.last_published_theme_rev != Some(self.session.revision) {
             properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
             self.ui.last_published_theme_rev = Some(self.session.revision);
@@ -5627,6 +5669,10 @@ impl Editor {
         // Insert ▸ Web object dialog.
         web_insert::show_web_insert_window(self, ui.ctx(), &mut requests);
 
+        // Insert ▸ Symbol and Reference windows.
+        insert_text::show_symbol_window(self, ui.ctx());
+        insert_text::show_reference_window(self, ui.ctx());
+
         // Delete-scene confirmation
         slides::show_scene_delete_dialog(self, ui.ctx());
 
@@ -5644,6 +5690,8 @@ impl Editor {
 
         // Theme dialog window
         theme_dialog::show_theme_dialog_window(self, ui.ctx());
+        clipboard::show_paste_special_window(self, ui.ctx());
+        focus_order::show_focus_order_window(self, ui.ctx());
         text_styles_ui::show_manage_styles_window(self, ui.ctx());
         slide_size_dialog::show_slide_size_dialog(self, ui.ctx(), &mut requests);
         preferences::show_preferences_window(self, ui.ctx(), &mut requests);

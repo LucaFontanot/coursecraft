@@ -945,6 +945,7 @@ fn layout_text(
     size: f32,
     frame: Rect,
     theme: &Theme,
+    heading: bool,
 ) -> Object {
     Object {
         id,
@@ -952,7 +953,11 @@ fn layout_text(
         kind: ObjectKind::Text {
             text,
             style: coursecraft_course::TextStyle {
-                font: theme.font.clone(),
+                font: if heading {
+                    theme.heading_font_or_body().to_owned()
+                } else {
+                    theme.font.clone()
+                },
                 size,
                 color: theme.text.clone(),
                 ..coursecraft_course::TextStyle::default()
@@ -1144,6 +1149,7 @@ fn layout_objects(layout: &str, slide: &Slide, size: Size, theme: &Theme) -> Vec
                 layout_font_size(role, p.frame),
                 p.frame,
                 theme,
+                role == LayoutRole::Title,
             ),
         })
         .collect()
@@ -2162,6 +2168,7 @@ fn results_layer(
         28.0,
         message_frame,
         theme,
+        false,
     )];
     let mut triggers = Vec::new();
     for (prefix, label, frame, action) in buttons {
@@ -2237,7 +2244,15 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
     let mut push =
         |prefix: &str, name: &str, text: String, text_size: f32, bold: bool, frame: Rect| {
             let object_id = fresh_id(prefix, slide.local_ids());
-            let mut object = layout_text(object_id, name, text, text_size, frame, theme);
+            let mut object = layout_text(
+                object_id,
+                name,
+                text,
+                text_size,
+                frame,
+                theme,
+                prefix == "title",
+            );
             if let ObjectKind::Text { style, .. } = &mut object.kind {
                 style.bold = bold;
             }

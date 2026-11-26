@@ -46,6 +46,8 @@ enum FontRow {
     Header(&'static str),
     Font {
         name: String,
+        /// What the row shows when it is not the family name (Theme Fonts rows).
+        label: Option<String>,
         section: FontSection,
         embedding_restricted: bool,
         is_current: bool,
@@ -62,6 +64,30 @@ pub enum FontPickerAction {
     PickSystem(String),
     /// User clicked "Add font…".
     AddFont,
+}
+
+/// The course theme's `(heading, body)` fonts, for the "Theme Fonts" section.
+fn theme_fonts_id() -> egui::Id {
+    egui::Id::unique("font_picker_theme_fonts")
+}
+
+/// Store the theme's heading and body fonts for every font list to read.
+pub(crate) fn publish_theme_fonts(ctx: &egui::Context, theme: &coursecraft_course::Theme) {
+    let pair = (theme.heading_font_or_body().to_owned(), theme.font.clone());
+    ctx.data_mut(|d| d.insert_temp(theme_fonts_id(), pair));
+}
+
+/// The `(label, family)` rows of the "Theme Fonts" section: the heading font,
+/// then the body font. Empty when the theme has no usable font name.
+pub(crate) fn theme_font_rows(heading: &str, body: &str) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    for (name, role) in [(heading, tl!("Headings")), (body, tl!("Body"))] {
+        let name = name.trim();
+        if !name.is_empty() {
+            rows.push((format!("{name} ({role})"), name.to_owned()));
+        }
+    }
+    rows
 }
 
 /// Record a chosen font family in `recent_fonts` (newest first, deduplicated).
@@ -128,6 +154,7 @@ fn combo_button(ui: &mut Ui, shown_font: &str, selected_font: FontId) -> Respons
 }
 
 fn build_rows(
+    theme_fonts: Option<&(String, String)>,
     shown_font: &str,
     font_families: &[String],
     recent_fonts: &[String],
@@ -143,6 +170,28 @@ fn build_rows(
         for choice in choices {
             if choice.embedding_restricted {
                 restricted_lookup.insert(choice.name.to_ascii_lowercase());
+            }
+        }
+    }
+
+    // 0. "Theme Fonts": the heading and body fonts.
+    if let Some((heading, body)) = theme_fonts {
+        let theme_rows: Vec<(String, String)> = theme_font_rows(heading, body)
+            .into_iter()
+            .filter(|(label, name)| matches(label) || matches(name))
+            .collect();
+        if !theme_rows.is_empty() {
+            rows.push(FontRow::Header(tl!("Theme Fonts")));
+            for (label, name) in theme_rows {
+                let restricted = restricted_lookup.contains(&name.to_ascii_lowercase());
+                let is_current = name.eq_ignore_ascii_case(shown_font);
+                rows.push(FontRow::Font {
+                    name,
+                    label: Some(label),
+                    section: FontSection::Course,
+                    embedding_restricted: restricted,
+                    is_current,
+                });
             }
         }
     }
@@ -169,6 +218,7 @@ fn build_rows(
             let is_current = name.eq_ignore_ascii_case(shown_font);
             rows.push(FontRow::Font {
                 name,
+                label: None,
                 section: FontSection::Course,
                 embedding_restricted: restricted,
                 is_current,
@@ -185,6 +235,7 @@ fn build_rows(
             let is_current = name.eq_ignore_ascii_case(shown_font);
             rows.push(FontRow::Font {
                 name: name.clone(),
+                label: None,
                 section: FontSection::Recent,
                 embedding_restricted: restricted,
                 is_current,
@@ -220,6 +271,7 @@ fn build_rows(
                     let is_current = choice.name.eq_ignore_ascii_case(shown_font);
                     rows.push(FontRow::Font {
                         name: choice.name.clone(),
+                        label: None,
                         section: FontSection::System,
                         embedding_restricted: choice.embedding_restricted,
                         is_current,
@@ -429,7 +481,9 @@ fn font_list_body(
     }
     ui.add_space(4.0);
 
+    let theme_fonts: Option<(String, String)> = ui.ctx().data(|d| d.get_temp(theme_fonts_id()));
     let rows = build_rows(
+        theme_fonts.as_ref(),
         shown_font,
         font_families,
         recent_fonts,
@@ -587,10 +641,12 @@ fn font_list_body(
                 }
                 FontRow::Font {
                     name,
+                    label,
                     section,
                     embedding_restricted,
                     is_current,
                 } => {
+                    let shown_name = label.as_ref().unwrap_or(name);
                     let (rect, mut resp) =
                         ui.allocate_exact_size(vec2(row_w, row_height), Sense::click());
                     let is_highlighted = state.highlighted == Some(idx);
@@ -618,7 +674,7 @@ fn font_list_body(
                         &mut budget_exhausted,
                     );
                     let mut job = egui::text::LayoutJob::single_section(
-                        name.clone(),
+                        shown_name.clone(),
                         egui::TextFormat {
                             font_id: font,
                             color: p.text,
@@ -639,7 +695,7 @@ fn font_list_body(
                         p.text,
                     );
                     if is_truncated {
-                        resp = resp.on_hover_text(name.clone());
+                        resp = resp.on_hover_text(shown_name.clone());
                     }
 
                     if *embedding_restricted {

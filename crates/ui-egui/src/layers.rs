@@ -47,8 +47,8 @@ pub struct LayersState {
     pub last_synced_revision: crate::SyncRevision,
     pub last_synced_selection: crate::Selection,
 
-    /// Layers whose eye is off. Never course data.
-    pub hidden_layers: BTreeSet<String>,
+    /// Layers whose eye the author turned on (opt-in). Never course data.
+    pub shown_layers: BTreeSet<String>,
     /// Dim everything except a focused layer. Never course data.
     pub dim_other_layers: bool,
     /// The slide the eye states belong to; changing slide clears them.
@@ -76,7 +76,7 @@ impl Default for LayersState {
         Self {
             last_synced_revision: crate::SyncRevision::default(),
             last_synced_selection: crate::Selection::default(),
-            hidden_layers: BTreeSet::new(),
+            shown_layers: BTreeSet::new(),
             dim_other_layers: true,
             eye_slide: String::new(),
             rename: None,
@@ -105,12 +105,8 @@ impl LayersState {
         let slide_changed = self.last_synced_selection.slide != selection.slide;
         self.last_synced_revision.set(revision);
         self.last_synced_selection = selection.clone();
-        if let Some(lid) = selection.layer.as_deref() {
-            self.hidden_layers.remove(lid);
-        }
-
         if slide_changed && self.eye_slide != selection.slide {
-            self.hidden_layers.clear();
+            self.shown_layers.clear();
             self.eye_slide = selection.slide.clone();
             if self
                 .rename
@@ -142,15 +138,16 @@ impl LayersState {
         }
     }
 
-    /// Whether a layer's eye is off.
+    /// Whether the author turned a layer's eye on. Off by default.
     #[must_use]
-    pub fn is_hidden(&self, layer_id: &str) -> bool {
-        self.hidden_layers.contains(layer_id)
+    pub fn is_shown(&self, layer_id: &str) -> bool {
+        self.shown_layers.contains(layer_id)
     }
 
-    /// Ids of unfocused, visible layers to draw on the canvas as well.
+    /// Ids of unfocused layers whose eye is on, to draw beside the focused layer.
     ///
-    /// Empty on the base view: layers only appear beside a focused layer.
+    /// Every other layer is hidden. Empty on the base view: layers only appear
+    /// beside a focused layer.
     #[must_use]
     pub fn extra_layer_ids(&self, slide: &Slide, focus: Option<&str>) -> Vec<String> {
         let Some(focus) = focus else {
@@ -159,7 +156,7 @@ impl LayersState {
         slide
             .layers
             .iter()
-            .filter(|layer| layer.id != focus && !self.is_hidden(&layer.id))
+            .filter(|layer| layer.id != focus && self.is_shown(&layer.id))
             .map(|layer| layer.id.clone())
             .collect()
     }
@@ -569,7 +566,7 @@ fn show_layer_row(
 
     let focus_layer = editor.selection.layer.as_deref();
     let focused = focus_layer == Some(layer_id);
-    let hidden = editor.ui.layers.is_hidden(layer_id);
+    let shown = editor.ui.layers.is_shown(layer_id);
 
     // A pointer over a menu or window drawn on top of the panel is not over the row.
     let raw_pointer = ui.input(|input| input.pointer.interact_pos());
@@ -585,10 +582,10 @@ fn show_layer_row(
         if over_gear {
             open_layer_settings(editor, slide_id, layer_id);
         } else if over_eye && !focused {
-            if hidden {
-                editor.ui.layers.hidden_layers.remove(layer_id);
+            if shown {
+                editor.ui.layers.shown_layers.remove(layer_id);
             } else {
-                editor.ui.layers.hidden_layers.insert(layer_id.to_owned());
+                editor.ui.layers.shown_layers.insert(layer_id.to_owned());
             }
         }
     }
@@ -598,7 +595,6 @@ fn show_layer_row(
             start_layer_rename(editor, slide_id, layer_id);
         } else if response.clicked() {
             editor.selection.layer = Some(layer_id.to_owned());
-            editor.ui.layers.hidden_layers.remove(layer_id);
             editor.selection.repair(&editor.session.course);
         }
         if response.secondary_clicked() || response.container_secondary_clicked() {
@@ -647,24 +643,25 @@ fn show_layer_row(
         .eye_rects
         .insert(layer_id.to_owned(), eye_rect);
     if ui.is_rect_visible(eye_rect) {
-        let icon = if focused || !hidden {
+        let icon = if focused || shown {
             coursecraft_render::Icon::Eye
         } else {
             coursecraft_render::Icon::EyeSlash
         };
-        let color = if focused || !hidden {
+        // Off is a normal, clickable state: muted, not the disabled colour.
+        let color = if focused || shown {
             p.text_secondary
         } else {
-            p.text_disabled
+            p.text_tertiary
         };
         paint_icon(ui, eye_rect, icon, color);
     }
     let eye_tooltip = if focused {
         "The focused layer stays visible"
-    } else if hidden {
-        "Show layer"
-    } else {
+    } else if shown {
         "Hide layer"
+    } else {
+        "Show layer"
     };
     let eye_resp = ui
         .interact(

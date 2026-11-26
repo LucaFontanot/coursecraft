@@ -16,6 +16,211 @@ pub struct ThemeDialogState {
     pub font: String,
     pub bar: String,
     pub bar_text: String,
+    /// The Create New Theme Fonts dialog is open.
+    pub fonts_open: bool,
+    /// Heading and body font chosen in that dialog, not yet saved.
+    pub fonts_heading: String,
+    pub fonts_body: String,
+}
+
+/// The most course fonts the Design › Fonts ▾ built-in pairs draw on.
+const MAX_PAIR_FONTS: usize = 4;
+
+/// The built-in `(heading, body)` pairs Design › Fonts ▾ lists: Inter for both,
+/// then each course font as heading over Inter and as body under Inter.
+#[must_use]
+pub fn builtin_font_pairs(course_fonts: &[&str]) -> Vec<(String, String)> {
+    let mut pairs = vec![("Inter".to_owned(), "Inter".to_owned())];
+    for font in course_fonts
+        .iter()
+        .filter(|f| !f.eq_ignore_ascii_case("Inter") && !f.eq_ignore_ascii_case("Open Sans"))
+        .take(MAX_PAIR_FONTS)
+    {
+        for pair in [
+            ((*font).to_owned(), "Inter".to_owned()),
+            ("Inter".to_owned(), (*font).to_owned()),
+        ] {
+            if !pairs.contains(&pair) {
+                pairs.push(pair);
+            }
+        }
+    }
+    pairs
+}
+
+/// The `course.set_theme` parameters that set one heading and body pair in a
+/// single command. A heading equal to the body clears `heading_font`.
+#[must_use]
+pub fn font_pair_params(heading: &str, body: &str) -> serde_json::Value {
+    let heading = heading.trim();
+    let body = body.trim();
+    if heading.is_empty() || heading.eq_ignore_ascii_case(body) {
+        serde_json::json!({ "font": body, "heading_font": serde_json::Value::Null })
+    } else {
+        serde_json::json!({ "font": body, "heading_font": heading })
+    }
+}
+
+/// Open the Create New Theme Fonts dialog with the theme's current fonts.
+pub fn open_theme_fonts_dialog(editor: &mut crate::Editor) {
+    let theme = &editor.session.course.theme;
+    editor.ui.theme_dialog.fonts_heading = theme.heading_font_or_body().to_owned();
+    editor.ui.theme_dialog.fonts_body = theme.font.clone();
+    editor.ui.theme_dialog.fonts_open = true;
+}
+
+/// Design › Fonts ▾: the built-in pairs and Create New Theme Fonts….
+pub fn theme_fonts_menu(editor: &mut crate::Editor, ui: &mut egui::Ui) {
+    let families: Vec<String> = editor
+        .session
+        .course
+        .font_families()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let refs: Vec<&str> = families.iter().map(String::as_str).collect();
+    let theme = &editor.session.course.theme;
+    let (cur_h, cur_b) = (theme.heading_font_or_body().to_owned(), theme.font.clone());
+    let mut chosen: Option<(String, String)> = None;
+    for (h, b) in builtin_font_pairs(&refs) {
+        let on = h.eq_ignore_ascii_case(&cur_h) && b.eq_ignore_ascii_case(&cur_b);
+        let label = format!("{h} / {b}");
+        if ui.add(egui::Button::selectable(on, label)).clicked() {
+            chosen = Some((h, b));
+        }
+    }
+    ui.separator();
+    if ui.button(tl!("Create New Theme Fonts…")).clicked() {
+        open_theme_fonts_dialog(editor);
+        ui.close();
+    }
+    if let Some((h, b)) = chosen {
+        editor.run("course.set_theme", font_pair_params(&h, &b));
+        ui.close();
+    }
+}
+
+/// The Create New Theme Fonts dialog: heading and body pickers, a live sample,
+/// and Save, which sets both fonts in one `course.set_theme`.
+pub fn show_theme_fonts_window(editor: &mut crate::Editor, ctx: &egui::Context) {
+    if !editor.ui.theme_dialog.fonts_open {
+        return;
+    }
+    editor.ui.properties_lists.ensure(
+        editor.session.revision,
+        &editor.session.course,
+        &editor.media,
+    );
+    let mut open = true;
+    let mut close = false;
+    let mut save = false;
+    Dialog::new(tl!("Create New Theme Fonts"))
+        .open(&mut open)
+        .width(420.0)
+        .show_with_footer(ctx, |dialog| {
+            dialog.body(|ui| {
+                for heading in [true, false] {
+                    let label = if heading {
+                        tl!("Heading font")
+                    } else {
+                        tl!("Body font")
+                    };
+                    let current = if heading {
+                        editor.ui.theme_dialog.fonts_heading.clone()
+                    } else {
+                        editor.ui.theme_dialog.fonts_body.clone()
+                    };
+                    let state = &mut editor.ui;
+                    let picked = crate::properties::inspector_row(ui, label, |ui| {
+                        show_font_picker(
+                            ui,
+                            if heading {
+                                "theme_fonts_heading"
+                            } else {
+                                "theme_fonts_body"
+                            },
+                            &current,
+                            &state.properties_lists.font_families,
+                            &mut state.properties.recent_fonts,
+                            state.system_fonts.as_deref(),
+                            &mut state.properties.system_fonts_list_requested,
+                            &mut state.properties.system_font_search,
+                            &mut editor.pending_requests,
+                        )
+                    });
+                    let name = match picked {
+                        Some(FontPickerAction::PickCourseOrRecent(name)) => Some(name),
+                        Some(FontPickerAction::PickSystem(name)) => {
+                            editor.pending_requests.push(EditorRequest::AddSystemFont {
+                                family: name.clone(),
+                                apply: None,
+                            });
+                            Some(name)
+                        }
+                        Some(FontPickerAction::AddFont) => {
+                            editor.pending_requests.push(EditorRequest::PickFonts);
+                            None
+                        }
+                        None => None,
+                    };
+                    if let Some(name) = name {
+                        if heading {
+                            editor.ui.theme_dialog.fonts_heading = name;
+                        } else {
+                            editor.ui.theme_dialog.fonts_body = name;
+                        }
+                    }
+                }
+                ui.add_space(8.0);
+                ui.separator();
+                let p = coursecraft_render::palette(ui.ctx());
+                let heading_font = coursecraft_render::slide_font_named(
+                    ui.ctx(),
+                    Some(&editor.ui.theme_dialog.fonts_heading),
+                    true,
+                    false,
+                    24.0,
+                );
+                let body_font = coursecraft_render::slide_font_named(
+                    ui.ctx(),
+                    Some(&editor.ui.theme_dialog.fonts_body),
+                    false,
+                    false,
+                    15.0,
+                );
+                ui.label(
+                    egui::RichText::new(tl!("Heading"))
+                        .font(heading_font)
+                        .color(p.text),
+                );
+                ui.label(
+                    egui::RichText::new(tl!("Body text sample"))
+                        .font(body_font)
+                        .color(p.text),
+                );
+            });
+            dialog.footer(|ui| {
+                ui.horizontal(|ui| {
+                    if crate::primary_button(ui, tl!("Save")).clicked() {
+                        save = true;
+                    }
+                    if ui.button(tl!("Cancel")).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        });
+    if save {
+        let params = font_pair_params(
+            &editor.ui.theme_dialog.fonts_heading,
+            &editor.ui.theme_dialog.fonts_body,
+        );
+        editor.run("course.set_theme", params);
+        close = true;
+    }
+    if close || !open {
+        editor.ui.theme_dialog.fonts_open = false;
+    }
 }
 
 impl ThemeDialogState {
@@ -36,6 +241,7 @@ impl ThemeDialogState {
 
 /// Render the Theme modal window dialog.
 pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context) {
+    show_theme_fonts_window(editor, ctx);
     if !editor.ui.show_theme_window {
         return;
     }
@@ -54,6 +260,7 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
     let mut close = false;
     let mut update_theme: Option<serde_json::Value> = None;
     let mut palette_actions = Vec::new();
+    let mut open_fonts = false;
 
     Dialog::new("Theme")
         .open(&mut open)
@@ -162,6 +369,9 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
                         &mut editor.pending_requests,
                     )
                 });
+                if ui.button(tl!("Theme fonts…")).clicked() {
+                    open_fonts = true;
+                }
                 match picked {
                     Some(FontPickerAction::PickCourseOrRecent(name))
                         if state.theme_dialog.font != name =>
@@ -201,6 +411,7 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
                             "background": def.background.0,
                             "text": def.text.0,
                             "font": def.font,
+                            "heading_font": serde_json::Value::Null,
                             "bar": def.player.bar.0,
                             "bar_text": def.player.bar_text.0,
                         }));
@@ -213,6 +424,9 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
             });
         });
 
+    if open_fonts {
+        open_theme_fonts_dialog(editor);
+    }
     if let Some(params) = update_theme {
         editor.run("course.set_theme", params);
     }

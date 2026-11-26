@@ -84,9 +84,9 @@ States tab: Edit States button, Initial state combo, one thumbnail per state, bu
 | Feature | Status | Notes |
 |---|---|---|
 | Panel tabs: Slide, Comments, AI | 🟡 | Slide ✅ (inspector), Comments 🚫 (review workflow not planned), AI ⛔ (chat with the connected agent) |
-| Triggers: toolbar New, Edit, Copy, Paste, Delete, Up, Down; Group; Variables | ✅ | `triggers.rs`, `variables.rs`; check Copy/Paste |
+| Triggers: toolbar New, Edit, Copy, Paste, Delete, Up, Down; Group; Variables. The selected object (or interactive group) highlights its rows: rows whose event object it is get an accent tint and a 3 px accent bar, rows whose actions or conditions name it get a lighter tint, and in Group by object its group header is highlighted. The list scrolls the first highlighted row into view once per selection change, only when the Triggers panel is already visible; the panel is never opened or switched to | ✅ | `triggers.rs`, `variables.rs`; check Copy/Paste |
 | Sections Object / Slide / Layer / Player triggers, sentence rows with inline links | ✅ | |
-| Slide Layers: base last, eye, New, Duplicate, Delete, Dim, properties ⚙ | ✅ | `layers.rs` |
+| Slide Layers: base last, eye, New, Duplicate, Delete, Dim, properties ⚙. Selecting a layer shows only that layer and the base slide (dimmed by Dim); every other layer is hidden. An eye is off by default and is manual: turning it on draws that layer beside the focused one with the Dim fade. The focused layer's eye is always on. The eyes clear when the slide changes; the base view never shows layers | ✅ | `layers.rs` |
 | Format / Animate / Slide / Course inspectors | CourseCraft extra | dock panels of their own (✅); every ↘ opens a settings panel instead of a dialog, see [panels.md](panels.md) |
 
 ## Context menus

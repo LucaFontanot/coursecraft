@@ -671,6 +671,8 @@ fn fill_xliff_keeps_master_text_rich_runs_and_references() {
                     strikethrough: None,
                     baseline: None,
                     letter_spacing: None,
+                    highlight: None,
+                    shadow: None,
                 },
                 TextRun {
                     text: "body".to_owned(),
@@ -684,6 +686,8 @@ fn fill_xliff_keeps_master_text_rich_runs_and_references() {
                     strikethrough: None,
                     baseline: None,
                     letter_spacing: None,
+                    highlight: None,
+                    shadow: None,
                 },
             ],
             paragraphs: Vec::new(),

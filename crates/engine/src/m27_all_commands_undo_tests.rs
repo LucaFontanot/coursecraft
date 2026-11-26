@@ -81,6 +81,24 @@ fn make_text_obj(id: &str, text: &str, x: f32, y: f32) -> Object {
     )
 }
 
+fn plain_run(text: &str) -> coursecraft_course::TextRun {
+    coursecraft_course::TextRun {
+        text: text.into(),
+        bold: None,
+        italic: None,
+        underline: None,
+        strikethrough: None,
+        baseline: None,
+        letter_spacing: None,
+        size: None,
+        color: None,
+        link: None,
+        font: None,
+        highlight: None,
+        shadow: None,
+    }
+}
+
 fn make_shape_obj(id: &str, x: f32, y: f32, w: f32, h: f32, fill: &str) -> Object {
     base_object(
         id,
@@ -410,7 +428,14 @@ fn fixture_session() -> Session {
     let mut obj_ig2 = make_text_obj("obj_ig2", "Go", 505.0, 125.0);
     obj_ig2.group = Some("grp_btn".into());
 
-    let obj_text = make_text_obj("obj_text", "Hello world", 40.0, 140.0);
+    let mut obj_text = make_text_obj("obj_text", "Hello world", 40.0, 140.0);
+    // An italic run, so text.clear_formatting has something to clear.
+    if let ObjectKind::Text { runs, .. } = &mut obj_text.kind {
+        runs.push(coursecraft_course::TextRun {
+            italic: Some(true),
+            ..plain_run("Hello world")
+        });
+    }
 
     let obj_pic = base_object(
         "obj_pic",
@@ -1353,6 +1378,14 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         (
             "text.style_range",
             json!({ "slide": "slide1", "object": "obj_text", "start": 0, "end": 5, "bold": true }),
+        ),
+        (
+            "text.clear_formatting",
+            json!({ "slide": "slide1", "object": "obj_text", "start": 0, "end": 0 }),
+        ),
+        (
+            "text.change_case",
+            json!({ "slide": "slide1", "object": "obj_text", "start": 0, "end": 0, "case": "upper" }),
         ),
         (
             "text.set_paragraph",

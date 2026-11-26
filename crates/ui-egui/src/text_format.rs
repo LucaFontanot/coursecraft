@@ -19,7 +19,8 @@
 //! explicit, id-addressed commands.
 
 use coursecraft_course::{
-    Align, Course, ListKind, ObjectKind, Paragraph, TextRun, TextStyle, VAlign,
+    Align, CaseChange, Course, ListKind, NumberScheme, ObjectKind, Paragraph, TextDirection,
+    TextRun, TextStyle, VAlign,
 };
 use serde_json::{Value as Json, json};
 
@@ -67,6 +68,15 @@ pub struct TextState {
     pub list: Option<ListKind>,
     pub level: Option<u8>,
     pub line_spacing: Option<f32>,
+    /// Text shadow; `None` where mixed.
+    pub shadow: Option<bool>,
+    /// The highlight colour when every character has the same one.
+    pub highlight: Option<String>,
+    pub direction: Option<TextDirection>,
+    /// The numbering scheme when every covered paragraph has the same explicit one.
+    pub number_scheme: Option<NumberScheme>,
+    /// The first number when every covered paragraph has the same explicit one.
+    pub start_at: Option<u32>,
 }
 
 /// One formatting change, as the ribbon and the shortcuts ask for it.
@@ -92,6 +102,20 @@ pub enum Change {
     /// One indent level in (`1`) or out (`-1`).
     Indent(i8),
     LineSpacing(f32),
+    /// Text shadow on, or off when every target character has it.
+    Shadow,
+    /// A highlight colour, or `None` for No Color.
+    Highlight(Option<String>),
+    /// Remove the character formatting (links stay).
+    ClearFormatting,
+    /// Change the case of the letters.
+    Case(CaseChange),
+    /// Numbered list with this scheme.
+    NumberScheme(NumberScheme),
+    /// Numbered list starting at this number.
+    StartAt(u32),
+    /// Text direction of the whole box.
+    Direction(TextDirection),
 }
 
 /// The font sizes offered, and the steps of Grow Font and Shrink Font.
@@ -284,6 +308,55 @@ fn paragraph_range(scope: Scope, text: &str) -> (usize, usize) {
     }
 }
 
+/// The runs a character range touches (`None` for plain text), or the run typing at a
+/// caret would continue.
+fn runs_touching(runs: &[TextRun], range: (usize, usize)) -> Vec<Option<&TextRun>> {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if runs.is_empty() {
+        return vec![None];
+    }
+    if start == end {
+        return vec![crate::properties::run_at_caret(runs, start)];
+    }
+    let mut offset = 0usize;
+    let mut out = Vec::new();
+    for run in runs {
+        let run_start = offset;
+        offset = offset.saturating_add(run.text.chars().count());
+        if offset > start && run_start < end {
+            out.push(Some(run));
+        }
+    }
+    if out.is_empty() {
+        out.push(None);
+    }
+    out
+}
+
+/// The one value `f` gives for every run in the range, `None` when they differ.
+fn same_in_range<T: PartialEq>(
+    runs: &[TextRun],
+    range: (usize, usize),
+    f: impl Fn(Option<&TextRun>) -> T,
+) -> Option<T> {
+    let touched = runs_touching(runs, range);
+    let first = f(*touched.first()?);
+    touched.iter().all(|r| f(*r) == first).then_some(first)
+}
+
+/// Shadow at the range: on, off, or `None` when mixed.
+pub(crate) fn shadow_for_range(runs: &[TextRun], range: (usize, usize)) -> Option<bool> {
+    same_in_range(runs, range, |r| r.and_then(|r| r.shadow).unwrap_or(false))
+}
+
+/// The highlight colour shared by the whole range, `None` when none or mixed.
+pub(crate) fn highlight_for_range(runs: &[TextRun], range: (usize, usize)) -> Option<String> {
+    same_in_range(runs, range, |r| {
+        r.and_then(|r| r.highlight.as_ref()).map(|c| c.0.clone())
+    })
+    .flatten()
+}
+
 fn merge<T: PartialEq>(acc: &mut Option<Option<T>>, value: Option<T>) {
     match acc {
         None => *acc = Some(value),
@@ -327,6 +400,17 @@ fn one_state(editor: &Editor, target: &Target) -> Option<TextState> {
         list: list.or(covered.is_empty().then_some(ListKind::None)),
         level: level.or(Some(0)),
         line_spacing: same(&|p| p.line_spacing).or(covered.is_empty().then_some(1.0)),
+        shadow: shadow_for_range(parts.runs, range),
+        highlight: highlight_for_range(parts.runs, range),
+        direction: Some(parts.style.direction),
+        number_scheme: covered
+            .first()
+            .and_then(|p| p.number_scheme)
+            .filter(|scheme| covered.iter().all(|p| p.number_scheme == Some(*scheme))),
+        start_at: covered
+            .first()
+            .and_then(|p| p.start_at)
+            .filter(|n| covered.iter().all(|p| p.start_at == Some(*n))),
     };
     // A style picked at the caret shows until text is typed with it.
     if let Scope::Caret(caret) = target.scope
@@ -350,6 +434,10 @@ fn one_state(editor: &Editor, target: &Target) -> Option<TextState> {
         state.size = patch.size.or(state.size);
         state.font = patch.font.clone().or(state.font);
         state.color = patch.color.as_ref().map(|c| c.0.clone()).or(state.color);
+        state.shadow = patch.shadow.or(state.shadow);
+        if let Some(highlight) = &patch.highlight {
+            state.highlight = highlight.as_ref().map(|c| c.0.clone());
+        }
     }
     Some(state)
 }
@@ -379,6 +467,11 @@ pub fn state(editor: &Editor) -> Option<TextState> {
     let mut list = None;
     let mut level = None;
     let mut spacing = None;
+    let mut shadow = None;
+    let mut highlight = None;
+    let mut direction = None;
+    let mut scheme = None;
+    let mut start_at = None;
     for s in states {
         merge(&mut font, s.font);
         merge(&mut size, s.size);
@@ -393,6 +486,11 @@ pub fn state(editor: &Editor) -> Option<TextState> {
         merge(&mut list, s.list);
         merge(&mut level, s.level);
         merge(&mut spacing, s.line_spacing);
+        merge(&mut shadow, s.shadow);
+        merge(&mut highlight, s.highlight);
+        merge(&mut direction, s.direction);
+        merge(&mut scheme, s.number_scheme);
+        merge(&mut start_at, s.start_at);
     }
     Some(TextState {
         font: font.flatten(),
@@ -408,6 +506,11 @@ pub fn state(editor: &Editor) -> Option<TextState> {
         list: list.flatten(),
         level: level.flatten(),
         line_spacing: spacing.flatten(),
+        shadow: shadow.flatten(),
+        highlight: highlight.flatten(),
+        direction: direction.flatten(),
+        number_scheme: scheme.flatten(),
+        start_at: start_at.flatten(),
     })
 }
 
@@ -457,6 +560,28 @@ fn valign_name(valign: VAlign) -> &'static str {
     }
 }
 
+fn direction_name(direction: TextDirection) -> &'static str {
+    match direction {
+        TextDirection::Horizontal => "horizontal",
+        TextDirection::Vertical => "vertical",
+        TextDirection::Vertical270 => "vertical270",
+    }
+}
+
+fn case_name(case: CaseChange) -> &'static str {
+    match case {
+        CaseChange::Sentence => "sentence",
+        CaseChange::Lower => "lower",
+        CaseChange::Upper => "upper",
+        CaseChange::Title => "title",
+        CaseChange::Toggle => "toggle",
+    }
+}
+
+fn scheme_name(scheme: NumberScheme) -> serde_json::Value {
+    serde_json::to_value(scheme).unwrap_or(Json::Null)
+}
+
 fn list_name(list: ListKind) -> &'static str {
     match list {
         ListKind::None => "none",
@@ -478,12 +603,19 @@ fn character_fields(change: &Change, now: &TextState, size: f32) -> Option<Json>
         Change::Shrink => json!({ "size": step_size(size, false) }),
         Change::Color(color) => json!({ "color": color }),
         Change::Spacing(points) => json!({ "letter_spacing": points }),
+        Change::Shadow => json!({ "shadow": now.shadow != Some(true) }),
+        Change::Highlight(color) => json!({ "highlight": color }),
         Change::Align(_)
         | Change::VAlign(_)
         | Change::Wrap
         | Change::List(_)
         | Change::Indent(_)
-        | Change::LineSpacing(_) => return None,
+        | Change::LineSpacing(_)
+        | Change::ClearFormatting
+        | Change::Case(_)
+        | Change::NumberScheme(_)
+        | Change::StartAt(_)
+        | Change::Direction(_) => return None,
     })
 }
 
@@ -513,6 +645,15 @@ fn patch_pending(patch: &mut coursecraft_course::TextRunPatch, fields: &Json) {
     }
     if let Some(v) = fields.get("color").and_then(Json::as_str) {
         patch.color = Some(coursecraft_course::Color(v.to_owned()));
+    }
+    if let Some(v) = flag("shadow") {
+        patch.shadow = Some(v);
+    }
+    if let Some(v) = fields.get("highlight") {
+        patch.highlight = Some(
+            v.as_str()
+                .map(|hex| coursecraft_course::Color(hex.to_owned())),
+        );
     }
 }
 
@@ -544,6 +685,24 @@ pub fn apply(editor: &mut Editor, change: &Change) -> bool {
         let Some(parts) = parts(editor, target) else {
             continue;
         };
+        if let Change::ClearFormatting | Change::Case(_) = change {
+            // A caret has no characters to change.
+            let (start, end) = match target.scope {
+                Scope::Range(a, b) => (a, b),
+                Scope::Whole => (0, 0),
+                Scope::Caret(_) => continue,
+            };
+            let mut params = address(target);
+            params["start"] = json!(start);
+            params["end"] = json!(end);
+            if let Change::Case(case) = change {
+                params["case"] = json!(case_name(*case));
+                steps.push(("text.change_case".to_owned(), params));
+            } else {
+                steps.push(("text.clear_formatting".to_owned(), params));
+            }
+            continue;
+        }
         let own = one_state(editor, target).unwrap_or_default();
         let size = own.size.or(now.size).unwrap_or(parts.style.size);
         if let Some(fields) = character_fields(change, &now, size) {
@@ -597,7 +756,12 @@ pub fn apply(editor: &mut Editor, change: &Change) -> bool {
             Change::Align(align) => params["align"] = json!(align_name(*align)),
             Change::VAlign(valign) => params["valign"] = json!(valign_name(*valign)),
             Change::Wrap => params["wrap"] = json!(now.wrap != Some(true)),
-            Change::List(_) | Change::Indent(_) | Change::LineSpacing(_) => {
+            Change::Direction(direction) => params["direction"] = json!(direction_name(*direction)),
+            Change::List(_)
+            | Change::Indent(_)
+            | Change::LineSpacing(_)
+            | Change::NumberScheme(_)
+            | Change::StartAt(_) => {
                 let (first, end) = paragraph_range(target.scope, parts.text);
                 if target.scope != Scope::Whole {
                     params["start"] = json!(first);
@@ -617,6 +781,14 @@ pub fn apply(editor: &mut Editor, change: &Change) -> bool {
                         params["level"] = json!(level.clamp(0, 4));
                     }
                     Change::LineSpacing(lines) => params["line_spacing"] = json!(lines),
+                    Change::NumberScheme(scheme) => {
+                        params["list"] = json!("number");
+                        params["number_scheme"] = scheme_name(*scheme);
+                    }
+                    Change::StartAt(number) => {
+                        params["list"] = json!("number");
+                        params["start_at"] = json!(number);
+                    }
                     _ => {}
                 }
                 steps.push(("text.set_paragraphs".to_owned(), params));
@@ -634,6 +806,20 @@ pub fn apply(editor: &mut Editor, change: &Change) -> bool {
         steps.insert(0, ("text.set".to_owned(), text));
     }
     let done = editor.run_batch(&steps).is_some();
+    if done && matches!(change, Change::Case(_)) {
+        // The letters changed: the edit buffer follows what is stored now.
+        let refreshed = editor.ui.inline_edit.as_ref().and_then(|edit| {
+            let stored = stored_text(&editor.session.course, &edit.slide, &edit.object, edit.cell)?;
+            Some(if stored.runs.is_empty() {
+                stored.text.to_owned()
+            } else {
+                stored.runs.iter().map(|r| r.text.as_str()).collect()
+            })
+        });
+        if let (Some(text), Some(edit)) = (refreshed, editor.ui.inline_edit.as_mut()) {
+            edit.buffer = text;
+        }
+    }
     if done && let Some(edit) = editor.ui.inline_edit.as_mut() {
         edit.original = edit.buffer.clone();
     }

@@ -23,6 +23,8 @@ pub fn normalize_runs(runs: &[TextRun]) -> Vec<TextRun> {
             && last.color == run.color
             && last.link == run.link
             && last.font == run.font
+            && last.highlight == run.highlight
+            && last.shadow == run.shadow
         {
             last.text.push_str(&run.text);
             continue;
@@ -47,6 +49,10 @@ pub struct TextRunPatch {
     pub font: Option<String>,
     /// `None` leaves links alone. `Some(None)` removes a link.
     pub link: Option<Option<Link>>,
+    /// `None` leaves the highlight alone. `Some(None)` removes it.
+    pub highlight: Option<Option<Color>>,
+    /// `None` leaves the shadow alone.
+    pub shadow: Option<bool>,
 }
 
 /// Maps a plain-text edit onto existing runs by common prefix/suffix (in chars,
@@ -113,19 +119,7 @@ pub fn apply_text_edit(runs: &[TextRun], old_plain: &str, new_plain: &str) -> Ve
     let inserted_overrides = runs
         .get(insert_run_idx)
         .cloned()
-        .unwrap_or_else(|| TextRun {
-            text: String::new(),
-            bold: None,
-            italic: None,
-            underline: None,
-            size: None,
-            color: None,
-            link: None,
-            font: None,
-            strikethrough: None,
-            baseline: None,
-            letter_spacing: None,
-        });
+        .unwrap_or_else(|| plain_run(String::new()));
 
     let suffix_start_char = old_chars.len().saturating_sub(suffix_len);
 
@@ -140,16 +134,7 @@ pub fn apply_text_edit(runs: &[TextRun], old_plain: &str, new_plain: &str) -> Ve
             if !chars.is_empty() {
                 prefix_runs.push(TextRun {
                     text: chars,
-                    bold: run.bold,
-                    italic: run.italic,
-                    underline: run.underline,
-                    strikethrough: run.strikethrough,
-                    baseline: run.baseline,
-                    letter_spacing: run.letter_spacing,
-                    size: run.size,
-                    color: run.color.clone(),
-                    link: run.link.clone(),
-                    font: run.font.clone(),
+                    ..run.clone()
                 });
             }
         }
@@ -166,16 +151,7 @@ pub fn apply_text_edit(runs: &[TextRun], old_plain: &str, new_plain: &str) -> Ve
         if !inserted_chars.is_empty() {
             prefix_runs.push(TextRun {
                 text: inserted_chars,
-                bold: inserted_overrides.bold,
-                italic: inserted_overrides.italic,
-                underline: inserted_overrides.underline,
-                strikethrough: inserted_overrides.strikethrough,
-                baseline: inserted_overrides.baseline,
-                letter_spacing: inserted_overrides.letter_spacing,
-                size: inserted_overrides.size,
-                color: inserted_overrides.color,
-                link: inserted_overrides.link,
-                font: inserted_overrides.font,
+                ..inserted_overrides
             });
         }
     }
@@ -191,16 +167,7 @@ pub fn apply_text_edit(runs: &[TextRun], old_plain: &str, new_plain: &str) -> Ve
             if !chars.is_empty() {
                 suffix_runs.push(TextRun {
                     text: chars,
-                    bold: run.bold,
-                    italic: run.italic,
-                    underline: run.underline,
-                    strikethrough: run.strikethrough,
-                    baseline: run.baseline,
-                    letter_spacing: run.letter_spacing,
-                    size: run.size,
-                    color: run.color.clone(),
-                    link: run.link.clone(),
-                    font: run.font.clone(),
+                    ..run.clone()
                 });
             }
         }
@@ -247,6 +214,29 @@ fn strip_redundant_overrides(run: &mut TextRun, base: &crate::TextStyle) {
     if run.font.as_deref() == Some(base.font.as_str()) {
         run.font = None;
     }
+    // A shadow that is switched off matches the (shadow-free) style.
+    if run.shadow == Some(false) {
+        run.shadow = None;
+    }
+}
+
+/// A run of `text` with no overrides.
+fn plain_run(text: String) -> TextRun {
+    TextRun {
+        text,
+        bold: None,
+        italic: None,
+        underline: None,
+        strikethrough: None,
+        baseline: None,
+        letter_spacing: None,
+        size: None,
+        color: None,
+        link: None,
+        font: None,
+        highlight: None,
+        shadow: None,
+    }
 }
 
 /// Splits runs at the range edges and sets the given overrides on the covered part.
@@ -273,6 +263,61 @@ pub fn apply_style_to_range_with_base(
     patch: &TextRunPatch,
     base: Option<&crate::TextStyle>,
 ) -> Vec<TextRun> {
+    edit_range(runs_or_plain, plain_text, char_range, base, |styled| {
+        apply_patch(styled, patch);
+    })
+}
+
+/// Set the overrides of `patch` on `styled`.
+fn apply_patch(styled: &mut TextRun, patch: &TextRunPatch) {
+    if let Some(b) = patch.bold {
+        styled.bold = Some(b);
+    }
+    if let Some(it) = patch.italic {
+        styled.italic = Some(it);
+    }
+    if let Some(u) = patch.underline {
+        styled.underline = Some(u);
+    }
+    if let Some(v) = patch.strikethrough {
+        styled.strikethrough = Some(v);
+    }
+    if let Some(v) = patch.baseline {
+        styled.baseline = Some(v);
+    }
+    if let Some(v) = patch.letter_spacing {
+        styled.letter_spacing = Some(crate::clamp_letter_spacing(v));
+    }
+    if let Some(sz) = patch.size {
+        styled.size = Some(sz);
+    }
+    if let Some(ref c) = patch.color {
+        styled.color = Some(c.clone());
+    }
+    if let Some(ref link) = patch.link {
+        styled.link = link.clone();
+    }
+    if let Some(ref font) = patch.font {
+        styled.font = Some(font.clone());
+    }
+    if let Some(ref highlight) = patch.highlight {
+        styled.highlight = highlight.clone();
+    }
+    if let Some(v) = patch.shadow {
+        styled.shadow = Some(v);
+    }
+}
+
+/// Splits runs at the range edges and calls `edit` on every run inside the range.
+/// An empty range covers the whole text. Redundant overrides that match `base` are
+/// stripped. When no run has an override left, returns an empty vec (plain text).
+fn edit_range(
+    runs_or_plain: &[TextRun],
+    plain_text: &str,
+    char_range: (usize, usize),
+    base: Option<&crate::TextStyle>,
+    edit: impl Fn(&mut TextRun),
+) -> Vec<TextRun> {
     if plain_text.is_empty() {
         return Vec::new();
     }
@@ -288,19 +333,7 @@ pub fn apply_style_to_range_with_base(
     };
 
     let base_runs: Vec<TextRun> = if runs_or_plain.is_empty() {
-        vec![TextRun {
-            text: plain_text.to_owned(),
-            bold: None,
-            italic: None,
-            underline: None,
-            size: None,
-            color: None,
-            link: None,
-            font: None,
-            strikethrough: None,
-            baseline: None,
-            letter_spacing: None,
-        }]
+        vec![plain_run(plain_text.to_owned())]
     } else {
         runs_or_plain.to_vec()
     };
@@ -319,91 +352,40 @@ pub fn apply_style_to_range_with_base(
         let seg2_end = run_end.min(end).max(run_start);
         let seg3_start = run_start.max(end).min(run_end);
 
-        if seg1_end > run_start {
-            let s: String = run_chars
-                .get(0..seg1_end.saturating_sub(run_start))
+        let slice = |from: usize, to: usize| -> String {
+            run_chars
+                .get(from.saturating_sub(run_start)..to.saturating_sub(run_start))
                 .unwrap_or(&[])
                 .iter()
-                .collect();
+                .collect()
+        };
+
+        if seg1_end > run_start {
+            let s = slice(run_start, seg1_end);
             if !s.is_empty() {
                 split_runs.push(TextRun {
                     text: s,
-                    bold: run.bold,
-                    italic: run.italic,
-                    underline: run.underline,
-                    strikethrough: run.strikethrough,
-                    baseline: run.baseline,
-                    letter_spacing: run.letter_spacing,
-                    size: run.size,
-                    color: run.color.clone(),
-                    link: run.link.clone(),
-                    font: run.font.clone(),
+                    ..run.clone()
                 });
             }
         }
 
         if seg2_end > seg2_start {
-            let s: String = run_chars
-                .get(seg2_start.saturating_sub(run_start)..seg2_end.saturating_sub(run_start))
-                .unwrap_or(&[])
-                .iter()
-                .collect();
+            let s = slice(seg2_start, seg2_end);
             if !s.is_empty() {
                 let mut styled = run.clone();
                 styled.text = s;
-                if let Some(b) = patch.bold {
-                    styled.bold = Some(b);
-                }
-                if let Some(it) = patch.italic {
-                    styled.italic = Some(it);
-                }
-                if let Some(u) = patch.underline {
-                    styled.underline = Some(u);
-                }
-                if let Some(v) = patch.strikethrough {
-                    styled.strikethrough = Some(v);
-                }
-                if let Some(v) = patch.baseline {
-                    styled.baseline = Some(v);
-                }
-                if let Some(v) = patch.letter_spacing {
-                    styled.letter_spacing = Some(crate::clamp_letter_spacing(v));
-                }
-                if let Some(sz) = patch.size {
-                    styled.size = Some(sz);
-                }
-                if let Some(ref c) = patch.color {
-                    styled.color = Some(c.clone());
-                }
-                if let Some(ref link) = patch.link {
-                    styled.link = link.clone();
-                }
-                if let Some(ref font) = patch.font {
-                    styled.font = Some(font.clone());
-                }
+                edit(&mut styled);
                 split_runs.push(styled);
             }
         }
 
         if run_end > seg3_start {
-            let s: String = run_chars
-                .get(seg3_start.saturating_sub(run_start)..run_len)
-                .unwrap_or(&[])
-                .iter()
-                .collect();
+            let s = slice(seg3_start, run_end);
             if !s.is_empty() {
                 split_runs.push(TextRun {
                     text: s,
-                    bold: run.bold,
-                    italic: run.italic,
-                    underline: run.underline,
-                    strikethrough: run.strikethrough,
-                    baseline: run.baseline,
-                    letter_spacing: run.letter_spacing,
-                    size: run.size,
-                    color: run.color.clone(),
-                    link: run.link.clone(),
-                    font: run.font.clone(),
+                    ..run.clone()
                 });
             }
         }
@@ -419,13 +401,161 @@ pub fn apply_style_to_range_with_base(
 
     let normalized = normalize_runs(&split_runs);
 
-    let all_no_overrides = normalized.iter().all(TextRun::is_plain);
-
-    if all_no_overrides {
+    if normalized.iter().all(TextRun::is_plain) {
         Vec::new()
     } else {
         normalized
     }
+}
+
+/// Remove every run override in the range except links. An empty range covers the
+/// whole text. Returns an empty vec when nothing but plain text is left.
+#[must_use]
+pub fn clear_formatting_in_range(
+    runs_or_plain: &[TextRun],
+    plain_text: &str,
+    char_range: (usize, usize),
+) -> Vec<TextRun> {
+    edit_range(runs_or_plain, plain_text, char_range, None, |run| {
+        *run = TextRun {
+            link: run.link.take(),
+            ..plain_run(std::mem::take(&mut run.text))
+        };
+    })
+}
+
+/// How [`change_case_in_range`] rewrites letters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseChange {
+    /// First letter of each sentence upper case, the rest lower case.
+    Sentence,
+    Lower,
+    Upper,
+    /// First letter of each word upper case, the rest lower case.
+    Title,
+    /// Upper case letters become lower case and the reverse.
+    Toggle,
+}
+
+/// Map one character. A mapping that changes the length (such as `ß` to `SS`)
+/// stays inside the run of that character.
+fn change_case_of(
+    ch: char,
+    change: CaseChange,
+    at_word_start: bool,
+    at_sentence_start: bool,
+) -> String {
+    let upper = |c: char| c.to_uppercase().collect::<String>();
+    let lower = |c: char| c.to_lowercase().collect::<String>();
+    match change {
+        CaseChange::Lower => lower(ch),
+        CaseChange::Upper => upper(ch),
+        CaseChange::Title => {
+            if at_word_start {
+                upper(ch)
+            } else {
+                lower(ch)
+            }
+        }
+        CaseChange::Sentence => {
+            if at_sentence_start {
+                upper(ch)
+            } else {
+                lower(ch)
+            }
+        }
+        CaseChange::Toggle => {
+            if ch.is_uppercase() {
+                lower(ch)
+            } else if ch.is_lowercase() {
+                upper(ch)
+            } else {
+                ch.to_string()
+            }
+        }
+    }
+}
+
+/// Change the case of the characters in `char_range` (an empty range covers all of
+/// `plain_text`), run by run. Run formatting and line breaks stay where they are.
+/// `plain_text` must be the text of `runs` when there are runs. Returns the new
+/// plain text and the new runs (empty when `runs` was empty).
+#[must_use]
+pub fn change_case_in_range(
+    runs: &[TextRun],
+    plain_text: &str,
+    char_range: (usize, usize),
+    change: CaseChange,
+) -> (String, Vec<TextRun>) {
+    let chars: Vec<char> = plain_text.chars().collect();
+    let total = chars.len();
+    let (mut start, mut end) = char_range;
+    if start > end {
+        std::mem::swap(&mut start, &mut end);
+    }
+    let (start, end) = if start == end {
+        (0, total)
+    } else {
+        (start.min(total), end.min(total))
+    };
+    // Word and sentence starts depend on the characters before, also outside the range.
+    let mut word_start = vec![false; total];
+    let mut sentence_start = vec![false; total];
+    let mut in_word = false;
+    let mut new_sentence = true;
+    for (index, ch) in chars.iter().enumerate() {
+        let is_word_char = ch.is_alphanumeric() || (*ch == '\'' && in_word);
+        if is_word_char {
+            if let Some(slot) = word_start.get_mut(index) {
+                *slot = !in_word;
+            }
+            if new_sentence
+                && ch.is_alphabetic()
+                && let Some(slot) = sentence_start.get_mut(index)
+            {
+                *slot = true;
+            }
+            if ch.is_alphanumeric() {
+                new_sentence = false;
+            }
+        }
+        in_word = is_word_char;
+        if matches!(ch, '.' | '!' | '?' | '\n') {
+            new_sentence = true;
+        }
+    }
+    let map_piece = |piece: &str, first_index: usize| -> String {
+        let mut out = String::with_capacity(piece.len());
+        for (offset, ch) in piece.chars().enumerate() {
+            let index = first_index.saturating_add(offset);
+            if index >= start && index < end {
+                out.push_str(&change_case_of(
+                    ch,
+                    change,
+                    word_start.get(index).copied().unwrap_or(false),
+                    sentence_start.get(index).copied().unwrap_or(false),
+                ));
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    };
+    if runs.is_empty() {
+        return (map_piece(plain_text, 0), Vec::new());
+    }
+    let mut position = 0usize;
+    let mut new_runs = Vec::with_capacity(runs.len());
+    for run in runs {
+        let count = run.text.chars().count();
+        new_runs.push(TextRun {
+            text: map_piece(&run.text, position),
+            ..run.clone()
+        });
+        position = position.saturating_add(count);
+    }
+    let new_plain: String = new_runs.iter().map(|r| r.text.as_str()).collect();
+    (new_plain, normalize_runs(&new_runs))
 }
 
 /// The number of `\n`-separated paragraphs in `text`.

@@ -65,6 +65,10 @@ pub struct ResolvedTextRun {
     /// Font family name. `None` uses the built-in Inter family.
     pub font: Option<String>,
     pub link: Option<Link>,
+    /// Background colour behind the glyphs. `None` draws no highlight.
+    pub highlight: Option<egui::Color32>,
+    /// Draws a soft shadow behind the glyphs.
+    pub shadow: bool,
 }
 
 /// A laid-out link region as fractions of the item's frame.
@@ -654,6 +658,8 @@ pub fn resolve_text_runs(
             letter_spacing: style.letter_spacing,
             font: Some(base_font),
             link: None,
+            highlight: None,
+            shadow: false,
         }];
     }
     if runs.is_empty() {
@@ -669,6 +675,8 @@ pub fn resolve_text_runs(
             letter_spacing: style.letter_spacing,
             font: Some(base_font),
             link: None,
+            highlight: None,
+            shadow: false,
         }];
     }
     runs.iter()
@@ -701,6 +709,12 @@ pub fn resolve_text_runs(
                     Link::Url { url } => is_valid_link_url(url),
                     Link::Slide { .. } => true,
                 }),
+                highlight: r
+                    .highlight
+                    .as_ref()
+                    .and_then(parse_color)
+                    .filter(|color| color.a() > 0),
+                shadow: r.shadow.unwrap_or(false),
             }
         })
         .collect()

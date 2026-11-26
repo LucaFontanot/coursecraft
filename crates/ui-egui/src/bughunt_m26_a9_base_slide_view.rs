@@ -398,7 +398,7 @@ fn a9_5_pinned_other_layer_remains_visible_when_base_hidden() {
     let canvas = h.central_panel_rect();
     let about_pill = h.find_text_in("About", canvas).expect("About pill");
     h.click_at(about_pill);
-    h.editor.ui.layers.hidden_layers.remove("layer-b");
+    h.editor.ui.layers.shown_layers.insert("layer-b".into());
     let hide_btn = h.find_text_in("Hide", canvas).expect("Hide");
     h.click_at(hide_btn);
     h.idle_frame();

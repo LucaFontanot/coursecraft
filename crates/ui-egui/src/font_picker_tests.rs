@@ -523,9 +523,10 @@ fn font_picker_shows_twelve_rows_and_clamps_to_small_viewports() {
                 .is_some()
         })
         .count();
+    // The Theme Fonts section (header plus two rows) takes three of the twelve.
     assert!(
-        visible_rows >= 12,
-        "expected >= 12 visible font rows at 1440x900, got {visible_rows}"
+        visible_rows >= 9,
+        "expected >= 9 visible installed font rows at 1440x900, got {visible_rows}"
     );
 
     // 1024x600 @ 1.5: popup clamps completely inside screen_rect with search & footer visible.

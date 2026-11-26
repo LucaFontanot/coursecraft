@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 
 use crate::Editor;
+use crate::tl;
 use coursecraft_course::{Action, Condition, Event, Object, Slide, Trigger};
 
 /// Marker key and version for our clipboard JSON.
@@ -21,6 +22,60 @@ pub enum ClipboardKind {
     Slides,
 }
 
+/// The look of the course an object payload was copied from, so a paste into a
+/// course with another theme can follow the destination theme.
+///
+/// Optional in the payload: payloads written by older builds have none and
+/// paste as they are.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SourceTheme {
+    /// The body font.
+    pub font: String,
+    /// The heading font, when the theme has a separate one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_font: Option<String>,
+    pub accent: String,
+    pub text: String,
+    pub background: String,
+}
+
+impl SourceTheme {
+    /// The theme of `course`. The heading font is read through the theme's JSON
+    /// so this keeps working whether or not the model has one.
+    #[must_use]
+    pub fn of(course: &coursecraft_course::Course) -> Self {
+        let heading_font = serde_json::to_value(&course.theme)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("heading_font")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .filter(|font| !font.is_empty());
+        Self {
+            font: course.theme.font.clone(),
+            heading_font,
+            accent: course.theme.accent.0.clone(),
+            text: course.theme.text.0.clone(),
+            background: course.theme.background.0.clone(),
+        }
+    }
+}
+
+/// How an object paste treats the formatting of what was copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PasteMode {
+    /// Fonts and colours of the source theme become those of the destination
+    /// theme. The default for Ctrl+V and the main Paste button.
+    #[default]
+    DestinationTheme,
+    /// Paste exactly as copied.
+    KeepSource,
+    /// Paste the text of the copied objects as one plain text box.
+    TextOnly,
+}
+
 #[derive(Debug, Clone)]
 pub struct Clipboard {
     pub kind: ClipboardKind,
@@ -30,6 +85,9 @@ pub struct Clipboard {
     pub triggers: Vec<Trigger>,
     /// The copied slides, in slide-list order (empty for an object payload).
     pub slides: Vec<Slide>,
+    /// The theme of the course the objects came from. `None` for payloads written
+    /// by older builds.
+    pub theme: Option<SourceTheme>,
 }
 
 impl Clipboard {
@@ -60,6 +118,11 @@ impl Clipboard {
             && let Ok(value) = serde_json::to_value(&self.triggers)
         {
             map.insert("triggers".to_owned(), value);
+        }
+        if let Some(ref theme) = self.theme
+            && let Ok(value) = serde_json::to_value(theme)
+        {
+            map.insert("theme".to_owned(), value);
         }
         // `slide` is the first slide, as older builds wrote it; `slides` holds all.
         if let Some(slide) = self.slides.first()
@@ -112,6 +175,10 @@ impl Clipboard {
             (None, Some(value)) => vec![serde_json::from_value(value.clone()).ok()?],
             (None, None) => Vec::new(),
         };
+        // An unreadable theme only means "no theme": the objects still paste.
+        let theme: Option<SourceTheme> = map
+            .get("theme")
+            .and_then(|value| serde_json::from_value(value.clone()).ok());
         if kind == ClipboardKind::Objects && objects.is_empty() {
             return None;
         }
@@ -125,6 +192,7 @@ impl Clipboard {
             objects,
             triggers,
             slides,
+            theme,
         })
     }
 }
@@ -270,6 +338,7 @@ pub fn copy_objects(editor: &Editor) -> Option<(Clipboard, usize)> {
             objects,
             triggers,
             slides: Vec::new(),
+            theme: Some(SourceTheme::of(&editor.session.course)),
         },
         skipped,
     ))
@@ -292,6 +361,7 @@ pub fn copy_slide(editor: &Editor) -> Option<Clipboard> {
         objects: Vec::new(),
         triggers: Vec::new(),
         slides,
+        theme: None,
     })
 }
 
@@ -399,15 +469,31 @@ fn cut_slide_action(editor: &mut Editor) {
 
 /// Paste from the private clipboard. Used by the Edit menu.
 pub fn paste_private(editor: &mut Editor) {
+    paste_private_with(editor, PasteMode::default());
+}
+
+/// Paste from the private clipboard with an explicit [`PasteMode`].
+pub fn paste_private_with(editor: &mut Editor, mode: PasteMode) {
     if editor.ui.master_view {
-        editor.set_status("Not available in slide masters");
+        editor.set_status(tl!("Not available in slide masters"));
         return;
     }
     let Some(clipboard) = editor.ui.clipboard.clone() else {
-        editor.set_status("Nothing to paste");
+        editor.set_status(tl!("Nothing to paste"));
         return;
     };
-    paste_at(editor, clipboard, None);
+    paste_at(editor, clipboard, None, mode);
+}
+
+/// Paste with an explicit [`PasteMode`]: through the system clipboard on the
+/// desktop (the mode waits for the paste event), else the editor's own.
+pub fn paste_now_with(editor: &mut Editor, ctx: &egui::Context, mode: PasteMode) {
+    if editor.file_ops_available {
+        editor.ui.pending_paste_mode = Some(mode);
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+    } else {
+        paste_private_with(editor, mode);
+    }
 }
 
 /// Paste from the private clipboard, centring object copies on a slide point.
@@ -423,11 +509,15 @@ pub fn paste_private_at(editor: &mut Editor, centre: Option<egui::Pos2>) {
         editor.set_status("Nothing to paste");
         return;
     };
-    paste_at(editor, clipboard, centre);
+    paste_at(editor, clipboard, centre, PasteMode::default());
 }
 
 /// Paste clipboard text, falling back to a text box for plain text.
+///
+/// A mode chosen in the Paste menu waits in `pending_paste_mode` until the
+/// system clipboard answers; Ctrl+V has none and uses the destination theme.
 pub fn paste_text(editor: &mut Editor, text: &str) {
+    let mode = editor.ui.pending_paste_mode.take().unwrap_or_default();
     if editor.ui.master_view {
         editor.set_status("Not available in slide masters");
         return;
@@ -437,11 +527,11 @@ pub fn paste_text(editor: &mut Editor, text: &str) {
         return;
     }
     if let Some(clipboard) = Clipboard::from_text(text) {
-        paste(editor, clipboard);
+        paste_with(editor, clipboard, mode);
     } else if let Some(clipboard) = editor.ui.clipboard.clone()
         && editor.ui.clipboard_text.as_deref() == Some(text)
     {
-        paste(editor, clipboard);
+        paste_with(editor, clipboard, mode);
     } else if text.contains(CLIPBOARD_KEY) {
         editor.set_status("That clipboard payload is not valid CourseCraft data");
     } else {
@@ -451,14 +541,147 @@ pub fn paste_text(editor: &mut Editor, text: &str) {
 
 /// Paste a parsed payload.
 pub fn paste(editor: &mut Editor, clipboard: Clipboard) {
-    paste_at(editor, clipboard, None);
+    paste_at(editor, clipboard, None, PasteMode::default());
 }
 
-fn paste_at(editor: &mut Editor, clipboard: Clipboard, centre: Option<egui::Pos2>) {
+/// Paste a parsed payload with an explicit [`PasteMode`].
+pub fn paste_with(editor: &mut Editor, clipboard: Clipboard, mode: PasteMode) {
+    paste_at(editor, clipboard, None, mode);
+}
+
+fn paste_at(
+    editor: &mut Editor,
+    clipboard: Clipboard,
+    centre: Option<egui::Pos2>,
+    mode: PasteMode,
+) {
     match clipboard.kind {
+        ClipboardKind::Slides if mode == PasteMode::TextOnly => {
+            editor.set_status(tl!("Slides can't be pasted as text"));
+        }
         ClipboardKind::Slides => paste_slide(editor, &clipboard),
-        ClipboardKind::Objects => paste_objects(editor, &clipboard, centre),
+        ClipboardKind::Objects => paste_objects(editor, &clipboard, centre, mode),
     }
+}
+
+/// JSON keys whose strings are author text, never a colour or a font name.
+const TEXT_KEYS: &[&str] = &[
+    "text",
+    "name",
+    "description",
+    "title",
+    "body",
+    "label",
+    "id",
+    "alt",
+    "value",
+    "caption",
+];
+
+/// Swap a colour for the destination's when it is the source theme's accent,
+/// text or background colour (case does not matter; an alpha suffix is kept).
+fn map_color(value: &str, source: &SourceTheme, dest: &SourceTheme) -> Option<String> {
+    if !value.starts_with('#') || !(value.len() == 7 || value.len() == 9) {
+        return None;
+    }
+    let rgb = value.get(..7)?;
+    let alpha = value.get(7..).unwrap_or_default();
+    for (from, to) in [
+        (&source.accent, &dest.accent),
+        (&source.text, &dest.text),
+        (&source.background, &dest.background),
+    ] {
+        if from.len() >= 7
+            && to.len() >= 7
+            && from.get(..7)?.eq_ignore_ascii_case(rgb)
+            && !from.get(..7)?.eq_ignore_ascii_case(to.get(..7)?)
+        {
+            return Some(format!("{}{}", to.get(..7)?, alpha));
+        }
+    }
+    None
+}
+
+fn adapt_value(value: &mut serde_json::Value, source: &SourceTheme, dest: &SourceTheme) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if let serde_json::Value::String(text) = child {
+                    if key == "font" {
+                        if *text == source.font && source.font != dest.font {
+                            text.clone_from(&dest.font);
+                        } else if source.heading_font.as_deref() == Some(text.as_str())
+                            && source.heading_font != dest.heading_font
+                            && let Some(ref heading) = dest.heading_font
+                        {
+                            text.clone_from(heading);
+                        }
+                    } else if !TEXT_KEYS.contains(&key.as_str())
+                        && let Some(mapped) = map_color(text, source, dest)
+                    {
+                        *text = mapped;
+                    }
+                } else {
+                    adapt_value(child, source, dest);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                adapt_value(item, source, dest);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Make copied objects follow the destination theme.
+///
+/// Text fonts equal to the source theme's font become the destination's font, and
+/// colours equal to the source theme's accent, text or background colour become the
+/// destination's. Nothing changes when the themes are equal, when the payload has
+/// no source theme, or for anything that is not one of those exact values.
+#[must_use]
+pub fn adapt_to_theme(
+    objects: &[Object],
+    source: Option<&SourceTheme>,
+    dest: &SourceTheme,
+) -> Vec<Object> {
+    let Some(source) = source else {
+        return objects.to_vec();
+    };
+    if source == dest {
+        return objects.to_vec();
+    }
+    objects
+        .iter()
+        .map(|object| {
+            let Ok(mut value) = serde_json::to_value(object) else {
+                return object.clone();
+            };
+            adapt_value(&mut value, source, dest);
+            serde_json::from_value(value).unwrap_or_else(|_| object.clone())
+        })
+        .collect()
+}
+
+/// The text of the copied text objects, in order, one paragraph per object.
+#[must_use]
+pub fn text_of_objects(objects: &[Object]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for object in objects {
+        if let coursecraft_course::ObjectKind::Text { text, runs, .. } = &object.kind {
+            let plain: String = if runs.is_empty() {
+                text.clone()
+            } else {
+                runs.iter().map(|run| run.text.as_str()).collect()
+            };
+            if !plain.is_empty() {
+                parts.push(plain);
+            }
+        }
+    }
+    parts.join("\n")
 }
 
 /// Translation that moves the copies' joint centre to `centre`, clamped so the
@@ -525,10 +748,24 @@ fn placement_delta(
     }
 }
 
-fn paste_objects(editor: &mut Editor, clipboard: &Clipboard, centre: Option<egui::Pos2>) {
+fn paste_objects(
+    editor: &mut Editor,
+    clipboard: &Clipboard,
+    centre: Option<egui::Pos2>,
+    mode: PasteMode,
+) {
     let target = editor.selection.slide.clone();
     if editor.session.course.slide(&target).is_none() {
-        editor.set_status("Select a slide to paste into");
+        editor.set_status(tl!("Select a slide to paste into"));
+        return;
+    }
+    if mode == PasteMode::TextOnly {
+        let text = text_of_objects(&clipboard.objects);
+        if text.is_empty() {
+            editor.set_status(tl!("The copied objects have no text to paste"));
+        } else {
+            insert_text_box(editor, &text, true);
+        }
         return;
     }
     let same_slide = clipboard.source_slide.as_deref() == Some(target.as_str());
@@ -538,7 +775,15 @@ fn paste_objects(editor: &mut Editor, clipboard: &Clipboard, centre: Option<egui
     } else {
         0.0
     };
-    let mut objects = clipboard.objects.clone();
+    let mut objects = if mode == PasteMode::DestinationTheme {
+        adapt_to_theme(
+            &clipboard.objects,
+            clipboard.theme.as_ref(),
+            &SourceTheme::of(&editor.session.course),
+        )
+    } else {
+        clipboard.objects.clone()
+    };
     if let Some(point) = centre
         && let Some((dx, dy)) = placement_delta(&objects, point, editor.session.course.slide_size)
     {
@@ -697,6 +942,13 @@ fn paste_slides(editor: &mut Editor, clipboard: &Clipboard) {
 }
 
 fn paste_plain_text(editor: &mut Editor, text: &str) {
+    insert_text_box(editor, text, false);
+}
+
+/// Put `text` in a new text box in the middle of the slide, selected. With
+/// `themed` the box uses the theme body font and grows with the number of
+/// paragraphs; plain OS text keeps the one fixed size.
+fn insert_text_box(editor: &mut Editor, text: &str, themed: bool) {
     const MAX_TEXT_BYTES: usize = 4096;
     let mut end = text.len().min(MAX_TEXT_BYTES);
     while end > 0 && !text.is_char_boundary(end) {
@@ -705,15 +957,24 @@ fn paste_plain_text(editor: &mut Editor, text: &str) {
     let text = text.get(..end).unwrap_or_default();
     let size = editor.session.course.slide_size;
     let w = 300.0f32.min(size.w as f32);
-    let h = 60.0f32.min(size.h as f32);
+    let lines = text.lines().count().max(1) as f32;
+    let h = if themed {
+        (36.0 * lines).max(60.0).min(size.h as f32)
+    } else {
+        60.0f32.min(size.h as f32)
+    };
     let x = ((size.w as f32 - w) * 0.5).max(0.0);
     let y = ((size.h as f32 - h) * 0.5).max(0.0);
+    let mut style = serde_json::json!({ "color": editor.session.course.theme.text.0 });
+    if themed {
+        style["font"] = serde_json::json!(editor.session.course.theme.font);
+    }
     let mut params = serde_json::json!({
         "slide": editor.selection.slide,
         "kind": {
             "type": "text",
             "text": text,
-            "style": { "color": editor.session.course.theme.text.0 },
+            "style": style,
         },
         "frame": { "x": x, "y": y, "w": w, "h": h },
     });
@@ -725,7 +986,161 @@ fn paste_plain_text(editor: &mut Editor, text: &str) {
     {
         editor.selection.object = Some(id.to_owned());
         editor.selection.also.clear();
-        editor.set_status("Pasted as a text box");
+        editor.set_status(tl!("Pasted as a text box"));
+    }
+}
+
+/// A format the Paste Special window can paste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PasteFormat {
+    /// CourseCraft objects, with the three [`PasteMode`] options.
+    #[default]
+    Objects,
+    /// CourseCraft slides.
+    Slides,
+    /// Plain text in a new text box.
+    PlainText,
+}
+
+/// State of the Paste Special window.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PasteSpecialState {
+    pub open: bool,
+    pub format: PasteFormat,
+    pub mode: PasteMode,
+}
+
+/// Which formats can be pasted now. Each entry is `Err(reason)` when disabled.
+pub fn paste_formats(editor: &Editor) -> [(PasteFormat, Result<(), &'static str>); 3] {
+    const NOTHING: &str = "Nothing of this kind on the clipboard";
+    let kind = editor.ui.clipboard.as_ref().map(|c| c.kind);
+    let objects = if kind == Some(ClipboardKind::Objects) {
+        Ok(())
+    } else {
+        Err(NOTHING)
+    };
+    let slides = if kind == Some(ClipboardKind::Slides) {
+        Ok(())
+    } else {
+        Err(NOTHING)
+    };
+    let text = if kind == Some(ClipboardKind::Objects) || editor.file_ops_available {
+        Ok(())
+    } else {
+        Err(NOTHING)
+    };
+    [
+        (PasteFormat::Objects, objects),
+        (PasteFormat::Slides, slides),
+        (PasteFormat::PlainText, text),
+    ]
+}
+
+impl Editor {
+    /// Open the Paste Special window with the first format that can be pasted.
+    pub fn open_paste_special(&mut self) {
+        if self.ui.master_view {
+            self.set_status(tl!("Not available in slide masters"));
+            return;
+        }
+        let format = paste_formats(self)
+            .into_iter()
+            .find(|(_, available)| available.is_ok())
+            .map_or(PasteFormat::Objects, |(format, _)| format);
+        self.ui.paste_special = PasteSpecialState {
+            open: true,
+            format,
+            mode: PasteMode::DestinationTheme,
+        };
+    }
+}
+
+/// Paste what the Paste Special window has chosen.
+pub fn paste_special_ok(editor: &mut Editor, ctx: &egui::Context) {
+    let state = editor.ui.paste_special;
+    match state.format {
+        PasteFormat::Objects => paste_now_with(editor, ctx, state.mode),
+        PasteFormat::Slides => paste_now_with(editor, ctx, PasteMode::default()),
+        PasteFormat::PlainText => paste_now_with(editor, ctx, PasteMode::TextOnly),
+    }
+}
+
+/// Draw the Paste Special window.
+pub fn show_paste_special_window(editor: &mut Editor, ctx: &egui::Context) {
+    if !editor.ui.paste_special.open {
+        return;
+    }
+    let formats = paste_formats(editor);
+    let mut open = true;
+    let mut ok = false;
+    let mut cancel = false;
+    crate::dialog::Dialog::new(tl!("Paste Special"))
+        .open(&mut open)
+        .width(340.0)
+        .show_with_footer(ctx, |dialog| {
+            dialog.body(|ui| {
+                ui.label(tl!("As:"));
+                let objects_label = tl!("CourseCraft objects");
+                let slides_label = tl!("CourseCraft slides");
+                let text_label = tl!("Plain text");
+                for (format, available) in formats {
+                    let label = match format {
+                        PasteFormat::Objects => objects_label,
+                        PasteFormat::Slides => slides_label,
+                        PasteFormat::PlainText => text_label,
+                    };
+                    let response = ui.add_enabled(
+                        available.is_ok(),
+                        egui::RadioButton::new(editor.ui.paste_special.format == format, label),
+                    );
+                    if response.clicked() {
+                        editor.ui.paste_special.format = format;
+                    }
+                    if let Err(reason) = available {
+                        response.on_disabled_hover_text(tl!(reason));
+                    }
+                }
+                if editor.ui.paste_special.format == PasteFormat::Objects {
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.label(tl!("Formatting:"));
+                    let mode = &mut editor.ui.paste_special.mode;
+                    ui.radio_value(
+                        mode,
+                        PasteMode::DestinationTheme,
+                        tl!("Use Destination Theme"),
+                    );
+                    ui.radio_value(mode, PasteMode::KeepSource, tl!("Keep Source Formatting"));
+                    ui.radio_value(mode, PasteMode::TextOnly, tl!("Keep Text Only"));
+                }
+            });
+            dialog.footer(|ui| {
+                ui.horizontal(|ui| {
+                    let can_paste = formats.iter().any(|(format, available)| {
+                        *format == editor.ui.paste_special.format && available.is_ok()
+                    });
+                    if ui
+                        .add_enabled(can_paste, egui::Button::new(tl!("OK")))
+                        .on_disabled_hover_text(tl!("The clipboard has nothing of this kind"))
+                        .clicked()
+                    {
+                        ok = true;
+                    }
+                    if ui.button(tl!("Cancel")).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        });
+    if ok {
+        paste_special_ok(editor, ctx);
+        open = false;
+    }
+    if cancel {
+        open = false;
+    }
+    if !open {
+        editor.ui.paste_special.open = false;
     }
 }
 

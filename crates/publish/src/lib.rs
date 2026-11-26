@@ -763,6 +763,9 @@ fn collect_object_faces(out: &mut Vec<(String, FontStyle)>, obj: &Object) {
 pub fn collect_used_font_faces(course: &Course) -> Vec<(String, FontStyle)> {
     let mut out = Vec::new();
     push_used_face(&mut out, &course.theme.font, FontStyle::Regular);
+    if let Some(heading) = &course.theme.heading_font {
+        push_used_face(&mut out, heading, FontStyle::Regular);
+    }
     for ts in &course.text_styles {
         push_used_face(
             &mut out,

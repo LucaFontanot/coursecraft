@@ -73,6 +73,8 @@ fn link_clicks_run_open_url_and_slide_jumps_without_firing_object_clicks() {
                 strikethrough: None,
                 baseline: None,
                 letter_spacing: None,
+                highlight: None,
+                shadow: None,
             }],
             paragraphs: Vec::new(),
             autofit: Autofit::None,

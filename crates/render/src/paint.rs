@@ -1659,6 +1659,7 @@ fn paint_text_with_options(
             runs.iter()
                 .map(|run| ResolvedTextRun {
                     color: apply_dim(run.color, dimmed, opacity),
+                    highlight: run.highlight.map(|c| apply_dim(c, dimmed, opacity)),
                     ..run.clone()
                 })
                 .collect(),
@@ -1680,6 +1681,7 @@ fn paint_text_with_options(
     );
     let fallback_color = apply_dim(theme_text_color, dimmed, opacity);
     for paragraph in &laid.paragraphs {
+        crate::text_layout::paint_paragraph_backdrop(slide_painter, paragraph);
         slide_painter.galley(paragraph.pos, paragraph.galley.clone(), fallback_color);
         for (points, stroke) in crate::text_layout::underline_segments(paragraph, paragraph.pos) {
             slide_painter.line_segment(points, stroke);
@@ -1850,6 +1852,7 @@ fn paint_table(
                         .iter()
                         .map(|run| ResolvedTextRun {
                             color: apply_dim(run.color, dimmed, opacity),
+                            highlight: run.highlight.map(|c| apply_dim(c, dimmed, opacity)),
                             ..run.clone()
                         })
                         .collect(),
@@ -1871,6 +1874,7 @@ fn paint_table(
             let cell_painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
             let fallback = apply_dim(theme_text_color, dimmed, opacity);
             for paragraph in &laid.paragraphs {
+                crate::text_layout::paint_paragraph_backdrop(&cell_painter, paragraph);
                 cell_painter.galley(paragraph.pos, paragraph.galley.clone(), fallback);
                 for (points, stroke) in
                     crate::text_layout::underline_segments(paragraph, paragraph.pos)
@@ -2013,6 +2017,8 @@ fn paint_text_effect(
             color: base,
             underline: false,
             link: None,
+            highlight: None,
+            shadow: false,
             ..run.clone()
         })
         .collect();
@@ -4368,6 +4374,7 @@ fn paint_marker(
         .iter()
         .map(|run| ResolvedTextRun {
             color: apply_dim(run.color, dimmed, opacity),
+            highlight: run.highlight.map(|c| apply_dim(c, dimmed, opacity)),
             ..run.clone()
         })
         .collect();
@@ -4390,6 +4397,8 @@ fn paint_marker(
         strikethrough: false,
         baseline: coursecraft_course::Baseline::Normal,
         letter_spacing: 0.0,
+        highlight: None,
+        shadow: false,
     };
     let measure = Rect::from_min_size(pos2(0.0, 0.0), vec2(text_width, 100_000.0));
     let title_laid = crate::text_layout::layout_text(
@@ -4516,6 +4525,7 @@ fn paint_marker(
         );
         let fallback = apply_dim(theme_text_color, dimmed, opacity);
         for paragraph in &laid.paragraphs {
+            crate::text_layout::paint_paragraph_backdrop(painter, paragraph);
             painter.galley(paragraph.pos, paragraph.galley.clone(), fallback);
             for (points, stroke) in crate::text_layout::underline_segments(paragraph, paragraph.pos)
             {

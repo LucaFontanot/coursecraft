@@ -389,6 +389,19 @@ pub(super) fn course_set_theme(s: &mut Session, p: &Json) -> Result<Json> {
         let f = text(C, font, "font")?;
         s.course.theme.font = f;
     }
+    // `heading_font` is a string, or null / empty to clear it (headings use `font`).
+    if let Some(value) = p.get("heading_font") {
+        s.course.theme.heading_font = match value {
+            Json::Null => None,
+            Json::String(raw) if raw.trim().is_empty() => None,
+            Json::String(raw) => Some(text(C, raw.clone(), "heading_font")?),
+            _ => {
+                return Err(EngineError::Invalid(format!(
+                    "{C}: heading_font must be a string or null"
+                )));
+            }
+        };
+    }
     if let Some(bar) = opt::<String>(C, p, "bar")? {
         let col = Color(bar);
         validate_color(C, &col)?;

@@ -474,6 +474,8 @@ fn text_run_serialization_and_round_trip() {
         strikethrough: None,
         baseline: None,
         letter_spacing: None,
+        highlight: None,
+        shadow: None,
     };
     let json = serde_json::to_string(&run).unwrap();
     assert!(json.contains("\"bold\":true"));
@@ -536,6 +538,8 @@ fn hostile_validation_theme_and_runs() {
                     strikethrough: None,
                     baseline: None,
                     letter_spacing: None,
+                    highlight: None,
+                    shadow: None,
                 })
                 .collect();
             *text = runs.iter().map(|r| r.text.as_str()).collect();
@@ -560,6 +564,8 @@ fn hostile_validation_theme_and_runs() {
                 strikethrough: None,
                 baseline: None,
                 letter_spacing: None,
+                highlight: None,
+                shadow: None,
             }];
             *text = "Something else".into();
         }
@@ -591,6 +597,8 @@ fn normalize_runs_table() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         },
         crate::TextRun {
             text: "Hello ".into(),
@@ -604,6 +612,8 @@ fn normalize_runs_table() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         },
         crate::TextRun {
             text: "World".into(),
@@ -617,6 +627,8 @@ fn normalize_runs_table() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         },
     ];
     let norm = normalize_runs(&empty);
@@ -642,6 +654,8 @@ fn apply_text_edit_table() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         },
         crate::TextRun {
             text: "World".into(),
@@ -655,6 +669,8 @@ fn apply_text_edit_table() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         },
     ];
 
@@ -698,6 +714,8 @@ fn apply_text_edit_table() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         },
         crate::TextRun {
             text: "🚀".into(),
@@ -711,6 +729,8 @@ fn apply_text_edit_table() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         },
     ];
     let edited_mb = apply_text_edit(&runs_mb, "🦀🚀", "🦀✨🚀");
@@ -2380,6 +2400,8 @@ fn shape_with_outline_and_text() -> crate::ObjectKind {
                 strikethrough: None,
                 baseline: None,
                 letter_spacing: None,
+                highlight: None,
+                shadow: None,
             }],
             paragraphs: Vec::new(),
             autofit: crate::Autofit::None,
@@ -2876,6 +2898,8 @@ fn paragraph_and_link_serde_defaults_and_omission() {
         strikethrough: None,
         baseline: None,
         letter_spacing: None,
+        highlight: None,
+        shadow: None,
     };
     assert!(
         !serde_json::to_string(&plain)
@@ -3072,6 +3096,8 @@ fn links_are_validated_by_scheme_and_slide() {
             strikethrough: None,
             baseline: None,
             letter_spacing: None,
+            highlight: None,
+            shadow: None,
         }],
         paragraphs: Vec::new(),
         autofit: crate::Autofit::None,
@@ -4688,6 +4714,8 @@ fn text_effects_default_omitted_and_letter_spacing_repaired() {
         strikethrough: None,
         baseline: None,
         letter_spacing: None,
+        highlight: None,
+        shadow: None,
         size: None,
         color: None,
         link: None,
@@ -8160,4 +8188,41 @@ fn tr_02_reports_result_quiz_tracking_and_helpers() {
         }
     }
     assert!(disabled_res.results_slides().next().is_none());
+}
+
+#[test]
+fn m39_heading_font_is_omitted_when_none_and_old_files_load_unchanged() {
+    let c = Course::from_json(HELLO).unwrap();
+    assert_eq!(c.theme.heading_font, None);
+    assert!(!c.to_json().unwrap().contains("heading_font"));
+    assert_eq!(c.theme.heading_font_or_body(), c.theme.font);
+}
+
+#[test]
+fn m39_heading_font_round_trips_and_blank_falls_back_to_body() {
+    let mut c = Course::from_json(HELLO).unwrap();
+    c.theme.heading_font = Some("Lora".into());
+    let json = c.to_json().unwrap();
+    assert!(json.contains("\"heading_font\": \"Lora\""), "{json}");
+    let again = Course::from_json(&json).unwrap();
+    assert_eq!(again.theme.heading_font.as_deref(), Some("Lora"));
+    assert_eq!(again.theme.heading_font_or_body(), "Lora");
+    c.theme.heading_font = Some("  ".into());
+    assert_eq!(c.theme.heading_font_or_body(), c.theme.font);
+}
+
+#[test]
+fn m39_heading_font_is_validated_like_the_body_font() {
+    let mut c = Course::from_json(HELLO).unwrap();
+    c.theme.heading_font = Some("Nonexistent Sans".into());
+    let issues = c.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.path == "/theme/heading_font" && i.severity == Severity::Warning),
+        "{issues:#?}"
+    );
+    assert!(c.is_playable(), "an unknown heading font only warns");
+    c.theme.heading_font = Some("Inter".into());
+    assert!(c.validate().iter().all(|i| i.path != "/theme/heading_font"));
 }

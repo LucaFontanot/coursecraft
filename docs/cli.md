@@ -371,9 +371,11 @@ object.add_motion_path -                        -          {"slide": id, "object
 object.update_motion_path -                        -          {"slide": id, "object": id, "path": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}
 object.remove_motion_path -                        -          {"slide": id, "object": id, "path": id}
 text.set             -                        -          {"slide": id, "object": id, "text": string}
-text.style_range     -                        -          {"slide": id, "object": id, "start": usize, "end": usize, "bold"?: bool, "italic"?: bool, "underline"?: bool, "size"?: number, "color"?: string}
+text.style_range     -                        -          {"slide": id, "object": id, "start": usize, "end": usize, "bold"?: bool, "italic"?: bool, "underline"?: bool, "strikethrough"?: bool, "baseline"?: "normal"|"superscript"|"subscript", "letter_spacing"?: number, "size"?: number, "color"?: string, "font"?: string, "highlight"?: Color|null, "shadow"?: bool}
+text.clear_formatting -                       -          {"slide": id, "object": id, "start": usize, "end": usize, "row"?: usize, "column"?: usize}
+text.change_case     -                        -          {"slide": id, "object": id, "start": usize, "end": usize, "case": "sentence"|"lower"|"upper"|"title"|"toggle", "row"?: usize, "column"?: usize}
 text.set_paragraph   -                        -          {"slide": id, "object": id, "align"?: "left"|"center"|"right", "valign"?: "top"|"middle"|"bottom"}
-text.set_paragraphs  -                        -          {"slide": id, "object": id, "start"?: usize, "end"?: usize, "list"?: "none"|"bullet"|"number", "level"?: 0..4, "line_spacing"?: 0.8..3, "space_before"?: 0..200, "space_after"?: 0..200}
+text.set_paragraphs  -                        -          {"slide": id, "object": id, "start"?: usize, "end"?: usize, "list"?: "none"|"bullet"|"number", "level"?: 0..4, "line_spacing"?: 0.8..3, "space_before"?: 0..200, "space_after"?: 0..200, "number_scheme"?: NumberScheme|null, "start_at"?: 1..99999|null}
 text.set_link        -                        -          {"slide": id, "object": id, "start"?: usize, "end"?: usize, "link": Link|null}
 object.set_autofit   -                        -          {"slide": id, "object": id, "autofit": "none"|"shrink"}
 table.set_cell       -                        -          {"slide": id, "object": id, "row": usize, "column": usize, "text"?: string, "runs"?: TextRun[], "paragraphs"?: Paragraph[], "fill"?: Color|null, "valign"?: "top"|"middle"|"bottom"}

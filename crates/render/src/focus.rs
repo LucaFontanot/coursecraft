@@ -258,6 +258,110 @@ pub fn build_list(
     )
 }
 
+/// One object or interactive group that can take keyboard focus on a slide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FocusCandidate {
+    /// The object id, or the interactive group id when [`FocusCandidate::is_group`].
+    pub id: String,
+    pub is_group: bool,
+    /// The owning layer, or `None` for the base layer.
+    pub layer: Option<String>,
+    /// The author's `focus_order`, when set.
+    pub order: Option<u32>,
+}
+
+/// Every object and interactive group that can take keyboard focus on `slide`,
+/// in the order the learner's Tab key visits them.
+///
+/// This is the static form of the rules in [`build_list`]: it does not depend on
+/// player state. Items with an author `focus_order` come first, sorted by that
+/// number (equal numbers keep their reading order); the rest follow in reading
+/// order, the base layer first, then each layer in slide order. An interactive
+/// group stands for its members. Decorative objects and the controls of a
+/// hotspot or drag-and-drop question are never listed.
+#[must_use]
+pub fn focus_order_candidates(slide: &Slide) -> Vec<FocusCandidate> {
+    let mut pointer: BTreeSet<&str> = BTreeSet::new();
+    for trigger in slide
+        .triggers
+        .iter()
+        .chain(slide.layers.iter().flat_map(|layer| layer.triggers.iter()))
+    {
+        if trigger.disabled {
+            continue;
+        }
+        match &trigger.when {
+            coursecraft_course::Event::Click { object }
+            | coursecraft_course::Event::HoverStart { object }
+            | coursecraft_course::Event::HoverEnd { object } => {
+                pointer.insert(object.as_str());
+            }
+            _ => {}
+        }
+    }
+    let is_candidate = |object: &coursecraft_course::Object| {
+        object.kind.input_kind().is_some()
+            || object.drag.is_some()
+            || matches!(
+                object.kind,
+                ObjectKind::Button { .. }
+                    | ObjectKind::Marker { .. }
+                    | ObjectKind::ScrollPanel { .. }
+                    | ObjectKind::Video { .. }
+            )
+            || pointer.contains(object.id.as_str())
+    };
+    let is_control = |id: &str| {
+        slide
+            .question
+            .as_ref()
+            .is_some_and(|question| match question.kind {
+                QuestionKind::Hotspot => question.hotspot_image.as_deref() == Some(id),
+                QuestionKind::DragDrop => question.drag_items.iter().any(|d| d.item == id),
+                _ => false,
+            })
+    };
+    let mut all: Vec<FocusCandidate> = Vec::new();
+    let mut seen_groups: BTreeSet<String> = BTreeSet::new();
+    let mut consider = |object: &coursecraft_course::Object, layer: Option<&str>| {
+        if let Some((group, _)) = slide.interactive_group_of_object(&object.id) {
+            if seen_groups.insert(group.id.clone()) {
+                all.push(FocusCandidate {
+                    id: group.id.clone(),
+                    is_group: true,
+                    layer: layer.map(str::to_owned),
+                    order: group.focus_order,
+                });
+            }
+            return;
+        }
+        if object.decorative || is_control(&object.id) || !is_candidate(object) {
+            return;
+        }
+        all.push(FocusCandidate {
+            id: object.id.clone(),
+            is_group: false,
+            layer: layer.map(str::to_owned),
+            order: object.focus_order,
+        });
+    };
+    for object in &slide.objects {
+        consider(object, None);
+    }
+    for layer in &slide.layers {
+        for object in &layer.objects {
+            consider(object, Some(layer.id.as_str()));
+        }
+    }
+    let (mut ordered, default): (Vec<_>, Vec<_>) = all
+        .into_iter()
+        .partition(|candidate| candidate.order.is_some());
+    // Stable: equal numbers keep their reading order.
+    ordered.sort_by_key(|candidate| candidate.order);
+    ordered.extend(default);
+    ordered
+}
+
 /// The open drawer's focus order: close, the tabs, then the chosen tab's items.
 fn drawer_targets(player: &Player<'_>, drawer: &DrawerView, can_restart: bool) -> Vec<FocusTarget> {
     let course = player.course();

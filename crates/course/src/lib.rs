@@ -108,9 +108,9 @@ pub use strings::{
     variable_reference_spans,
 };
 pub use text::{
-    TextRunPatch, align_paragraphs, apply_link_to_range, apply_style_to_range,
-    apply_style_to_range_with_base, apply_text_edit, normalize_runs, paragraph_range_at,
-    paragraphs_for,
+    CaseChange, TextRunPatch, align_paragraphs, apply_link_to_range, apply_style_to_range,
+    apply_style_to_range_with_base, apply_text_edit, change_case_in_range,
+    clear_formatting_in_range, normalize_runs, paragraph_range_at, paragraphs_for,
 };
 pub use validate::{Issue, MAX_CONDITION_DEPTH, Severity};
 
@@ -666,6 +666,8 @@ impl Object {
 mod bughunt_m25_strings;
 #[cfg(test)]
 mod m29_state_validation_tests;
+#[cfg(test)]
+mod m39_t_tests;
 #[cfg(test)]
 mod outline_tests;
 #[cfg(test)]

@@ -4010,3 +4010,43 @@ fn tr_12_quiz_only_and_no_quiz_settings_tracking_manifests() {
     assert!(validate_cmi5_xml(bn_cmi5_xml).is_empty());
     assert!(validate_package(PackageStandardKind::Cmi5, &tr_12_strict_files(&bn_cmi5)).is_empty());
 }
+
+#[test]
+fn m39_collect_used_font_faces_includes_the_theme_heading_font() {
+    let mut course = minimal_course("Heading font");
+    course.theme.heading_font = Some("Lora".into());
+    let faces = collect_used_font_faces(&course);
+    assert!(
+        faces.contains(&("Lora".to_string(), coursecraft_course::FontStyle::Regular)),
+        "{faces:?}"
+    );
+    course.theme.heading_font = None;
+    assert!(
+        !collect_used_font_faces(&course)
+            .iter()
+            .any(|(family, _)| family == "Lora")
+    );
+}
+
+#[test]
+fn m39_publish_ships_the_heading_font_face() {
+    let mut course = minimal_course("Heading font");
+    course.fonts.push(coursecraft_course::FontFace {
+        family: "Lora".into(),
+        style: coursecraft_course::FontStyle::Regular,
+        src: "fonts/lora.ttf".into(),
+    });
+    course.theme.heading_font = Some("Lora".into());
+    let bytes: Arc<[u8]> = Arc::from(b"lora".as_slice());
+    let media =
+        |src: &str| -> Option<Arc<[u8]>> { (src == "fonts/lora.ttf").then(|| Arc::clone(&bytes)) };
+    let course_json = course.to_json().expect("serialize");
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &fake_player(),
+        media: &media,
+    };
+    let files = build_package(&input).expect("package builds");
+    assert!(files.iter().any(|f| f.path == "media/fonts/lora.ttf"));
+}

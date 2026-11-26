@@ -14,8 +14,8 @@
 | Area | ✅ | 🟡 | ⛔ | 🚫 / — |
 |---|---|---|---|---|
 | Project and file | 7 | 2 | 1 | 2 |
-| Structure: scenes, slides, masters | 8 | 3 | 6 | 0 |
-| Text | 12 | 4 | 8 | 0 |
+| Structure: scenes, slides, masters | 10 | 1 | 6 | 0 |
+| Text | 21 | 3 | 0 | 0 |
 | Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
@@ -25,7 +25,7 @@
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **117** | **38** | **55** | **12** |
+| **Total** | **128** | **35** | **47** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -65,8 +65,8 @@ Counted from the tables below; recount when a row changes.
 | Slide layers (new, duplicate, delete, dim, properties) | `layer.*` | ✅ | — |
 | Slide properties: advance, revisit, prev/next/submit | `slide.update`, `slide.set_player_overrides` | ✅ | — |
 | Swipe gestures (prev/next) | — | ⛔ | M41 |
-| Focus order | audit only | 🟡 dialog missing | M39 |
-| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes; Theme dialog uses the shared font picker for the course theme font | 🟡 custom font-pair creation dialog still planned | M39 |
+| Focus order | Home › Slide › Focus Order window (`focus_order.rs`): the slide's Tab order from `coursecraft_render::focus_order_candidates`, Move Up/Down or drag, Reset to default order; OK writes 1..n as one undo step | ✅ | — |
+| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes; Theme dialog uses the shared font picker; Design › Fonts ▾ offers font pairs and Create New Theme Fonts… | ✅ | — |
 
 ## Text
 
@@ -79,23 +79,23 @@ Counted from the tables below; recount when a row changes.
 | Character spacing | `letter_spacing` | ✅ | — |
 | Font colour with theme colours and eyedropper | `eyedropper.rs` | ✅ | — |
 | Text styles | `text_style.*` | ✅ | — |
-| Bullets, numbering, indent, line spacing, alignment | `text.set_paragraph(s)`; Home › Paragraph through `text_format.rs` | 🟡 numbering styles | M39 |
+| Bullets, numbering, indent, line spacing, alignment | `text.set_paragraph(s)` (`number_scheme`, `start_at`); Home › Paragraph through `text_format.rs`; Numbering ▾ with 7 schemes and Start at | ✅ | — |
 | Find and replace | `course.find`, `course.replace` | ✅ | — |
 | Spelling | `spell_check.rs` (English dictionary; skips non-English course languages with a note) | ✅ | — |
 | Hyperlinks | `text.set_link` | ✅ | — |
 | Format painter | `format_painter.rs` | ✅ | — |
-| Theme fonts (heading + body) | Theme dialog (`course.set_theme` sets one course theme font; separate heading and body font pairs not yet) | 🟡 | M39 |
-| Paste options (destination theme, keep source, text only) | `object.paste` | 🟡 one mode | M39 |
+| Theme fonts (heading + body) | `Theme.heading_font`, `course.set_theme {heading_font}`; layout titles use it; Create New Theme Fonts dialog; Theme Fonts section at the top of every font list | ✅ | — |
+| Paste options (destination theme, keep source, text only) | Home › Paste ▾: Use Destination Theme (default), Keep Source Formatting, Keep Text Only, Paste Special… (`clipboard.rs`); the copy carries its source theme | ✅ | — |
 | Vertical text alignment | `text.set_paragraph` `{valign}`: Home › Paragraph › Align Text, inspector | ✅ | — |
-| Clear formatting | — | ⛔ | M39 |
-| Text shadow | — | ⛔ | M39 |
-| Change case | — | ⛔ | M39 |
-| Highlight colour | — | ⛔ needs model field | M39 |
-| Text direction (rotate, stacked) | — | ⛔ | M39 |
-| Font and Paragraph settings | Text settings panel (`panels.rs`, from Font ↘ and Paragraph ↘): every text control, space before and after; caps, highlight, underline styles, tab stops and columns drawn disabled | 🟡 | M39 |
-| Slide number field | — | ⛔ | M39 |
-| Symbol picker | — | ⛔ | M39 |
-| Insert variable reference | — | ⛔ variables exist | M39 |
+| Clear formatting | `text.clear_formatting` (keeps links); Home › Font › Clear Formatting | ✅ | — |
+| Text shadow | `TextRun.shadow`, `text.style_range {shadow}`; Home › Font › Text Shadow; Text panel; PPTX `outerShdw` | ✅ | — |
+| Change case | `text.change_case` (sentence, lower, upper, title, toggle); Home › Font › Change Case ▾ | ✅ | — |
+| Highlight colour | `TextRun.highlight`, `text.style_range {highlight}`; Home › Font › Highlight ▾; Text panel; PPTX `a:highlight` | ✅ | — |
+| Text direction (rotate, stacked) | Home › Paragraph › Text Direction ▾: Horizontal, Rotate 90°, Rotate 270° (`text.set_paragraph {direction}`) | 🟡 stacked text | Later |
+| Font and Paragraph settings | Text settings panel (`panels.rs`, from Font ↘ and Paragraph ↘): every text control, space before and after, shadow and highlight; caps, underline styles, tab stops and columns drawn disabled | 🟡 | Later |
+| Slide number field | Insert › Slide Number ▾ (number, or number of total): `%Course.SlideNumber%` at the text caret or in a new text box (`insert_text.rs`) | ✅ | — |
+| Symbol picker | Insert › Symbol window with search and groups; inserts at the text caret or in a new text box | 🟡 symbols limited to the bundled Inter font's glyphs | Later |
+| Insert variable reference | Insert › Reference window: built-in and course variables, or a typed name, inserted as `%Name%` | ✅ | — |
 
 ## Shapes, pictures and buttons
 
@@ -121,7 +121,7 @@ Counted from the tables below; recount when a row changes.
 | On Click on a button | trigger editor with the click event and selected button pre-filled | ✅ | — |
 | Reflection, soft edges | — | ⛔ | M40 |
 | Change shape (keep format) | — | ⛔ | M40 |
-| Size and Position dialog | the Size and Position panel (`size_panel.rs`): width and height with an aspect lock, rotation, flips, position from the top left or the centre, lock | ✅ | — |
+| Size and Position dialog | the Size and Position panel (`size_panel.rs`): width and height with an aspect lock, scale % (pictures from their original size), Reset to original size for pictures, rotation, flips, position from the top left or the centre, lock | ✅ | — |
 | Brightness, contrast | — | ⛔ | M40 |
 | Picture styles (frames, bevels) | — | ⛔ | M40 |
 | Crop to shape | — | ⛔ | M40 |

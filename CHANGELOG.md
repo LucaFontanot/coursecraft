@@ -2,6 +2,36 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## Unreleased
+
+Text and formatting gaps (M39), two fixes from GitHub issues, and working links on the desktop.
+
+**Text formatting**
+- Highlight colour and text shadow for any part of the text, from Home › Font and the Text panel. PowerPoint import brings in highlights and text shadows.
+- Clear Formatting removes character formatting from the selection and keeps links.
+- Change Case: Sentence case, lowercase, UPPERCASE, Capitalize Each Word and tOGGLE cASE.
+- Numbering is a split button: the main part turns numbering on or off, and the ▾ offers seven number styles and Start at.
+- Text Direction: Horizontal, Rotate all text 90° and Rotate all text 270°.
+- The Format Painter also copies highlight and shadow.
+
+**Insert**
+- Slide Number (or Slide Number of Total) at the text cursor, or in a new text box.
+- A Symbol window and a Reference window that inserts a variable as `%Name%`.
+
+**Paste and focus order**
+- Paste ▾: Use Destination Theme (the default), Keep Source Formatting, Keep Text Only, and Paste Special….
+- A Focus Order window sets the Tab order of a slide: move rows up and down or drag them, then OK.
+
+**Theme fonts and size**
+- A theme can have a heading font and a body font. Slide titles from layouts use the heading font.
+- Design › Fonts ▾ lists font pairs and opens a new Create New Theme Fonts dialog. Font lists show the theme fonts first.
+- The Size and Position panel has Scale % and, for pictures, Reset to original size.
+
+**Fixes**
+- Triggers panel (issue #11): rows for the selected object are highlighted, and the list scrolls to the first one only while the Triggers tab is open.
+- Layers (issue #12): a focused layer now shows only itself and the base slide. Turn on another layer's eye to show it as well.
+- Links open in the browser again on the desktop: Download and What's new in the update window, Open URL in Preview, and help links.
+
 ## 0.6.0
 
 A new animation system: many more entrance, exit and emphasis effects, slide transitions, and live previews while you pick them.

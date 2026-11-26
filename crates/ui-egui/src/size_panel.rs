@@ -42,6 +42,8 @@ struct Target {
     one: Option<(Rect, f32, bool, bool, bool)>,
     /// Every selected object is locked.
     all_locked: bool,
+    /// The single selected object's picture source and crop, when it is a picture.
+    picture: Option<(String, Option<coursecraft_course::CropRect>)>,
 }
 
 fn target(editor: &Editor) -> Option<Target> {
@@ -62,12 +64,85 @@ fn target(editor: &Editor) -> Option<Target> {
     let all_locked = ids
         .iter()
         .all(|id| slide.object(id).is_some_and(|(o, _)| o.locked));
+    let picture = (ids.len() == 1)
+        .then(|| slide.object(&ids[0]))
+        .flatten()
+        .and_then(|(o, _)| match &o.kind {
+            coursecraft_course::ObjectKind::Image { src, crop, .. } => Some((src.clone(), *crop)),
+            _ => None,
+        });
     Some(Target {
         slide: slide.id.clone(),
         ids,
         one,
         all_locked,
+        picture,
     })
+}
+
+/// The least and most a Scale field accepts, in percent.
+const SCALE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=10_000.0;
+
+/// `frame` as a percentage of `base`; 100 when `base` is not positive.
+pub(crate) fn scale_percent(frame: f32, base: f32) -> f32 {
+    if base > 0.0 && base.is_finite() && frame.is_finite() {
+        frame / base * 100.0
+    } else {
+        100.0
+    }
+}
+
+/// The frame after Scale sets one side to `percent` of `base`. With
+/// `lock_aspect` the other side follows by the same ratio. The top left stays.
+pub(crate) fn scaled_frame(
+    frame: Rect,
+    base: (f32, f32),
+    percent: f32,
+    width_side: bool,
+    lock_aspect: bool,
+) -> Rect {
+    let percent = percent.clamp(*SCALE_RANGE.start(), *SCALE_RANGE.end());
+    let mut out = frame;
+    if width_side {
+        out.w = (base.0 * percent / 100.0).clamp(1.0, MAX_SPAN);
+        if lock_aspect && frame.w > 0.0 {
+            out.h = (frame.h * out.w / frame.w).clamp(1.0, MAX_SPAN);
+        }
+    } else {
+        out.h = (base.1 * percent / 100.0).clamp(1.0, MAX_SPAN);
+        if lock_aspect && frame.h > 0.0 {
+            out.w = (frame.w * out.h / frame.h).clamp(1.0, MAX_SPAN);
+        }
+    }
+    out
+}
+
+/// A picture's original size in slide pixels: the source's natural size
+/// narrowed by its crop. `None` for a size that is not positive.
+pub(crate) fn original_size(
+    natural: (f32, f32),
+    crop: Option<coursecraft_course::CropRect>,
+) -> Option<(f32, f32)> {
+    let (cw, ch) = crop.map_or((1.0, 1.0), |c| (c.w.clamp(0.0, 1.0), c.h.clamp(0.0, 1.0)));
+    let (w, h) = (natural.0 * cw, natural.1 * ch);
+    (w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0).then_some((w, h))
+}
+
+/// The frame "Reset to original size" sets: the original size, shrunk (keeping
+/// the aspect ratio) to fit the slide, around the old centre and moved back
+/// inside the slide.
+pub(crate) fn reset_frame(frame: Rect, original: (f32, f32), slide: (f32, f32)) -> Rect {
+    let (mut w, mut h) = original;
+    let fit = (slide.0 / w).min(slide.1 / h).min(1.0);
+    if fit.is_finite() && fit > 0.0 {
+        w = (w * fit).max(1.0);
+        h = (h * fit).max(1.0);
+    }
+    let cx = frame.x + frame.w / 2.0;
+    let cy = frame.y + frame.h / 2.0;
+    let x = (cx - w / 2.0).clamp(0.0, (slide.0 - w).max(0.0));
+    let y = (cy - h / 2.0).clamp(0.0, (slide.1 - h).max(0.0));
+    Rect { x, y, w, h }
 }
 
 /// Where Position measures from, kept for the session.
@@ -136,6 +211,69 @@ fn sections(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'static str, J
                 }
             });
             ui.checkbox(&mut lock_aspect, tl!("Lock aspect ratio"));
+
+            // Scale: a percentage of the picture's original size, or for
+            // other objects of the size they had when selected.
+            let original = t.picture.as_ref().and_then(|(src, crop)| {
+                editor
+                    .loaded_image_size(src)
+                    .and_then(|natural| original_size(natural, *crop))
+            });
+            let base_id = egui::Id::unique("size_panel_scale_base");
+            let stored = ui.data(|d| d.get_temp::<(String, f32, f32)>(base_id));
+            let base = match (original, stored) {
+                (Some(o), _) => o,
+                (None, Some((id, w, h))) if id == t.ids[0] => (w, h),
+                _ => (frame.w, frame.h),
+            };
+            ui.data_mut(|d| d.insert_temp(base_id, (t.ids[0].clone(), base.0, base.1)));
+            inspector_row(ui, tl!("Scale width"), |ui| {
+                if let Some(pct) = committed_number(
+                    ui,
+                    egui::Id::unique("size_panel_scale_w"),
+                    scale_percent(frame.w, base.0),
+                    SCALE_RANGE,
+                    "%",
+                ) {
+                    actions.push(set_frame(scaled_frame(frame, base, pct, true, lock_aspect)));
+                }
+            });
+            inspector_row(ui, tl!("Scale height"), |ui| {
+                if let Some(pct) = committed_number(
+                    ui,
+                    egui::Id::unique("size_panel_scale_h"),
+                    scale_percent(frame.h, base.1),
+                    SCALE_RANGE,
+                    "%",
+                ) {
+                    actions.push(set_frame(scaled_frame(
+                        frame,
+                        base,
+                        pct,
+                        false,
+                        lock_aspect,
+                    )));
+                }
+            });
+            if t.picture.is_some() {
+                let slide_size = editor.session.course.slide_size;
+                let reason =
+                    tl!("The picture's original size is not known until the picture has loaded.");
+                let mut button = ui.add_enabled(
+                    original.is_some(),
+                    egui::Button::new(tl!("Reset to original size")),
+                );
+                if original.is_none() {
+                    button = button.on_disabled_hover_text(reason);
+                }
+                if button.clicked()
+                    && let Some(o) = original
+                {
+                    #[allow(clippy::cast_precision_loss)]
+                    let slide = (slide_size.w as f32, slide_size.h as f32);
+                    actions.push(set_frame(reset_frame(frame, o, slide)));
+                }
+            }
         }
         None => {
             ui.label(

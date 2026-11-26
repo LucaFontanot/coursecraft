@@ -1016,6 +1016,7 @@ impl CourseHeaderPatch {
         }
         if let Some(theme) = &self.theme {
             total = total.saturating_add(theme.font.capacity());
+            total = total.saturating_add(estimate_opt_string(&theme.heading_font));
             total = total.saturating_add(estimate_vec_plain(&theme.palette));
         }
         if let Some(Some(lang)) = &self.language {
@@ -2905,6 +2906,7 @@ fn estimate_course(course: &Course) -> usize {
         .saturating_add(estimate_opt_string(&course.start_slide))
         .saturating_add(estimate_opt_string(&course.player.logo))
         .saturating_add(course.theme.font.capacity())
+        .saturating_add(estimate_opt_string(&course.theme.heading_font))
         .saturating_add(estimate_vec_plain(&course.theme.palette))
         .saturating_add(estimate_opt_string(&course.language))
         .saturating_add(estimate_vec_plain(&course.fonts))

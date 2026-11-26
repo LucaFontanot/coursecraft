@@ -49,6 +49,8 @@ mod m29_state_extras_tests;
 #[cfg(test)]
 mod m29_state_resolver_tests;
 #[cfg(test)]
+mod m39_t_tests;
+#[cfg(test)]
 mod m46_anim_render_tests;
 #[cfg(test)]
 mod outline_tests;
@@ -95,8 +97,8 @@ pub use design::{
 };
 pub use drawer::{DrawerTab, DrawerView, available_tabs, visible_glossary};
 pub use focus::{
-    ChromeButton, ExternalFocus, FocusManager, FocusTarget, KeyboardDragVisual, build_list,
-    fill_in_id, input_text_id,
+    ChromeButton, ExternalFocus, FocusCandidate, FocusManager, FocusTarget, KeyboardDragVisual,
+    build_list, fill_in_id, focus_order_candidates, input_text_id,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use font::IndexFontProvider;
